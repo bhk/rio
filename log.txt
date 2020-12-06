@@ -1,0 +1,112 @@
+# Design Log
+
+
+## Continuation Lines vs. Nested Blocks
+
+Python and Haskell solutions for this are inelegant.
+
+Haskell 2D syntax is specified as a transformation of the token stream,
+generating `{`, `;`, and `}` tokens when not supplied by the programmer.  It
+relies on keywords to introduce blocks and lookahead to close blocks.
+Roughly:
+
+ 1. Generate a "{" token after `let`, `where`, `do`, or `of` (if one is not
+    explicitly given) and set the current indentation level to the
+    indentation of the next "lexeme".
+
+ 2. Generate a ";" when the start of line continues the "current"
+    indentation level.
+
+ 3. Generate a "}" on dedent, or when it fixes a parsing error. (!)
+
+Python 2D syntax rules are described in terms of pre-processing that joins
+lines and emits INDENT and DEDENT tokens before traditional parsing.
+Roughly:
+
+ 1. Do explicit line joining (trailing `\`)
+
+ 2. Do implicit line joining (unmatched `(`, `{`, or `[`)
+
+ 3. Convert increasing/decreasing indentation to INDENT and DEDENT tokens.
+
+
+Python indentation guidelines from PEP-8:
+
+ - Indent multiples of 4 spaces.
+
+ - PEP-8: indent continuations *more* than a following nested block
+   (except maybe with `if` statements).
+
+ - Don't use explicit line joining (trailling `\`), when instead you can use
+   parens to force implicit joining.  Use explicit line joining when
+   necessary (e.g. `with`, `assert`).
+
+ - Break lines *before* a binary operator.
+
+
+For Rio, we considered distinguishing continuation lines from blocks based
+on syntax at the end of the line preceding the block or continuation line.
+Possibilities include:
+
+  a) `\` ==> continuation.  [Ugly.]
+
+  b) `:` ==> block.  [Dictionary syntax could produce false-positives.  Ugly
+     for function bodies.  Odd-looking when used to include blocks in other
+     inline expressions.]
+
+  c) (`=>` | `then:` | ...) ==> block.  [This would forbid continuation
+     lines after `=>`, and greatly restrict where blocks could appear.]
+
+  d) (`block:` | `then:` | ...) ==> block.  `block:` would introduce a block
+     anywhere within an expression, including function bodies.  [Still a bit
+     inelegant to begin functions with `f = (x) => block:`.  Also, consider
+     the conflict with structure elements named "block" or "then".]
+
+Instead, we examine the indented line itself.  In Rio, it is easy to
+identify "clauses": lines that must be followed vertically by other lines,
+such as `if`, `loop`, and assignments.  When an indented line is a clause,
+it initiates a block.  Otherwise, we treat it as a continuation line.  (An
+"indented line" is one indented further than the current block; it is not
+necessarily indented further than a preceding continuation line.)
+
+
+## Random Notes
+
+ - tab = error; continue as if expanded
+
+ - single-space increase an error;  non-matching dedent an error
+
+ - comment indentation ignored (?)
+
+ - trailing (invisible) whitespace is never significant!
+
+ - `if` appears only in 2D block
+
+ - In mathematics, an equation broken across lines will show an operator at
+   the start of continuation lines.  "=" will be attached to the first line.
+
+ - When auto-wrapping: break with lowest precedence operators first.
+
+
+## Parser Design
+
+Which should we have?
+
+ a) parse: String -> (AST, Errors)
+ b) parse: String -> AST     [with AST augmented to accommodate errors]
+
+Later transformations of AST can also generate errors, so AST should
+accommodate errors, and anything that deals with errors should accommodate
+AST errors.  So let's go with (b).
+
+So where do high-level errors end up?
+
+
+An AST, at top, is an expression.
+
+  data Expr =
+     If cond then else
+     Assign name value body
+     String value
+     Number value
+     ...
