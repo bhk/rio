@@ -1,0 +1,91 @@
+* concepts.txt --> concepts.md
+  1. [[a b c]]  -->  [a b c](#a-b-c)
+  2. Broken link notifications
+  3. "See also: ..."
+  4. Index
+  5. Comments
+
+* Syntax: capture start & end of elements.  (Impl. "dump" for OOB...)
+
+* assert
+
+* Record construction alternative approach in CL: first build type (from
+  const data) *then* populate with vector?
+
+* fault: Show backtrace?  (Native function has only values; no AST.)
+
+
+---- Long-term
+
+ * Define "R1" language spec (a minimal subset, used for bootstrap)
+ * R1 bootstrap interpreter, written in Lua
+    - parse & walk AST
+    - may leak memory (no "free")
+    - minimal set of OS bindings
+ * R1 compiler, written in R1
+    - compiles to VM
+    - non-leaking (refcounting)
+    - with VM, obsoletes bootstrap
+ * VM in C/C++ (develop, or select an existing project)
+    - includes VM spec (maybe WebASM?)
+    - loads VM code
+ * OS Bindings for network & processes
+ * Web Server
+ * R(n) implemented in R(n-1)
+    - richer data structuring
+    - lazy, concurrent, and incremental evaluation
+    - syntax changes
+    - specialization, reduction
+    - etc.
+ * VM in JavaScript/WebASM
+ * IDE
+   - display values (or `pending...`) [computed in parallel VM]
+
+----
+
+Notes:
+
+* OO Types
+
+  The evaluation logic should not switch on type IDs.  The behavior of a
+  value should be given by its type.
+
+     value = (iface, data)
+     iface = { getProperty, ... }
+     getProperty: (self, name) -> value
+
+* Adequate performance (for my expectations) will requires specialization of
+  functions *at least* on the types of arguments, in order to eliminate
+  dispatching overhead and enable inlining.
+
+  Types cannot generally be predicted at "compile/deploy" time, so run-time
+  specialization and compilation may be *required* in those cases.
+
+  Run-time compilation would be triggered by a "guard" failure (type does
+  not match the specialized-for type).  But how to perform this check
+  efficiently, given duck-typing and structural typing?  [Wherein there is
+  no "true identity" of a type that affects behavior; only its interface and
+  the behavior thereof distinguishes it from other types.]  Specialization
+  can work at a lower level, where "true identity" is in fact known, even if
+  it does not factor into behavior.  This might result in run-time
+  compilation of a specialized version that results in the same code as a
+  previously specialized version for a different type.  Or, short circuiting
+  some of the work, it could result in a run-time validation of equivalence.
+  In either case, the new specialized type will be recognized on subsequent
+  invocations and not require specialization again.  "True identity" could
+  be based on where in the program the type or value is constructed --
+  `type.id = where` -- or if that type constructing is a function of some
+  type value, then `type.id = (where, inputType.id)`.
+
+* The ability to explicitly structure data based on appropriate primitive
+  types is important for performance in some cases.  LuaJIT and JS's typed
+  arrays provide examples.
+
+  It is unclear to what extent "primitive" types are required outside of
+  that context.  For example, adding two UInt16's could produce a Number or
+  a UInt16.  Considering only the structuring concerns, we would want
+  Number, since that would always succeed and would not present surprising
+  semantics (to non-C/ASM programmers).  Considering optimization of inlined
+  functions, manipulation of UInt16's in ways that guarantee a UInt16 result
+  could facilitate optimization; note that this could be achieved via a
+  different "modular addition" meta-method.
