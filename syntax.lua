@@ -1,0 +1,734 @@
+-- Rio syntax parser
+--
+
+local test = require "test"
+local peg = require "peg"
+local persist = require "persist"
+
+local C, Cc, Ct, P, R, S, V = peg.C, peg.Cc, peg.Ct, peg.P, peg.R, peg.S, peg.V
+
+local set, append, override = persist.set, persist.append, persist.override
+
+
+-- returns: match 0 or 1 occurrence of `p`
+local function opt(p)
+   return p + P(0)
+end
+
+
+----------------------------------------------------------------
+-- 2D Syntax
+----------------------------------------------------------------
+--
+-- The 2D grammar has dependencies on "inline" syntax patterns:
+--
+--    AtBlock: Succeeds when at a line (post-indent) that should be treated
+--       as the beginning of a block.
+--
+--    Comment: Matches a comment, consuming characters to the terminating NL.
+--
+--    LogLine: Consumes a logical line, beginning at its first non-SPACE
+--       character. LogLine must not read beyond LF characters except via
+--       the 2D `nlBlock` and `nlWhite` patterns.  Also, it must consume all
+--       everything up to `nlEOL`: every non-NL character, `nlWhite`, and
+--       `nlBlock`.
+--
+-- 2D patterns only recognize two ASCII characters: LF and SPACE.  All other
+-- characters are left to be handled by inline syntax patterns.
+--
+-- Empty lines (entirely whitespace or comments) are consumed by `nlWhite`,
+-- so they are "seen" by LogLine as whitespace.
+--
+
+local NL = P"\n"
+local SPACE = P" "
+local EOF = -P(1)
+
+
+-- Create a pattern that matches spaces *if* `cmp(indent, state.n)` is true.
+--
+local function matchIndent(cmp)
+   local function m(subj, pos, state, g)
+      local a, b = subj:find("^ *", pos)
+      local indent = b - a + 1
+      if cmp(indent, state.blockIndent) then
+         state = set(state, "lineIndent", indent)
+         return pos+indent, state, peg.NoCaptures
+      end
+   end
+   return P(m)
+end
+
+
+local indentGT = matchIndent(function (x, y) return x > y end)
+local indentEQ = matchIndent(function (x, y) return x == y end)
+
+
+-- Create a pattern that matches `pat` with `state.blockIndent` set to
+-- `state.lineIndent`.
+--
+local function inBlock(pat)
+   local function m(subj, pos, state, g)
+      local prevN = state.blockIndent
+      state = set(state, "blockIndent", state.lineIndent)
+      local pos, state, caps = pat.match(subj, pos, state, g)
+      if pos then
+         return pos, set(state, "blockIndent", prevN), caps
+      end
+   end
+   return P(m)
+end
+
+
+-- Match from start of a LogLine to NL at end of last LogLine
+local blockBody = V"LogLine" * (NL * indentEQ * V"LogLine")^0
+local nlBlank = NL * (SPACE^1 + V"Comment")^0 * #(NL + EOF)
+
+
+-- Skip whitespace before content of first line
+local p2dModule = (SPACE^1 + NL + V"Comment")^0 * blockBody
+
+
+-- These patterns are provided for use by `LogLine`:
+--
+--   nlEOL: detects end of current logical line (doesn't consume)
+--   nlWhite: consumes blank and all-comment lines to closing NL,
+--      or consumes NL and indent before a continuation line.
+--   nlBlock: consumes NL and a subsequent nested block.
+
+local nlWhite = (nlBlank + NL * indentGT * -inBlock(V"AtBlock"))^1
+local nlBlock = NL * indentGT * inBlock(#V"AtBlock" * blockBody)
+local nlEOL = #(NL * -indentGT + EOF)
+
+
+-- Initial parser state assumed by 2D parsing expressions
+--
+local p2dInitialState = {
+   blockIndent = 0,
+   oob = {}
+}
+
+
+--------------------------------
+-- Inline Syntax
+--------------------------------
+
+local NonNL = peg.NS"\n"
+
+
+local cp = peg.cpos
+
+
+-- Construct an AST node
+local function Node(typ, pos, ...)
+   return {type = typ, pos = pos, ...}
+end
+
+
+-- returns: match `pat` and construct a Node from its captures
+local function N(typ, pat)
+   return cp * pat / function (...) return Node(typ, ...) end
+end
+
+
+-- returns: match pat and append its captures to state.oob
+local function Coob(pat)
+   local function m(subj, pos, state)
+      local pos, state, caps = pat.match(subj, pos, state)
+      if pos then
+         return pos, set(state, "oob", append(state.oob, caps)), peg.NoCaptures
+      end
+   end
+   return P(m)
+end
+
+
+-- returns: log an out-of-band error
+local function E(desc)
+   return Coob(N("Error", Cc(desc)))
+end
+
+
+local nameInitial = R("az", "AZ", "__")
+local nameChar = R("az", "AZ", "__", "09")
+local opChar = S"!#$%&'*+-./<=>?\\^`|~"
+-- Remaining ASCII printables:  @{}():;,"
+
+local comment = #P"#" * Coob(N("Comment", C(NonNL^0)))
+
+-- skip whitespace
+local controlChar = #R("\0\9", "\11\31") * E"BadChar" * 1
+local ss = (S" "^1 + nlWhite + comment + controlChar)^0
+
+
+local name = C(nameInitial * nameChar^0) * ss
+
+
+-- returns: match a token
+local function T(str, extra)
+   local kind =  nameChar.match(str) and nameChar
+      or opChar.match(str) and opChar
+
+   local tail = extra and extra * ss or ss
+   tail = kind and (-kind * tail) or tail
+
+   return P(str) * tail
+end
+
+
+-- returns: match and capture any of a set of tokens
+local function O(...)
+   local matchAny = nil
+   for n, str in ipairs({...}) do
+      local pat = T(str, Cc(str))
+      matchAny = matchAny and (matchAny + pat) or pat
+   end
+   return matchAny
+end
+
+
+-- Numeric literals
+
+local digits = R"09" ^ 1
+local number = C(opt(P"-")
+                    * (digits * opt(P"." * (digits + E"NumDigitAfter"))
+                          + #P"." * E"NumDigitBefore" * P"." * digits)
+                    * opt(S"eE" * opt(S"+-") * digits))
+   * (-(nameChar + ".") + E"NumEnd") * ss
+
+
+-- String literals
+
+local qchar = C(peg.NS("\"\\\n")^1)
+   + P"\\\\" * Cc("\\")
+   + P"\\\"" * Cc("\"")
+   + P"\\r" * Cc("\r")
+   + P"\\n" * Cc("\n")
+   + P"\\t" * Cc("\t")
+   + E"StringBS" * P"\\" * Cc("\\")
+
+local function concat(...)
+   return table.concat{...}
+end
+
+local qstring = P"\"" * qchar^0 / concat * (P"\"" + E"StringEnd") * ss
+
+
+-- match words not to be confused with variable names
+local keywords = (P"and" + "or" + "not"
+                  + "if" + "loop" + "while" + "for") * -nameChar
+
+
+-- returns: match comma-delimited sequence of zero-or-more `p`
+local function cseq(p)
+   return Ct(p * (T"," * p)^0 * opt(T",") + P(0))
+end
+
+
+local nameNode = N("Name", name)
+
+local varNode = nameNode - keywords
+
+local expr = V"Expr"
+local needExpr = expr + N("Missing", P(0))
+
+local vector = T"[" * cseq(expr) * (T"]" + E"CloseSquare")
+
+local recordNV = nameNode * T":" * needExpr
+local record = T"{" * cseq(recordNV) * (T"}" + E"CloseCurly")
+
+local grouping = T"(" * needExpr * (T")" + E"CloseParen")
+
+
+--construct an expression from a sequence of logical lines
+--
+local function joinBlock(a, b, ...)
+   -- etype = type of expression we can construct from an "S-xxx" node
+   local astmt = string.match(a.type, "^S%-(.*)")
+   if not astmt then
+      if b then
+         -- ILE followed by more lines...
+         a = Node("Ignore", a.pos, a, joinBlock(b, ...))
+      end
+   else
+      -- a is a statement: fold with rest of lines
+      local e = b and joinBlock(b, ...) or Node("Missing", a.pos)
+      local args = {}
+      persist.move(a, 1, #a, 1, args)
+      a = Node(astmt, a.pos, args, e)
+   end
+   return a
+end
+
+
+local atom =
+   N("Number", number)
+   + N("String", qstring)
+   + varNode
+   + N("Vector", vector)
+   + N("Record", record)
+   + grouping
+   + nlBlock * ss / joinBlock
+
+
+-- left-associative binary operators
+local function joinLTR(e, ...)
+   for ii = 1, select("#", ...), 3 do
+      local pos, op, param = select(ii, ...)
+      e = Node("Op_" .. op, pos, e, param)
+   end
+   return e
+end
+
+local function matchLTR(e, pat)
+   return e * (cp * pat * e)^0 / joinLTR
+end
+
+local function matchSuf(e, pat)
+   return e * (cp * pat)^0 / joinLTR
+end
+
+
+-- right-associative binary operators
+local function joinRTL(a, pos, op, ...)
+   if op then
+      return Node("Op_" .. op, pos, a, joinRTL(...))
+   end
+   return a
+end
+
+local function matchRTL(e, pat)
+   return e * (cp * pat * e)^0 / joinRTL
+end
+
+
+-- unary prefix operators
+local function joinPre(pos, op, ...)
+   if op then
+      return Node("Unop_" .. op, pos, joinPre(...))
+   end
+   -- final capture is the expression
+   return pos
+end
+
+local function matchPre(e, pat)
+   return (cp * pat)^0 * e / joinPre
+end
+
+
+local function joinRel(e1, pos, op, e2, pos2, ...)
+   if not pos then
+      return e1
+   end
+   local rel = Node("Op_" .. op, pos, e1, e2)
+   if not pos2 then
+      return rel
+   end
+   return Node("Op_and", pos, rel, joinRel(e2, pos2, ...))
+end
+
+local function matchRel(e, pat)
+   return e * (cp * pat * e)^0 / joinRel
+end
+
+
+local function joinElvis(e1, pos, e2, e3, ...)
+   if pos then
+      return Node("Elvis", pos, e1, e2, joinElvis(e3, ...))
+   end
+   return e1
+end
+
+
+local function joinFn(pos, params, ...)
+   if not params then
+      return pos
+   end
+   return Node("Fn", pos, params, joinFn(...))
+end
+
+
+local callSuffix = T"(" * Cc"()" * cseq(expr) * (T")" + E"CloseParen")
+local memberSuffix = T"[" * Cc"[]" * needExpr * (T"]" + E"CloseSquare")
+local dotSuffix = O"." * (nameNode + N("Missing", P(0)) * E"DotName")
+
+local params = T"(" * cseq(varNode) * T")" + Ct(varNode)
+
+local function addOperations(e)
+   e = matchSuf(e, dotSuffix + callSuffix + memberSuffix)
+   e = matchRTL(e, O("^"))
+   e = matchPre(e, O("not", "-"))
+   e = matchLTR(e, O("*", "/", "//", "%"))
+   e = matchLTR(e, O("+", "-", "++"))
+   e = matchRel(e, O("==", "!=", "<=", "<", ">=", ">"))
+   e = matchLTR(e, O("and"))
+   e = matchLTR(e, O("or"))
+   e = e * (cp * T"?" * needExpr * (T":" + E"CloseElvis") * e)^0 / joinElvis
+   e = matchRTL(e, O("$"))
+   e = (cp * params * T"=>")^0 * e / joinFn
+   return e
+end
+
+local ile = addOperations(atom)
+
+
+--------------------------------
+-- Statements
+--------------------------------
+
+local letOp = O("=", ":=", "+=", "++=", "*=")
+
+-- work around lua-mode.el indentation bug...
+local Tif, Tfor, Twhile = T"if", T"for", T"while"
+
+
+local statement =
+   N("S-For", Tfor * varNode * T"in" * expr * T":" * expr)
+   + N("S-If", Tif * expr * T":" * expr)
+   + N("S-LoopWhile", T"loop" * Twhile * expr * T":" * expr)
+   + N("S-Loop", T"loop" * T":")
+   + N("S-While", Twhile * needExpr)
+   + N("S-Let", varNode * letOp * needExpr)
+   + N("S-Act", params * T"<-" * needExpr)
+
+
+local atBlock = O("for", "if", "loop", "while")
+   + name * letOp
+   + params * T"<-"
+
+
+-- consume everything to the end of the line
+local discardEOL = E"Garbage" * (NonNL^1 + nlWhite + nlBlock)^0
+
+local logLine =
+   (#atBlock * (statement + N("BadStmt", P(0)))
+       + (ss * ile + N("BadILE", P(0))))
+   * (#nlEOL + discardEOL)
+
+
+local rioModule = p2dModule / joinBlock
+
+
+local rioG = {
+   "Module",
+   Module = rioModule,
+   Comment = comment,
+   AtBlock = atBlock,
+   LogLine = logLine,
+   Expr = ile,
+   Statement = statement,
+}
+
+
+local rioPat = P(rioG)
+
+
+-- Parse a module's source code (given in `subj`).  Returns `node`, `oob`.
+--   node = an AST node describing an expression
+--   oob = an array of "out of band" captures (errors, comments)
+--
+local function parseModule(subj)
+   local _, state, captures = rioPat.match(subj, 1, p2dInitialState)
+   return captures[1], state.oob
+end
+
+
+--------------------------------
+-- Create SEXPR summary of AST
+--------------------------------
+
+local dumpNodes
+
+local function dumpNode(node, subj)
+   if type(node) == "string" then
+      return "`" .. node .. "`"
+   end
+
+   local typ = node.type
+   if typ == "Name" or typ == "Number" then
+      -- validate node.pos
+      local value = node[1]
+      local text = subj:sub(node.pos, node.pos + #value - 1)
+      -- ensure unambiguous serialization
+      local pat = (typ == "Number") and "^%-?%d" or "^[%a_]"
+      if #node == 1 and value == text and value:match(pat) then
+         return value
+      end
+   elseif typ == nil then
+      return "[" .. dumpNodes(node, subj) .. "]"
+   else
+      return "(" .. dumpNodes(node, subj, typ) .. ")"
+   end
+
+   return "!" .. test.serialize(node)
+end
+
+
+function dumpNodes(nodes, subj, listType)
+   if type(nodes) ~= "table" then
+      return "!" .. test.serialize(nodes)
+   end
+   local o = {listType}
+   for ii, v in ipairs(nodes) do
+      o[#o+1] = dumpNode(v, subj)
+   end
+   return table.concat(o, " ")
+end
+
+
+local exports = {
+   parseModule = parseModule,
+   dumpNodes = dumpNodes,
+   dumpNode = dumpNode,
+}
+
+
+if test.skip then
+   return exports
+end
+
+
+----------------------------------------------------------------
+-- Tests
+----------------------------------------------------------------
+
+
+--------------------------------
+-- 2D Parsing Tests
+--------------------------------
+
+
+local function group(name)
+   return function (...)
+      return {name, ...}
+   end
+end
+
+
+local text = C(NonNL^1)
+
+local testAtBlock = T"if" + (name * ss * T"=")
+local testLogLine = text * (nlWhite + text + nlBlock / group"B")^0 / group"L"
+local testComment = P"#" * NonNL^0
+
+
+-- Match `subj` using `pattern` in a grammar that supplies minimal "inline"
+-- expressions.
+--
+local function testG(subj, pattern, ecaptures, eoob, epos)
+   local g = {
+      "top",
+      top = pattern,
+      AtBlock = testAtBlock,
+      LogLine = testLogLine,
+      Comment = testComment,
+   }
+   local pos, state, captures = P(g).match(subj, 1, p2dInitialState)
+
+   test.eqAt(2, ecaptures, captures)
+   test.eqAt(2, eoob or "", state and dumpNodes(state.oob) or "")
+   if epos then
+      test.eqAt(2, epos, pos)
+   end
+end
+
+
+testG("if a", testAtBlock, {}, nil, 4)
+testG("\n  x = 1\n", nlWhite, nil)
+testG("\n  x = 1\n", nlBlock, {{"L", "x = 1"}}, nil, 10)
+testG("ile\n  x = 1\n", testLogLine, {{"L", "ile", {"B", {"L", "x = 1"}}}})
+testG("abc\n  def\n", testLogLine, {{"L", "abc", "def"}})
+
+
+local txt = [[if A:
+    # c1
+  # c2
+# c3
+  cont
+if B:
+
+  x = 1
+  x
+ile
+
+]]
+
+
+testG(txt, blockBody,
+      { {"L", "if A:", "cont"},
+        {"L", "if B:",
+         {"B",
+          {"L", "x = 1"},
+          {"L", "x"}}},
+        {"L", "ile"}})
+
+
+--------------------------------
+-- Inline Parsing Tests
+--------------------------------
+
+testG(" \nNext", ss, {}, nil, 2)
+testG(" # c\n  x\n", ss, {}, "(Comment `# c`)", 8)
+
+testG("abc  ", O("abc"), {"abc"}, nil, 6)
+testG("abc+ ", O("abc"), {"abc"}, nil, 4)
+testG("abcd ", O("abc"), nil)
+
+testG("+    ", O("+"), {"+"}, nil, 6)
+testG("+a   ", O("+"), {"+"}, nil, 2)
+testG("+()  ", O("+"), {"+"}, nil, 2)
+testG("+=   ", O("+"), nil)
+
+testG("()", number, nil)
+testG(".", number, nil)
+testG("7 ", number, {"7"}, nil, 3)
+testG("7.5 ", number, {"7.5"})
+testG("7.0e0 ", number, {"7.0e0"})
+testG("7e+0 ", number, {"7e+0"})
+testG("7.e+1 ", number, {"7.e+1"}, "(Error `NumDigitAfter`)")
+testG("7a ", number, {"7"}, "(Error `NumEnd`)")
+testG("1.23.", number, {"1.23"}, "(Error `NumEnd`)")
+testG(".5", number, {".5"}, "(Error `NumDigitBefore`)")
+
+testG([["a\\\t\nb"   ]], qstring, {"a\\\t\nb"}, nil, 14)
+testG([["\a"]], qstring, {"\\a"}, "(Error `StringBS`)")
+testG([["abc]], qstring, {"abc"}, "(Error `StringEnd`)")
+
+
+-- Match `subj` using LogLine.
+--
+local function testL(subj, esexpr, eoob)
+   local g = override({}, rioG, {"LogLine"})
+   local pos, state, captures = P(g).match(subj, 1, p2dInitialState)
+   test.eqAt(2, esexpr, dumpNodes(captures, subj))
+   if eoob then
+      test.eqAt(2, eoob, dumpNodes(state.oob, subj))
+   end
+end
+
+
+-- Match `subj` using Module.
+--
+local function testM(subj, esexpr, eoob)
+   local node, oob = parseModule(subj)
+   test.eqAt(2, esexpr, dumpNode(node, subj))
+   if eoob then
+      test.eqAt(2, eoob, dumpNodes(oob, subj))
+   end
+end
+
+
+-- tokens
+
+testL("ab_1", "ab_1")
+testL("1.23", "1.23")
+testL([["a\tb"]], "(String `a\tb`)")
+
+-- errors
+
+testL("\t x", "x", "(Error `BadChar`)")
+
+-- vector
+
+testL("[]", "(Vector [])")
+testL("[a]", "(Vector [a])")
+testL("[a, b, c]", "(Vector [a b c])")
+testL("[a ", "(Vector [a])", "(Error `CloseSquare`)")
+testL("[a,", "(Vector [a])", "(Error `CloseSquare`)")
+
+-- record
+
+testL("{}", "(Record [])")
+testL("{a: A, b: B}", "(Record [a A b B])")
+testL("{a: A,  ", "(Record [a A])", "(Error `CloseCurly`)")
+testL("{a:,}", "(Record [a (Missing)])")
+
+-- grouping
+
+testL("(a)", "a")
+testL("(a", "a", "(Error `CloseParen`)")
+testL("((a)) ", "a")
+
+-- atoms
+
+testL("1.23", "1.23")
+testL("(12)", "12")
+
+
+-- suffix operators
+
+testL("a.b", "(Op_. a b)")
+testL("a.", "(Op_. a (Missing))", "(Error `DotName`)")
+testL("a[1]", "(Op_[] a 1)")
+testL("a(1,x)", "(Op_() a [1 x])")
+testL("a . b [ 1 ] ( 2 ) ",  "(Op_() (Op_[] (Op_. a b) 1) [2])")
+
+-- RTL operator
+
+testL("a^b^c", "(Op_^ a (Op_^ b c))")
+
+-- prefix
+
+testL("-a", "(Unop_- a)")
+
+-- LTR operators
+
+testL("a+b-c", "(Op_- (Op_+ a b) c)")
+
+-- precedence
+
+testL("-a^b+c*d", "(Op_+ (Unop_- (Op_^ a b)) (Op_* c d))")
+
+-- relational
+
+testL("a==b", "(Op_== a b)")
+testL("a<b<c", "(Op_and (Op_< a b) (Op_< b c))")
+
+-- ?:
+
+testL("a or b ? f : g $ x", "(Op_$ (Elvis (Op_or a b) f g) x)")
+
+-- params => expr
+
+testL("()    => 1", "(Fn [] 1)")
+testL("(a)   => 1", "(Fn [a] 1)")
+testL("(a,b) => 1", "(Fn [a b] 1)")
+testL("a     => 1", "(Fn [a] 1)")
+
+--
+-- statements
+--
+
+testL("x = 1", "(S-Let x `=` 1)")
+testL("x := 1", "(S-Let x `:=` 1)")
+testL("x <- a", "(S-Act [x] a)")
+testL("if a: x", "(S-If a x)")
+testL("loop:", "(S-Loop)")
+testL("while c:", "(S-While c)")
+testL("loop while C: B", "(S-LoopWhile C B)")
+testL("for x in E: B", "(S-For x E B)")
+
+-- extraneous characters
+
+testL("a b c", "a", "(Error `Garbage`)")
+
+-- block body
+
+testL("a + \n  x=1\n  x\n", "(Op_+ a (Let [x `=` 1] x))")
+
+
+-- test `Module`
+
+local t1 = [[
+# C1
+f = (x) =>
+    if x < 1: 0
+    x + 1
+
+f(2)
+]]
+
+testM(t1, "(Let [f `=` (Fn [x] (If [(Op_< x 1) 0] (Op_+ x 1)))] (Op_() f [2]))",
+      "(Comment `# C1`)")
+
+return exports
