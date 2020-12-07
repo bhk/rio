@@ -52,12 +52,22 @@ local function append(a, b)
 end
 
 
+local function imap(t, fn)
+   local o = {}
+   for i, v in ipairs(t) do
+      o[i] = fn(v)
+   end
+   return o
+end
+
+
 local exports = {
    override = override,
    move = move,
    clone = clone,
    set = set,
    append = append,
+   imap = imap,
 }
 
 

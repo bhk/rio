@@ -140,6 +140,10 @@ local function failAt(level, fmt, ...)
 end
 
 
+local function fail(fmt, ...)
+   return failAt(1, fmt, ...)
+end
+
 local function isEQ(a, b)
    return a == b or serialize(a) == serialize(b)
 end
@@ -266,6 +270,7 @@ local exports = {
    eq = eq,
    eqAt = eqAt,
    failAt = failAt,
+   fail = fail,
    clone = clone,
    subtract = subtract,
    mockFile = mockFile,
