@@ -1,3 +1,5 @@
+-- Rio interpreter
+
 local test = require "test"
 local syntax = require "syntax"
 local persist = require "persist"
@@ -270,7 +272,7 @@ local function clFrom(ast)
       local a, b = clFrom(ast[1]), clFrom(ast[2])
       return CApp(CVal(opFuncs[typ]), {a, b})
    else
-      -- Op_X, For, Loop, LoopWhile, For, Act
+      -- Op_., Op_[], Op_X, Unop_X, Missing, For, Loop, LoopWhile, While, Act
       test.fail("Unsupported: %s", astFmt(ast))
    end
 end
@@ -279,7 +281,6 @@ end
 ----------------------------------------------------------------
 -- Evaluation
 ----------------------------------------------------------------
-
 
 local function clEval(node, env)
    local typ = node.type
@@ -317,78 +318,9 @@ local function clEval(node, env)
 end
 
 
-local function clEvalAST(ast, env)
+local function astEval(ast, env)
    return clEval(clFrom(ast), env)
 end
-
-
-----------------------------------------------------------------
--- Evaluate AST directly
-----------------------------------------------------------------
-
-
-local function astEval(node, env)
-   local function eval(n)
-      return astEval(n, env)
-   end
-
-   local typ = node.type
-   if typ == "Name" then
-      local o = env[node[1]]
-      faultIf(o == nil, "Undefined", node, nil)
-      return o
-   elseif typ == "Number" then
-      return tonumber(node[1])
-   elseif typ == "String" then
-      return node[1]
-   elseif typ == "Fn" then
-      local params = imap(node[1], nameString)
-      return rec("VFun", env, params, node[2])
-   elseif typ == "Op_()" then
-      local fn = eval(node[1])
-      local argNodes = node[2]
-      faultIf(type(fn) ~= "table" or fn.type ~= "VFun", "NotFn", node, fn)
-      local fenv, params, body = unpack(fn)
-      faultIf(#argNodes ~= #params, "ArgCount", node, fn)
-      return astEval(body, bind(fenv, params, imap(argNodes, eval)))
-   elseif numOps[typ] then
-      local a, b = eval(node[1]), eval(node[2])
-      faultIf(type(a) ~= "number", "LNotNumber", node, a)
-      faultIf(type(b) ~= "number", "RNotNumber", node, b)
-      return numOps[typ](a, b)
-   elseif typ == "Vector" then
-      local o = imap(node[1], eval)
-      o.type = "VVec"
-      return o
-   elseif typ == "Record" then
-      local pairs = node[1]
-      local o = rec("VRec")
-      for ii = 1, #pairs, 2 do
-         local name, value = pairs[ii], pairs[ii+1]
-         assert(name.type == "Name")
-         table.insert(o, {name[1], eval(value)})
-      end
-      return o
-   elseif typ == "If" then
-      local cond = eval(node[1][1])
-      local thenNode, elseNode = node[1][2], node[2]
-      faultIf(type(cond) ~= "boolean", "CondNotBool", node, cond)
-      if cond == true then
-         return eval(thenNode)
-      else
-         return eval(elseNode)
-      end
-   elseif typ == "Let" then
-      local nameNode, op, valueNode = unpack(node[1])
-      local k = node[2]
-      local name = nameString(nameNode)
-      local value = eval(valueNode)
-      return astEval(k, bind(env, {name}, {value}))
-   else
-      faultIf(true, "Unsupported", node, nil)
-   end
-end
-
 
 ----------------------------------------------------------------
 -- Tests
@@ -421,7 +353,7 @@ end
 local function et(source, evalue, eoob)
    local node, oob = syntax.parseModule(source)
    test.eqAt(2, eoob or "", astFmtV(oob or {}))
-   test.eqAt(2, evalue, valueFmt(trapEval(clEvalAST, node, initialEnv)))
+   test.eqAt(2, evalue, valueFmt(trapEval(astEval, node, initialEnv)))
 end
 
 
