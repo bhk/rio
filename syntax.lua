@@ -1,9 +1,29 @@
 -- Rio syntax parser
 --
+-- AST nodes:
+--   (Name str)
+--   (Missing)
+--   (Number str)
+--   (String str)
+--   (Vector [items...])
+--   (Record [name value ...])
+--   (Fn [params...] body)
+--   (Op_X a b)
+--   (Unop_X a)
+--   (IIf a b c)
+--   (For [name seq body] k)
+--   (If [cond then] k)
+--   (LoopWhile [cond body] k)
+--   (While [cond] k)
+--   (Let [name op value] k)
+--   (Act [params act] k)
+--   (Ignore [expr] k)
+
 
 local test = require "test"
 local peg = require "peg"
 local persist = require "persist"
+local rec = require "rec"
 
 local C, Cc, Ct, P, R, S, V = peg.C, peg.Cc, peg.Ct, peg.P, peg.R, peg.S, peg.V
 
@@ -332,9 +352,9 @@ local function matchRel(e, pat)
 end
 
 
-local function joinElvis(e1, pos, e2, e3, ...)
+local function joinIIf(e1, pos, e2, e3, ...)
    if pos then
-      return Node("Elvis", pos, e1, e2, joinElvis(e3, ...))
+      return Node("IIf", pos, e1, e2, joinIIf(e3, ...))
    end
    return e1
 end
@@ -363,7 +383,7 @@ local function addOperations(e)
    e = matchRel(e, O("==", "!=", "<=", "<", ">=", ">"))
    e = matchLTR(e, O("and"))
    e = matchLTR(e, O("or"))
-   e = e * (cp * T"?" * needExpr * (T":" + E"CloseElvis") * e)^0 / joinElvis
+   e = e * (cp * T"?" * needExpr * (T":" + E"CloseIIf") * e)^0 / joinIIf
    e = matchRTL(e, O("$"))
    e = (cp * params * T"=>")^0 * e / joinFn
    return e
@@ -437,49 +457,25 @@ end
 -- Create SEXPR summary of AST
 --------------------------------
 
-local dumpNodes
+local astFormatters = {
+   Name = function (v) return v[1] end,
+   Number = function (v) return v[1] end,
+}
 
-local function dumpNode(node, subj)
-   if type(node) == "string" then
-      return "`" .. node .. "`"
-   end
-
-   local typ = node.type
-   if typ == "Name" or typ == "Number" then
-      -- validate node.pos
-      local value = node[1]
-      local text = subj:sub(node.pos, node.pos + #value - 1)
-      -- ensure unambiguous serialization
-      local pat = (typ == "Number") and "^%-?%d" or "^[%a_]"
-      if #node == 1 and value == text and value:match(pat) then
-         return value
-      end
-   elseif typ == nil then
-      return "[" .. dumpNodes(node, subj) .. "]"
-   else
-      return "(" .. dumpNodes(node, subj, typ) .. ")"
-   end
-
-   return "!" .. test.serialize(node)
+local function astFmt(node)
+   return rec.recFmt(node, astFormatters)
 end
 
 
-function dumpNodes(nodes, subj, listType)
-   if type(nodes) ~= "table" then
-      return "!" .. test.serialize(nodes)
-   end
-   local o = {listType}
-   for ii, v in ipairs(nodes) do
-      o[#o+1] = dumpNode(v, subj)
-   end
-   return table.concat(o, " ")
+local function astFmtV(nodes)
+   return table.concat(persist.imap(nodes, astFmt), " ")
 end
 
 
 local exports = {
    parseModule = parseModule,
-   dumpNodes = dumpNodes,
-   dumpNode = dumpNode,
+   astFmtV = astFmtV,
+   astFmt = astFmt,
 }
 
 
@@ -526,7 +522,7 @@ local function testG(subj, pattern, ecaptures, eoob, epos)
    local pos, state, captures = P(g).match(subj, 1, p2dInitialState)
 
    test.eqAt(2, ecaptures, captures)
-   test.eqAt(2, eoob or "", state and dumpNodes(state.oob) or "")
+   test.eqAt(2, eoob or "", state and astFmtV(state.oob) or "")
    if epos then
       test.eqAt(2, epos, pos)
    end
@@ -568,7 +564,7 @@ testG(txt, blockBody,
 --------------------------------
 
 testG(" \nNext", ss, {}, nil, 2)
-testG(" # c\n  x\n", ss, {}, "(Comment `# c`)", 8)
+testG(" # c\n  x\n", ss, {}, "(Comment '# c')", 8)
 
 testG("abc  ", O("abc"), {"abc"}, nil, 6)
 testG("abc+ ", O("abc"), {"abc"}, nil, 4)
@@ -585,14 +581,14 @@ testG("7 ", number, {"7"}, nil, 3)
 testG("7.5 ", number, {"7.5"})
 testG("7.0e0 ", number, {"7.0e0"})
 testG("7e+0 ", number, {"7e+0"})
-testG("7.e+1 ", number, {"7.e+1"}, "(Error `NumDigitAfter`)")
-testG("7a ", number, {"7"}, "(Error `NumEnd`)")
-testG("1.23.", number, {"1.23"}, "(Error `NumEnd`)")
-testG(".5", number, {".5"}, "(Error `NumDigitBefore`)")
+testG("7.e+1 ", number, {"7.e+1"}, "(Error 'NumDigitAfter')")
+testG("7a ", number, {"7"}, "(Error 'NumEnd')")
+testG("1.23.", number, {"1.23"}, "(Error 'NumEnd')")
+testG(".5", number, {".5"}, "(Error 'NumDigitBefore')")
 
 testG([["a\\\t\nb"   ]], qstring, {"a\\\t\nb"}, nil, 14)
-testG([["\a"]], qstring, {"\\a"}, "(Error `StringBS`)")
-testG([["abc]], qstring, {"abc"}, "(Error `StringEnd`)")
+testG([["\a"]], qstring, {"\\a"}, "(Error 'StringBS')")
+testG([["abc]], qstring, {"abc"}, "(Error 'StringEnd')")
 
 
 -- Match `subj` using LogLine.
@@ -600,9 +596,9 @@ testG([["abc]], qstring, {"abc"}, "(Error `StringEnd`)")
 local function testL(subj, esexpr, eoob)
    local g = override({}, rioG, {"LogLine"})
    local pos, state, captures = P(g).match(subj, 1, p2dInitialState)
-   test.eqAt(2, esexpr, dumpNodes(captures, subj))
+   test.eqAt(2, esexpr, astFmtV(captures))
    if eoob then
-      test.eqAt(2, eoob, dumpNodes(state.oob, subj))
+      test.eqAt(2, eoob, astFmtV(state.oob))
    end
 end
 
@@ -611,9 +607,9 @@ end
 --
 local function testM(subj, esexpr, eoob)
    local node, oob = parseModule(subj)
-   test.eqAt(2, esexpr, dumpNode(node, subj))
+   test.eqAt(2, esexpr, astFmt(node))
    if eoob then
-      test.eqAt(2, eoob, dumpNodes(oob, subj))
+      test.eqAt(2, eoob, astFmtV(oob))
    end
 end
 
@@ -622,31 +618,31 @@ end
 
 testL("ab_1", "ab_1")
 testL("1.23", "1.23")
-testL([["a\tb"]], "(String `a\tb`)")
+testL([["a\tb"]], "(String 'a\tb')")
 
 -- errors
 
-testL("\t x", "x", "(Error `BadChar`)")
+testL("\t x", "x", "(Error 'BadChar')")
 
 -- vector
 
 testL("[]", "(Vector [])")
 testL("[a]", "(Vector [a])")
 testL("[a, b, c]", "(Vector [a b c])")
-testL("[a ", "(Vector [a])", "(Error `CloseSquare`)")
-testL("[a,", "(Vector [a])", "(Error `CloseSquare`)")
+testL("[a ", "(Vector [a])", "(Error 'CloseSquare')")
+testL("[a,", "(Vector [a])", "(Error 'CloseSquare')")
 
 -- record
 
 testL("{}", "(Record [])")
 testL("{a: A, b: B}", "(Record [a A b B])")
-testL("{a: A,  ", "(Record [a A])", "(Error `CloseCurly`)")
+testL("{a: A,  ", "(Record [a A])", "(Error 'CloseCurly')")
 testL("{a:,}", "(Record [a (Missing)])")
 
 -- grouping
 
 testL("(a)", "a")
-testL("(a", "a", "(Error `CloseParen`)")
+testL("(a", "a", "(Error 'CloseParen')")
 testL("((a)) ", "a")
 
 -- atoms
@@ -658,7 +654,7 @@ testL("(12)", "12")
 -- suffix operators
 
 testL("a.b", "(Op_. a b)")
-testL("a.", "(Op_. a (Missing))", "(Error `DotName`)")
+testL("a.", "(Op_. a (Missing))", "(Error 'DotName')")
 testL("a[1]", "(Op_[] a 1)")
 testL("a(1,x)", "(Op_() a [1 x])")
 testL("a . b [ 1 ] ( 2 ) ",  "(Op_() (Op_[] (Op_. a b) 1) [2])")
@@ -686,7 +682,7 @@ testL("a<b<c", "(Op_and (Op_< a b) (Op_< b c))")
 
 -- ?:
 
-testL("a or b ? f : g $ x", "(Op_$ (Elvis (Op_or a b) f g) x)")
+testL("a or b ? f : g $ x", "(Op_$ (IIf (Op_or a b) f g) x)")
 
 -- params => expr
 
@@ -699,8 +695,8 @@ testL("a     => 1", "(Fn [a] 1)")
 -- statements
 --
 
-testL("x = 1", "(S-Let x `=` 1)")
-testL("x := 1", "(S-Let x `:=` 1)")
+testL("x = 1", "(S-Let x '=' 1)")
+testL("x := 1", "(S-Let x ':=' 1)")
 testL("x <- a", "(S-Act [x] a)")
 testL("if a: x", "(S-If a x)")
 testL("loop:", "(S-Loop)")
@@ -710,11 +706,11 @@ testL("for x in E: B", "(S-For x E B)")
 
 -- extraneous characters
 
-testL("a b c", "a", "(Error `Garbage`)")
+testL("a b c", "a", "(Error 'Garbage')")
 
 -- block body
 
-testL("a + \n  x=1\n  x\n", "(Op_+ a (Let [x `=` 1] x))")
+testL("a + \n  x=1\n  x\n", "(Op_+ a (Let [x '=' 1] x))")
 
 
 -- test `Module`
@@ -728,7 +724,7 @@ f = (x) =>
 f(2)
 ]]
 
-testM(t1, "(Let [f `=` (Fn [x] (If [(Op_< x 1) 0] (Op_+ x 1)))] (Op_() f [2]))",
-      "(Comment `# C1`)")
+testM(t1, "(Let [f '=' (Fn [x] (If [(Op_< x 1) 0] (Op_+ x 1)))] (Op_() f [2]))",
+      "(Comment '# C1')")
 
 return exports

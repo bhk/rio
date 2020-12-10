@@ -160,7 +160,7 @@ listed below, grouped by precedence, in decreasing order:
 |  == != < > <= >=           |  Relational (Pythonic)
 |  and                       |  Left
 |  or                        |  Left
-|  ?:                        |  Left
+|  ?:                        |  Left (Ternary)
 |  $                         |  Right
 
 
