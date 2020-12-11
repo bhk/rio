@@ -90,23 +90,63 @@ necessarily indented further than a preceding continuation line.)
 
 ## Parser Design
 
-Which should we have?
+A conventional parser type signature for Rio would look something like this:
 
- a) parse: String -> (AST, Errors)
- b) parse: String -> AST     [with AST augmented to accommodate errors]
+    parse: String -> (AST | Errors)
 
-Later transformations of AST can also generate errors, so AST should
-accommodate errors, and anything that deals with errors should accommodate
-AST errors.  So let's go with (b).
+Where AST describes an expression, and Error describes a set of errors.  We
+get one of the other.
 
-So where do high-level errors end up?
+This is inadequate for a live programming environment, where we want to be
+able to identify and flag errors without losing all thee information about
+the other, valid, parts of the program.  We want to be able to highlight
+syntax, allow value exploration, and enhance editing.  For example, changing
+the name of a variable in its definition will automatically update the other
+references to that variable, and editing within a comment can leverage rich
+text formatting features.
+
+SCAM's parser reports errors *in* the parse tree.  It always returns an AST,
+which is passed through later phases of compilation that transform the tree,
+and may in turn add their own error nodes.  The final result is then
+traversed to detect error nodes and display messages before generating an
+executable.  This works nicely, but it would become more awkward when we try
+to accommodate comments and more error resiliency in the parsing.
+
+Instead, we use:
+
+    parse: String -> (AST, OOB)
+
+OOB contains "out-of-band" data -- anything outside of what naturally fits
+in an expression, like comments, extraneous text, invalid characters, and so
+on.
+
+Errors may manifest in two ways.  First, an invalid or missing expression
+will result in a corresponding error-like AST node as necessary to construct
+a well-formed AST strcture.  This will be handled by the evaluator when and
+if the expression is encountered.  Second, an OOB entry describes the error
+for immediate display in the IDE or terminal output.
+
+Using peg.lua, the AST information is returned via the conventional
+"captured values" paradigm, while OOB data is stored in the parser state
+that propagates across sequential matches.
 
 
-An AST, at top, is an expression.
+## Core Evaluator
 
-  data Expr =
-     If cond then else
-     Assign name value body
-     String value
-     Number value
-     ...
+The core evaluator (`clEval` in interp.lua) is summarized here in a
+hypothetical future Lua dialect:
+
+    clEval = (node, env) =>
+       eval = newNode => clEval(newNode, env)
+
+       match node:
+           CL.Val(value) -> value
+           CL.Arg(name) -> env[name]
+           CL.Fun(params, body) -> V.Fun(env, params, body)
+           CL.App(fn, args) -> match fn:
+               V.Nat(name) -> natives[name](args.map(eval))
+               V.Fun(fenv, params, body) ->
+                   assert args.count == params.count
+                   clEval(body, fenv.bind(params, args.map(eval)))
+           CL.Bra(cond, then, else) -> match eval(cond):
+               V.Bool(b) -> b ? eval(then) : eval(else)

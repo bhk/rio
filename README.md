@@ -6,7 +6,7 @@ that might streamline UI development.  To that end, a simple language with a
 pure functional foundation, without mutation, appears to be best suited.
 
 However, there are a lot of other ideas I've had over the years for a
-programming language and deveopment environment, and this is an opportunity
+programming language and development environment, and this is an opportunity
 to try them out as well: Compile-time evaluation, partial evaluation,
 specialization, reified types, gradual typing, treating static typing as
 assertions, integrated unit testing.  Together with reactive evaluation,
@@ -16,5 +16,5 @@ between dynamically-typed and statically-typed, compiled and interpreted,
 high-level and low-level, offering the best of each domain.
 
 The "concepts" document contains notes on a lot of these ideas, as well as
-[an introduction to Rio syntax](#syntax-introduction) and some [Rio
-internals](#rio-internals).
+[an introduction to Rio syntax](concepts.md#syntax-introduction) and some
+[Rio internals](concepts.md#rio-internals).
