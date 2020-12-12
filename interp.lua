@@ -28,7 +28,6 @@ end
 --    <string>
 --    (VVec value...)             Vector
 --    (VRec {name, value}...)     Record
---    (VNat name)                 Native function
 --    (VFun env params body)      CL-based function
 --    (VErr code where what)      (pseudo-value holding error results)
 --
@@ -91,7 +90,7 @@ for op, fn in pairs(numOps) do
       return fn(a, b)
    end
    natives[op] = nat
-   opFuncs[op] = rec("VNat", op)
+   opFuncs[op] = op
 end
 
 
@@ -108,12 +107,14 @@ function natives.vvecCons(vec, item)
 end
 
 
--- A function value: construct a new vector by prepending an item
-local vvecCons = rec("VNat", "vvecCons")
+-- Construct expression for `r.push(item)`
+--
+local function cl_VVecCons(v, item)
+   return rec("CNat", "vvecCons", {v, item})
+end
 
 
 -- VRec methods
-
 
 local vrecEmpty = rec("VRec")
 
@@ -130,8 +131,15 @@ function natives.vrecSet(rec, name, value)
    return o
 end
 
--- A function value: construct a new record by adding a pair definition
-local vrecSet = rec("VNat", "vrecSet")
+
+-- Construct expression for `r[name] <! value`
+--
+-- Note: r, name, value, and result are all CL nodes.
+--
+local function cl_VRecSet(r, name, value)
+   return rec("CNat", "vrecSet", {r, name, value})
+end
+
 
 
 local clFmt
@@ -156,8 +164,6 @@ local function valueFmt(value)
    elseif value.type == "VFun" then
       local env, params, body = unpack(value)
       return ("(%s) => %s"):format(concat(params, " "), clFmt(body))
-   elseif value.type == "VNat" then
-      return "$" .. value[1]
    elseif value.type == "VErr" then
       return "(VErr " .. astFmtV(value) .. ")"
    end
@@ -181,17 +187,18 @@ end
 -- Construct CL from AST
 ----------------------------------------------------------------
 
--- Core Language nodes (CNodes):
+-- Core Language nodes (CExprs):
 --   (CVal value)           -- constants (literals, PE results)
 --   (CArg name)            -- argument reference
 --   (CFun names body)      -- function construction (lambda)
 --   (CApp fn args)         -- function application
+--   (CNat name args)       -- native function call
 --   (CBra cond then else)  -- branch (if)
 --
 -- value : VNode
 -- name : string
 -- names : [string]
--- all others : CNode or [CNode]
+-- all others : CExpr or [CExpr]
 
 
 local function nameToVStr(name)
@@ -210,9 +217,17 @@ local function CApp(fn, args)
 end
 
 
+local function CNat(name, args)
+   return rec("CNat", name, args)
+end
+
+
 local clFormatters = {
-   CArg = function (v) return v[1] end,
-   CVal = function (v) return valueFmt(v[1]) end,
+   CArg = function (e) return e[1] end,
+   CVal = function (e) return valueFmt(e[1]) end,
+   CNat = function (e, fmt)
+      return ("(%s %s)"):format(e[1], concat(imap(e[2], fmt), " "))
+   end
 }
 
 
@@ -253,24 +268,24 @@ local function clFrom(ast)
       local elems = ast[1]
       local vec = CVal(vvecEmpty)
       for ii = #elems, 1, -1 do
-         vec = CApp(CVal(vvecCons), {vec, clFrom(elems[ii])})
+         vec = cl_VVecCons(vec, clFrom(elems[ii]))
       end
       return vec
    elseif typ == "Record" then
       local rpairs = ast[1]
       local o = CVal(vrecEmpty)
       for ii = 1, #rpairs, 2 do
-         local clName = CVal(nameToVStr(rpairs[ii]))
-         local clValue = clFrom(rpairs[ii+1])
-         o = CApp(CVal(vrecSet), {o, clName, clValue})
+         local nameExpr = CVal(nameToVStr(rpairs[ii]))
+         local valueExpr = clFrom(rpairs[ii+1])
+         o = cl_VRecSet(o, nameExpr, valueExpr)
       end
       return o
    elseif typ == "IIf" then
       return rec("CBra", clFrom(ast[1]), clFrom(ast[2]), clFrom(ast[3]))
    elseif opFuncs[typ] then
       -- hacky shortcut: use `op` as native function name (TODO: dispatch)
-      local a, b = clFrom(ast[1]), clFrom(ast[2])
-      return CApp(CVal(opFuncs[typ]), {a, b})
+      local a, b = ast[1], ast[2]
+      return CNat(typ, {clFrom(a), clFrom(b)})
    else
       -- Op_., Op_[], Op_X, Unop_X, Missing, For, Loop, LoopWhile, While, Act
       test.fail("Unsupported: %s", astFmt(ast))
@@ -282,38 +297,38 @@ end
 -- Evaluation
 ----------------------------------------------------------------
 
-local function clEval(node, env)
-   local typ = node.type
+local function clEval(expr, env)
+   local typ = expr.type
    local function eval(n)
       return clEval(n, env)
    end
 
    if typ == "CVal" then
-      return node[1]
+      return expr[1]
    elseif typ == "CArg" then
-      local value = env[node[1]]
-      faultIf(value == nil, "Undefined", node.ast, nil)
+      local value = env[expr[1]]
+      faultIf(value == nil, "Undefined", expr.ast, nil)
       return value
    elseif typ == "CFun" then
-      return rec("VFun", env, node[1], node[2])
+      local params, body = expr[1], expr[2]
+      return rec("VFun", env, params, body)
    elseif typ == "CApp" then
-      local fn, args = eval(node[1]), imap(node[2], eval)
-      local fnType = valueType(fn)
-      if fnType == "VNat" then
-         return natives[fn[1]](unpack(args))
-      elseif fnType == "VFun" then
-         local fenv, params, body = unpack(fn)
-         faultIf(#args ~= #params, "ArgCount", node.ast, fn)
-         return clEval(body, bind(fenv, params, args))
-      end
-      faultIf(true, "NotFn", node.ast, fn)
+      local fn, args = expr[1], expr[2]
+      local fnValue = eval(fn)
+      faultIf(valueType(fnValue) ~= "VFun", "NotFn", expr.ast, fnValue)
+      local fenv, params, body = unpack(fnValue)
+      faultIf(#args ~= #params, "ArgCount", expr.ast, fnValue)
+      return clEval(body, bind(fenv, params, imap(args, eval)))
+   elseif typ == "CNat" then
+      local name, args = expr[1], expr[2]
+      return natives[name](unpack(imap(args, eval)))
    elseif typ == "CBra" then
-      local clCond, clThen, clElse = unpack(node)
-      local cond = eval(clCond)
-      faultIf(valueType(cond) ~= "boolean", "NotBool", node.ast, cond)
-      return eval(cond and clThen or clElse)
+      local condExpr, thenExpr, elseExpr = unpack(expr)
+      local cond = eval(condExpr)
+      faultIf(valueType(cond) ~= "boolean", "NotBool", expr.ast, cond)
+      return eval(cond and thenExpr or elseExpr)
    else
-      test.fail("Unsupported: %Q", node)
+      test.fail("Unsupported: %Q", expr)
    end
 end
 
