@@ -77,16 +77,6 @@ following ways:
     within which each Rio module is evaluated).
 
 
-## Imperative Syntax
-
-A number of features that resemble imperative programming, but without the
-pitfalls of mutable data, are implemented as syntactic sugar.
-
- * [Update Syntax](#update-syntax)
- * [Looping Syntax](#looping-syntax)
- * [Action Syntax](#action-syntax)
-
-
 ## Syntax Introduction
 
 Here is a quick summary of Rio's "inline" syntax:
@@ -102,8 +92,10 @@ Here is a quick summary of Rio's "inline" syntax:
  - Record construction: `{a: 1, b: 2, c: 3}`
  - Property de-reference: `r.prop`
 
-Separate from inline syntax is "block-level" syntax, as specified by a [2D
-(indentation-based) syntax](#2d-syntax).  This includes:
+Refer to [`syntax.md`](syntax.md#grammar) for all the gory details.
+
+Rio's "block-level" syntax involves multiple consecutive lines of code,
+structured using [indentation](#2d-syntax).  Block-level syntax enables:
 
  - Assignment expressions
  - Conditional expressions
@@ -120,12 +112,21 @@ For example:
             repeat
         total
 
-See [vertical syntax](#vertical-syntax) for more on block-level constructs.
-Refer to `syntax.md` and `syntax.lua` for the complete definition.
+Other syntax topics:
 
-There is no syntax for Boolean constants, but the variables `true` and
-`false` are primordial variables, implicitly part of the lexical environment
-of each Rio module.
+ * [Vertical syntax](#vertical-syntax) describes the philosophy behind
+   assignments and conditionals.
+ * [Imperative Syntax](#imperative-syntax)
+
+
+## Imperative Syntax
+
+A number of features that resemble imperative programming, but without the
+pitfalls of mutable data, are implemented as syntactic sugar.
+
+ * [Update Syntax](#update-syntax)
+ * [Looping Syntax](#looping-syntax)
+ * [Action Syntax](#action-syntax)
 
 
 ## Vertical Syntax
@@ -172,10 +173,10 @@ evaluates to the `name` property of `value.`
 
 A "method" is nothing more than a property that evaluates to a function.  A
 method will typically be able to access the value from which it was obtained
-(its `self` value) as a captured value, so there is no need to pass a value
-to one of its own methods, as in some "OO" languages.  The expression
-`a.foo()` is equivalent to `tmp = a.foo; tmp()`, exactly as logic would
-dictate (but unlike some other languages).
+(its `self` value) as a captured value, so there is no need to pass its
+value to one of its own methods.  The expression `a.foo()` is equivalent to
+`tmp = a.foo; tmp()`, exactly as logic would dictate (but unlike some other
+languages).
 
 Also, Rio does not confuse properties with members of collections.  Indexing
 expressions -- e.g. `value[index]` -- access members of an array or
@@ -227,7 +228,7 @@ of inputs to the program.
 
 Compilation and code generation are often thought of as synonymous -- and in
 fact code generation is typically the biggest part of a "compiler".  In Rio,
-code generation can happen after a deplorable image is generated, and after
+code generation can happen after a deployable image is generated, and after
 user input has been consumed, similarly to how a JIT-based VM works.
 
 Originally, compiling meant producing an object file: a deployable
@@ -239,28 +240,26 @@ the trigger for code generation or static analysis.
 
 This goes beyond implementation choice; the language definition does not
 depend on a notion of "compile-time".  Rio does not distinguish [top-level
-code](#top-level-code), and its provides no "compile-time" primitives, like
-`#ifdef` instead of `if`, since values that never change (e.g. size of a
-number) will be erased during [partial evaluation](#partial-evaluation).
+code](#top-level-code), and it provides no "compile-time" primitives, like
+`#ifdef` as an alternative to `if`, since values that never change
+(e.g. size of a number) will be erased during [partial
+evaluation](#partial-evaluation).
 
 
 ## Top-Level Code
 
 Some languages distinguish "top-level" code from code that occurs within a
-function body.  This complicates the mental model of the language.  In
-languages without this distinction, top-level code is nothing special; it's
-the same kind of code as a function body.
+function body.  This complicates the mental model of the language.
 
 For example, in C or Rust, the expressions that are valid in top-level --
 e.g. on the RHS of a global variable definition -- are a subset of the
 expressions valid within a function.  This means that when complex
 initialization is required, it must be done (using mutation) at "run-time",
 introducing the problem of ensuring the initialization is done before the
-variable is referenced.  Also, there is a different set of visibility rules
-for functions and variables defined at the top level than for variables
-defined within a function body.  In Rust, this means that the programmer
-cannot rely on type inference for globals, and must explicitly declare
-types.
+variable is referenced.  Also, there are different visibility rules for
+functions and variables defined at the top level than for variables defined
+within a function body.  In Rust, this means that the programmer cannot rely
+on type inference for globals, and must explicitly declare types.
 
 In Lua, JS, and Python, top-level code is function body code.  Compilation
 is just an optimization that does not complicate the language.
@@ -458,9 +457,10 @@ numeric range.  E.g.  0 <= n <= 2^32.
 
 ## Profiling
 
-Observing execution of code to collect information that can be fed back into
-compilation to direct optimizations.  This can indicate when a particular
-[specialization](#specialization) is worthwhile.
+We can observe execution of code to collect information and feed it back
+into the compilation stage to direct optimizations.  Execution frequency can
+point to where optimizations are worthwhile.  Observed data types and values
+can suggest opportunities for [specialization](#specialization).
 
 
 ## Build System
@@ -472,20 +472,17 @@ from the command that consumes them.  Similar problems (not necessarily
 involving “files” and “commands”) occur in many places in software
 development.
 
+Note that a language that requires one to explicitly name dependencies -- in
+addition to writing the command -- is requiring one to repeat oneself to a
+degree.  All the information about dependencies could be deduced from the
+command line.  If only the build system could be taught to deduce this
+information, or defining a way for the commands to be invoked so that they
+can report the dependencies encountered during an invocation.
 
-## Shell Programming
-
-Interactive, but not [live programming](#live-programming).  Instead, try and re-try, and
-manually repeat sequences of statements.
-
-Once a script is complete, one might rewrite it using a [build
-system](#build-system), in order to enable more efficient updates in
-response to changes in inputs.  Or, the scripting language and engine could
-be enhanced to support [incremental evaluation](#incremental-evaluation).
-At that point, the script *is* a build script, although the parallel
-evaluation features of the scripting language may be lacking.  (Parallelism
-is manually managed in shells, but inferred from the dependency tree in
-make.)
+Listing dependencies alongside a command means that the dependencies must be
+known before the command is executed.  This is a problem when the set of
+dependencies will vary with inputs to the program, like file contents, which
+are unkown to the build system.
 
 
 ## UI Development
@@ -698,8 +695,8 @@ Here is one illustrative example: `a + b` is defined as invoking the "+"
 method of `a`, passing it `b`.  This contrasts with languages that define
 "+" as a built-in function that has special cases for built-in types.
 
-Rio built-in types are special only with respect to literal constants and
-array and map constructors.  After construction, they have no special
+Rio built-in types are special only in that they are used to construct
+values from literal constants.  After construction, they have no special
 privileges or capabilities.
 
 
@@ -1005,7 +1002,7 @@ typically a very blunt instrument, and without tight integration with the
 language implementation it is unlikely to provide optimal performance.
 
 
-## Execptions
+## Exceptions
 
 Exceptions provide another way for functions to return.  In Rio, functions
 that assert or fault do *not* return, they halt.  This stops execution of
