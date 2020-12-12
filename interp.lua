@@ -11,9 +11,9 @@ local concat, unpack = table.concat, table.unpack
 local rec, recFmt = reclib.rec, reclib.recFmt
 
 
-local function nameString(node)
-   assert(node.type == "Name")
-   return node[1]
+local function nameString(ast)
+   assert(ast.type == "Name")
+   return ast[1]
 end
 
 
@@ -55,6 +55,7 @@ end
 local natives = {}
 
 local opFuncs = {}
+
 
 -- faultIf() is called from native functions in the context of an
 -- evaluation.
@@ -107,10 +108,33 @@ function natives.vvecCons(vec, item)
 end
 
 
+function natives.vvecNth(vec, n)
+   faultIf(valueType(vec) ~= "VVec", "NotVVec", nil, vec)
+   faultIf(valueType(n) ~= "number", "NotNumber", nil, n)
+   local value = vec[n + 1]
+   faultIf(value == nil, "VVecBounds", nil, vec)
+   return value
+end
+
+
+function natives.vvecNew(...)
+   return {type="VVec", ...}
+end
+
+
+local tv1 = natives.vvecNew(newNumber(9), newNumber(8))
+test.eq(tv1, rec("VVec", 9, 8))
+test.eq(natives.vvecNth(tv1, newNumber(0)), newNumber(9))
+
+
 -- Construct expression for `r.push(item)`
 --
 local function cl_VVecCons(v, item)
    return rec("CNat", "vvecCons", {v, item})
+end
+
+local function cl_VVecNth(v, n)
+   return rec("CNat", "vvecNth", {v, n})
 end
 
 
@@ -162,8 +186,8 @@ local function valueFmt(value)
       end
       return "{" .. concat(o, ", ") .. "}"
    elseif value.type == "VFun" then
-      local env, params, body = unpack(value)
-      return ("(%s) => %s"):format(concat(params, " "), clFmt(body))
+      local fenv, body = unpack(value)
+      return ("(...) => %s"):format(clFmt(body))
    elseif value.type == "VErr" then
       return "(VErr " .. astFmtV(value) .. ")"
    end
@@ -174,12 +198,18 @@ end
 -- Environments
 ----------------------------------------------------------------
 
-local function bind(env, params, args)
-   local o = clone(env)
-   for ii, param in ipairs(params) do
-      o[param] = args[ii]
-   end
-   return o
+local emptyEnv = {}
+
+
+local function envBind(env, arg)
+   local e = clone(env)
+   table.insert(e, arg)
+   return e
+end
+
+
+local function envArg(env, index)
+   return env[#env - index]
 end
 
 
@@ -189,9 +219,9 @@ end
 
 -- Core Language nodes (CExprs):
 --   (CVal value)           -- constants (literals, PE results)
---   (CArg name)            -- argument reference
---   (CFun names body)      -- function construction (lambda)
---   (CApp fn args)         -- function application
+--   (CArg index)           -- argument reference
+--   (CFun body)            -- function construction (lambda)
+--   (CApp fn arg)          -- function application
 --   (CNat name args)       -- native function call
 --   (CBra cond then else)  -- branch (if)
 --
@@ -207,26 +237,16 @@ local function nameToVStr(name)
 end
 
 
-local function CVal(value)
-   return rec("CVal", value)
-end
-
-
-local function CApp(fn, args)
-   return rec("CApp", fn, args)
-end
-
-
-local function CNat(name, args)
-   return rec("CNat", name, args)
-end
-
-
 local clFormatters = {
-   CArg = function (e) return e[1] end,
+   CArg = function (e) return "$" .. e[1] end,
    CVal = function (e) return valueFmt(e[1]) end,
    CNat = function (e, fmt)
-      return ("(%s %s)"):format(e[1], concat(imap(e[2], fmt), " "))
+      local name, args = e[1], e[2]
+      if name == "vvecNth" then
+         assert(#args == 2)
+         return ("%s[%s]"):format(fmt(args[1]), fmt(args[2]))
+      end
+      return ("(%s %s)"):format(name, concat(imap(args, fmt), " "))
    end
 }
 
@@ -236,39 +256,83 @@ function clFmt(node)
 end
 
 
-local function desugar(ast)
-   local typ = ast.type
+local emptyScope = {
+   depth = 0
+}
 
-   local function rec(typ, ...)
+local function scopeExtend(scope, params)
+   local s = clone(scope)
+   local depth = scope.depth + 1
+   s.depth = depth
+   for ii, name in ipairs(params) do
+      s[nameString(name)] = {depth = depth, offset = ii-1}
+   end
+   return s
+end
+
+
+local function scopeFind(scope, name)
+   local defn = scope[name]
+   if defn then
+      return scope.depth - defn.depth, defn.offset
+   end
+end
+
+
+local function desugar(ast, scope)
+   local function ds(a)
+      return desugar(a, scope)
+   end
+
+   local function C(typ, ...)
       return {type=typ, ast=ast, ...}
    end
 
+   local function lambda(params, body)
+      return C("CFun", desugar(body, scopeExtend(scope, params)))
+   end
+
+   local function call(cl_fn, ast_args)
+      return C("CApp", cl_fn, C("CNat", "vvecNew", imap(ast_args, ds)))
+   end
+
+   local function CVal(value)
+      return C("CVal", value)
+   end
+
+   local function CNat(name, args)
+      return C("CNat", name, args)
+   end
+
+
+   local typ = ast.type
+
    if typ == "Name" then
-      return rec("CArg", ast[1])
+      local index, offset = scopeFind(scope, nameString(ast))
+      faultIf(index == nil, "Undefined", ast, nil)
+      return cl_VVecNth(C("CArg", index), CVal(newNumber(offset)))
    elseif typ == "Number" then
       return CVal(newNumber(ast[1]))
    elseif typ == "String" then
       return CVal(newVStr(ast[1]))
    elseif typ == "Fn" then
-      local params = imap(ast[1], nameString)
-      return rec("CFun", params, desugar(ast[2]))
+      local params, body = ast[1], ast[2]
+      return lambda(params, body)
    elseif typ == "Op_()" then
-      return CApp(desugar(ast[1]), imap(ast[2], desugar))
+      local fn, args = ast[1], ast[2]
+      return call(ds(fn), args)
    elseif typ == "If" then
-      return rec("CBra", desugar(ast[1][1]), desugar(ast[1][2]), desugar(ast[2]))
+      return C("CBra", ds(ast[1][1]), ds(ast[1][2]), ds(ast[2]))
    elseif typ == "Let" and ast[1][2] == "=" then
-      local name = nameString(ast[1][1])
-      local value = desugar(ast[1][3])
-      local body = desugar(ast[2])
-      local fn = rec("CFun", {name}, body)
-      return CApp(fn, {value})
+      local name, value, body = ast[1][1], ast[1][3], ast[2]
+      return call(lambda({name}, body), {value})
    elseif typ == "Ignore" then
-      return desugar(ast[2])
+      return ds(ast[2])
    elseif typ == "Vector" then
       local elems = ast[1]
       local vec = CVal(vvecEmpty)
       for ii = #elems, 1, -1 do
-         vec = cl_VVecCons(vec, desugar(elems[ii]))
+         vec = cl_VVecCons(vec, ds(elems[ii]))
       end
       return vec
    elseif typ == "Record" then
@@ -276,16 +340,16 @@ local function desugar(ast)
       local o = CVal(vrecEmpty)
       for ii = 1, #rpairs, 2 do
          local nameExpr = CVal(nameToVStr(rpairs[ii]))
-         local valueExpr = desugar(rpairs[ii+1])
+         local valueExpr = ds(rpairs[ii+1])
          o = cl_VRecSet(o, nameExpr, valueExpr)
       end
       return o
    elseif typ == "IIf" then
-      return rec("CBra", desugar(ast[1]), desugar(ast[2]), desugar(ast[3]))
+      return C("CBra", ds(ast[1]), ds(ast[2]), ds(ast[3]))
    elseif opFuncs[typ] then
       -- hacky shortcut: use `op` as native function name (TODO: dispatch)
       local a, b = ast[1], ast[2]
-      return CNat(typ, {desugar(a), desugar(b)})
+      return CNat(typ, {ds(a), ds(b)})
    else
       -- Op_., Op_[], Op_X, Unop_X, Missing, For, Loop, LoopWhile, While, Act
       test.fail("Unsupported: %s", astFmt(ast))
@@ -306,19 +370,18 @@ local function eval(expr, env)
    if typ == "CVal" then
       return expr[1]
    elseif typ == "CArg" then
-      local value = env[expr[1]]
-      faultIf(value == nil, "Undefined", expr.ast, nil)
+      local index = expr[1]
+      local value = assert(envArg(env, index))
       return value
    elseif typ == "CFun" then
-      local params, body = expr[1], expr[2]
-      return rec("VFun", env, params, body)
+      local body = expr[1]
+      return rec("VFun", env, body)
    elseif typ == "CApp" then
-      local fn, args = expr[1], expr[2]
+      local fn, arg = expr[1], expr[2]
       local fnValue = ee(fn)
       faultIf(valueType(fnValue) ~= "VFun", "NotFn", expr.ast, fnValue)
-      local fenv, params, body = unpack(fnValue)
-      faultIf(#args ~= #params, "ArgCount", expr.ast, fnValue)
-      return eval(body, bind(fenv, params, imap(args, ee)))
+      local fenv, body = unpack(fnValue)
+      return eval(body, envBind(fenv, ee(arg)))
    elseif typ == "CNat" then
       local name, args = expr[1], expr[2]
       return natives[name](unpack(imap(args, ee)))
@@ -333,17 +396,14 @@ local function eval(expr, env)
 end
 
 
-local function evalAST(ast, env)
-   return eval(desugar(ast), env)
-end
-
 ----------------------------------------------------------------
 -- Tests
 ----------------------------------------------------------------
 
 
-local initialEnv = {
-}
+local function evalAST(ast)
+   return eval(desugar(ast, emptyScope), emptyEnv)
+end
 
 
 local function trapEval(fn, ...)
@@ -355,20 +415,20 @@ local function trapEval(fn, ...)
 end
 
 
-local function traceWrap(eval)
-   local function traceEval(node, env)
-      local o = evalAST(node, env)
-      print(string.format("%5d %s", node.pos, valueFmt(o)))
-      return o
-   end
-   return traceEval
-end
+-- local function traceWrap(eval)
+--    local function traceEval(node, env)
+--       local o = evalAST(node, env)
+--       print(string.format("%5d %s", node.pos, valueFmt(o)))
+--       return o
+--    end
+--    return traceEval
+-- end
 
 
 local function et(source, evalue, eoob)
-   local node, oob = syntax.parseModule(source)
+   local ast, oob = syntax.parseModule(source)
    test.eqAt(2, eoob or "", astFmtV(oob or {}))
-   test.eqAt(2, evalue, valueFmt(trapEval(evalAST, node, initialEnv)))
+   test.eqAt(2, evalue, valueFmt(trapEval(evalAST, ast)))
 end
 
 
@@ -394,7 +454,7 @@ et("1 < 2", "true")
 
 -- Fn
 
-et("x => x", "(x) => x")
+et("x => x", "(...) => $0[0]")
 
 -- Op_()
 
