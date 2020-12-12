@@ -236,7 +236,7 @@ function clFmt(node)
 end
 
 
-local function clFrom(ast)
+local function desugar(ast)
    local typ = ast.type
 
    local function rec(typ, ...)
@@ -251,24 +251,24 @@ local function clFrom(ast)
       return CVal(newVStr(ast[1]))
    elseif typ == "Fn" then
       local params = imap(ast[1], nameString)
-      return rec("CFun", params, clFrom(ast[2]))
+      return rec("CFun", params, desugar(ast[2]))
    elseif typ == "Op_()" then
-      return CApp(clFrom(ast[1]), imap(ast[2], clFrom))
+      return CApp(desugar(ast[1]), imap(ast[2], desugar))
    elseif typ == "If" then
-      return rec("CBra", clFrom(ast[1][1]), clFrom(ast[1][2]), clFrom(ast[2]))
+      return rec("CBra", desugar(ast[1][1]), desugar(ast[1][2]), desugar(ast[2]))
    elseif typ == "Let" and ast[1][2] == "=" then
       local name = nameString(ast[1][1])
-      local value = clFrom(ast[1][3])
-      local body = clFrom(ast[2])
+      local value = desugar(ast[1][3])
+      local body = desugar(ast[2])
       local fn = rec("CFun", {name}, body)
       return CApp(fn, {value})
    elseif typ == "Ignore" then
-      return clFrom(ast[2])
+      return desugar(ast[2])
    elseif typ == "Vector" then
       local elems = ast[1]
       local vec = CVal(vvecEmpty)
       for ii = #elems, 1, -1 do
-         vec = cl_VVecCons(vec, clFrom(elems[ii]))
+         vec = cl_VVecCons(vec, desugar(elems[ii]))
       end
       return vec
    elseif typ == "Record" then
@@ -276,16 +276,16 @@ local function clFrom(ast)
       local o = CVal(vrecEmpty)
       for ii = 1, #rpairs, 2 do
          local nameExpr = CVal(nameToVStr(rpairs[ii]))
-         local valueExpr = clFrom(rpairs[ii+1])
+         local valueExpr = desugar(rpairs[ii+1])
          o = cl_VRecSet(o, nameExpr, valueExpr)
       end
       return o
    elseif typ == "IIf" then
-      return rec("CBra", clFrom(ast[1]), clFrom(ast[2]), clFrom(ast[3]))
+      return rec("CBra", desugar(ast[1]), desugar(ast[2]), desugar(ast[3]))
    elseif opFuncs[typ] then
       -- hacky shortcut: use `op` as native function name (TODO: dispatch)
       local a, b = ast[1], ast[2]
-      return CNat(typ, {clFrom(a), clFrom(b)})
+      return CNat(typ, {desugar(a), desugar(b)})
    else
       -- Op_., Op_[], Op_X, Unop_X, Missing, For, Loop, LoopWhile, While, Act
       test.fail("Unsupported: %s", astFmt(ast))
@@ -297,10 +297,10 @@ end
 -- Evaluation
 ----------------------------------------------------------------
 
-local function clEval(expr, env)
+local function eval(expr, env)
    local typ = expr.type
-   local function eval(n)
-      return clEval(n, env)
+   local function ee(e)
+      return eval(e, env)
    end
 
    if typ == "CVal" then
@@ -314,27 +314,27 @@ local function clEval(expr, env)
       return rec("VFun", env, params, body)
    elseif typ == "CApp" then
       local fn, args = expr[1], expr[2]
-      local fnValue = eval(fn)
+      local fnValue = ee(fn)
       faultIf(valueType(fnValue) ~= "VFun", "NotFn", expr.ast, fnValue)
       local fenv, params, body = unpack(fnValue)
       faultIf(#args ~= #params, "ArgCount", expr.ast, fnValue)
-      return clEval(body, bind(fenv, params, imap(args, eval)))
+      return eval(body, bind(fenv, params, imap(args, ee)))
    elseif typ == "CNat" then
       local name, args = expr[1], expr[2]
-      return natives[name](unpack(imap(args, eval)))
+      return natives[name](unpack(imap(args, ee)))
    elseif typ == "CBra" then
       local condExpr, thenExpr, elseExpr = unpack(expr)
-      local cond = eval(condExpr)
+      local cond = ee(condExpr)
       faultIf(valueType(cond) ~= "boolean", "NotBool", expr.ast, cond)
-      return eval(cond and thenExpr or elseExpr)
+      return ee(cond and thenExpr or elseExpr)
    else
       test.fail("Unsupported: %Q", expr)
    end
 end
 
 
-local function astEval(ast, env)
-   return clEval(clFrom(ast), env)
+local function evalAST(ast, env)
+   return eval(desugar(ast), env)
 end
 
 ----------------------------------------------------------------
@@ -357,7 +357,7 @@ end
 
 local function traceWrap(eval)
    local function traceEval(node, env)
-      local o = astEval(node, env)
+      local o = evalAST(node, env)
       print(string.format("%5d %s", node.pos, valueFmt(o)))
       return o
    end
@@ -368,7 +368,7 @@ end
 local function et(source, evalue, eoob)
    local node, oob = syntax.parseModule(source)
    test.eqAt(2, eoob or "", astFmtV(oob or {}))
-   test.eqAt(2, evalue, valueFmt(trapEval(astEval, node, initialEnv)))
+   test.eqAt(2, evalue, valueFmt(trapEval(evalAST, node, initialEnv)))
 end
 
 
