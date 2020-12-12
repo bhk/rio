@@ -131,22 +131,107 @@ Using peg.lua, the AST information is returned via the conventional
 that propagates across sequential matches.
 
 
-## Core Evaluator
+## Preening the Core Language
 
 The core evaluator (`clEval` in interp.lua) is summarized here in a
-hypothetical future Lua dialect:
+hypothetical future Rio syntax:
 
-    clEval = (node, env) =>
-       eval = newNode => clEval(newNode, env)
+    eval = (expr, env) =>
+        ee = newExpr => eval(newExpr, env)
 
-       match node:
-           CL.Val(value) -> value
-           CL.Arg(name) -> env[name]
-           CL.Fun(params, body) -> V.Fun(env, params, body)
-           CL.App(fn, args) -> match fn:
-               V.Nat(name) -> natives[name](args.map(eval))
-               V.Fun(fenv, params, body) ->
-                   assert args.count == params.count
-                   clEval(body, fenv.bind(params, args.map(eval)))
-           CL.Bra(cond, then, else) -> match eval(cond):
-               V.Bool(b) -> b ? eval(then) : eval(else)
+        match expr:
+            CVal(value) -> value
+            CArg(name) -> env[name]
+            CFun(params, body) -> VFun(env, params, body)
+            CApp(fn, args) -> match ee(fn):
+                VNat(name) -> natives[name](args.map(ee))
+                VFun(fenv, params, body) ->
+                    assert args.count == params.count
+                    eval(body, fenv.bind(params, args.map(ee)))
+            CBra(cond, then, else) -> match ee(cond):
+                VBool(b) -> b ? ee(then) : ee(else)
+
+As it stands, there is some complexity here that could be moved outside of
+the core evaluation loop, into user-defined functions.  While this would at
+first appear to negatively affect performance, pushing operations out of the
+evaluator and into evaluated code makes them subject to data flow analysis
+and CTE.  (For example, argument count validation could be completely
+optimized away in most cases.)  This is one strong motivation for having a
+minimalist CL.  The other motivation is maintaining simplicity in various
+concrete implementations of evaluators (basic evaluation, symbolic
+evaluation, etc.).
+
+We can eliminate the `CBra` case and the knowledge of VBool by treating
+booleans as functions that accept two function parameters.  The value `true`
+calls its first argument, and the value `false` calls its second argument.
+Furthermore, in order to make the contract explicit and improve diagnostics,
+we place these functions on a *property* of the boolean values.  In Rio:
+
+   true.then_else = (then, else) => then()
+   false.then_else = (then, else) => else()
+
+Further, we can remove argument count validation, leaving that for the
+invoked function to perform.  In order to support that, we must provide the
+argument count to the function, or, better yet, pass it all of its arguments
+in a single vector or "arg bundle" object.  This approach is aligned with
+some future functionality: variable numbers of arguments, and more complex
+argument handling (defaulted and named values, a la Python).
+
+Given the notion of an arg bundle object, we can simplify the CL further and
+have it deal only with single-argument functions.  The parameter list goes
+away from VFun, environments get simpler, and CArg stores a numeric de
+Bruijn index instead of a name.
+
+In order to construct an arg bundle we need to call a constructor -- with a
+non-bundled "raw" parameter.  The CL can remain agnostic to *what* the
+single parameter contains, but in generating CL during de-sugaring we need
+to avoid confusing surface language (Rio) functions with internal functions.
+This is easily guaranteed by ensuring internal function values appear only
+as the `fn` value in a CApp.  This is currently the case for native
+functions like vector and record constructors, which always appear in this
+context:
+
+   CApp( CVal(VNat(...)),  ...)
+
+This suggests that eliminating `VNat` values and substituting a new `CNat`
+CL record would be more directed to our use case.  At the same time, we can
+avoid the bloat (A, below) that follows from the many "curried" function
+calls required to construct an argument list with single-argument functions.
+Retaining the ability to pass multiple values to a *native* function
+(argument count validation is not required there) enables (B).
+
+    (A)  v0 = CVal(argsEmpty)
+         v1 = CApp(CApp(CVal(VNat("argsAppend")), v0), ITEM1)
+         CApp(CApp(CVal(VNat("argsAppend")), v1), ITEM2)
+
+    (B)  CNat("argsNew", [ITEM1 ITEM2])
+
+That leaves us with:
+
+    eval = (expr, env) => match expr:
+        CVal(value) -> value
+        CArg(index) -> env[index]
+        CFun(body) -> VFun(env, body)
+        CApp(fn, arg) -> match eval(fn, env):
+            VFun(fenv, body) -> eval(body, fenv.push(eval(arg, env)))
+        CNat(name, args) -> natives[name](args.map(a => eval(a, env)))
+
+
+This comes closer to the ideals of elegance and timelessness that we have in
+mind for the CL.
+
+Revisiting booleans in light of these CNat/CFun changes, our Boolean values
+have the following CL definitions:
+
+   true.then_else = VFun(emptyEnv, CApp(CNat("argsFirst", [CArg(0)])))
+   false.then_else = VFun(emptyEnv, CApp(CNat("argsSecond", [CArg(0)])))
+
+The code to generate the CL for an `if` expression looks like this:
+
+    desugar = (ast, env) => match ast:
+        ...
+        AST.If(cond, then, else) ->
+            te = [then, else].map(a => CFun(desugar(a, env.push([]))))
+            CApp(CNat("getProperty", [desugar(cond), "then_else"]),
+                 CNat("argsNew", te))
+        ...
