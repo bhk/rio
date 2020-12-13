@@ -131,6 +131,16 @@ Using peg.lua, the AST information is returned via the conventional
 that propagates across sequential matches.
 
 
+## Dynamic Dispatch
+
+The evaluation logic should not switch on type IDs.  The behavior of a value
+should be given by its type.
+
+     value = (iface, data)
+     iface = { getProperty, ... }
+     getProperty: (self, name) -> value
+
+
 ## Preening the Core Language
 
 The core evaluator (`clEval` in interp.lua) is summarized here in a
