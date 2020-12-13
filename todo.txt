@@ -1,7 +1,20 @@
 
 * Unimplemented language features:
-  - properties & dispatching
-  - Various binary/unary ops
+  - properties
+
+    gp(value, prop) = typeOf(value)[prop](value)
+    match expr:
+        a OP b  -->  gp(a, OP)(b)
+        OP a    -->  gp(a, OP)
+        a.foo   -->  gp(a, "foo")
+
+   Tests:
+
+      1 + 2
+      -(1)
+      "abc".len
+      "abc".byte(1)
+
   - Let (other than `=`) & aliasing detection
   - Missing, For, Loop, LoopWhile, While, Act
   - .?, <!
