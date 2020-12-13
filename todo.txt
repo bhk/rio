@@ -1,18 +1,27 @@
-* concepts.txt --> concepts.md
+
+* Unimplemented language features:
+  - properties & dispatching
+  - Various binary/unary ops
+  - Let (other than `=`) & aliasing detection
+  - Missing, For, Loop, LoopWhile, While, Act
+  - .?, <!
+  - assert
+
+* Visualize execution
+  - collect execution trace
+  - capture start & end of elements
+
+* Replace `CBra` with boolean method `then_else`?
+
+* Record construction alternative approach in CL: first construct type (from
+  const data) *then* instantiate?
+
+* riodoc: concepts.txt --> concepts.md
   1. [[a b c]]  -->  [a b c](#a-b-c)
   2. Broken link notifications
   3. "See also: ..."
   4. Index
   5. Comments
-
-* Syntax: capture start & end of elements.  (Impl. "dump" for OOB...)
-
-* assert
-
-* Record construction alternative approach in CL: first build type (from
-  const data) *then* populate with vector?
-
-* fault: Show backtrace?  (Native function has only values; no AST.)
 
 
 ---- Long-term
@@ -44,15 +53,6 @@
 ----
 
 Notes:
-
-* OO Types
-
-  The evaluation logic should not switch on type IDs.  The behavior of a
-  value should be given by its type.
-
-     value = (iface, data)
-     iface = { getProperty, ... }
-     getProperty: (self, name) -> value
 
 * Adequate performance (for my expectations) will requires specialization of
   functions *at least* on the types of arguments, in order to eliminate

@@ -11,12 +11,6 @@ local concat, unpack = table.concat, table.unpack
 local rec, recFmt = reclib.rec, reclib.recFmt
 
 
-local function nameString(ast)
-   assert(ast.type == "Name")
-   return ast[1]
-end
-
-
 ----------------------------------------------------------------
 -- Primitive Types
 ----------------------------------------------------------------
@@ -156,6 +150,21 @@ function natives.vrecSet(rec, name, value)
 end
 
 
+-- We treat this as a VRec-specific native function, but ultimately this is
+-- a much more generic operation, and VRec will be just one subscriber to
+-- its protocol.  For now, we just look up a VRec member.
+--
+function natives.getProp(v, name)
+   faultIf(type(name) ~= "string", "NotVRec", nil, name)
+   faultIf(valueType(v) ~= "VRec", "NotVRec", nil, v)
+   for _, pair in ipairs(v) do
+      if pair[1] == name then
+         return pair[2]
+      end
+   end
+   faultIf(true, "NoSuchProp", nil, name)
+end
+
 -- Construct expression for `r[name] <! value`
 --
 -- Note: r, name, value, and result are all CL nodes.
@@ -231,6 +240,11 @@ end
 -- all others : CExpr or [CExpr]
 
 
+local function nameToString(ast)
+   assert(ast.type == "Name")
+   return ast[1]
+end
+
 local function nameToVStr(name)
    test.eq(name.type, "Name")
    return newVStr(name[1])
@@ -265,7 +279,7 @@ local function scopeExtend(scope, params)
    local depth = scope.depth + 1
    s.depth = depth
    for ii, name in ipairs(params) do
-      s[nameString(name)] = {depth = depth, offset = ii-1}
+      s[nameToString(name)] = {depth = depth, offset = ii-1}
    end
    return s
 end
@@ -308,7 +322,7 @@ local function desugar(ast, scope)
    local typ = ast.type
 
    if typ == "Name" then
-      local index, offset = scopeFind(scope, nameString(ast))
+      local index, offset = scopeFind(scope, nameToString(ast))
       faultIf(index == nil, "Undefined", ast, nil)
       return cl_VVecNth(C("CArg", index), CVal(newNumber(offset)))
    elseif typ == "Number" then
@@ -321,6 +335,12 @@ local function desugar(ast, scope)
    elseif typ == "Op_()" then
       local fn, args = ast[1], ast[2]
       return call(ds(fn), args)
+   elseif typ == "Op_[]" then
+      local v, key = ast[1], ast[2]
+      return C("CNat", "vvecNth", {ds(v), ds(key)})
+   elseif typ == "Op_." then
+      local value, name = ast[1], ast[2]
+      return C("CNat", "getProp", {ds(value), CVal(nameToVStr(name))})
    elseif typ == "If" then
       return C("CBra", ds(ast[1][1]), ds(ast[1][2]), ds(ast[2]))
    elseif typ == "Let" and ast[1][2] == "=" then
@@ -351,7 +371,6 @@ local function desugar(ast, scope)
       local a, b = ast[1], ast[2]
       return CNat(typ, {ds(a), ds(b)})
    else
-      -- Op_., Op_[], Op_X, Unop_X, Missing, For, Loop, LoopWhile, While, Act
       test.fail("Unsupported: %s", astFmt(ast))
    end
 end
@@ -461,6 +480,14 @@ et("x => x", "(...) => $0[0]")
 et("(x => 1)(2)", "1")
 et("(x => x+1)(2)", "3")
 
+-- Op_.
+
+et("{a:1}.a", "1")
+
+-- Op_[]
+
+et("[9,8,7][1]", "8")
+
 -- If
 
 et("if 1 < 2: 1\n0\n", "1")
@@ -469,6 +496,8 @@ et("if 1 < 0: 1\n0\n", "0")
 -- Let
 
 et("x = 1\nx + 2\n", "3")
+
+
 
 local fib = [[
 _fib = (_fib, n) =>
