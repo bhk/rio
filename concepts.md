@@ -11,7 +11,7 @@ background.
 The language design can be summarized by the following list of ingredients,
 which loosely follows the thought processes that lead to the current design.
 
- * [Core Language](#core-language)
+ * [Inner Language](#inner-language)
  * [Methods And Properties](#methods-and-properties)
  * [Imperative Syntax](#imperative-syntax)
  * [Partial Evaluation](#partial-evaluation)
@@ -22,14 +22,14 @@ which loosely follows the thought processes that lead to the current design.
  * [Gradual Typing](#gradual-typing)
 
 
-## Core Language
+## Inner Language
 
-The core language (CL) is a minimal, pure functional language, similar to
+The inner language (IL) is a minimal, pure functional language, similar to
 the lambda calculus with a strict evaluation strategy.  All Rio programs are
 translated to this internal representation before being evaluated.
 
-Evaluation of a CL expression takes place within the context of a "lexical
-environment", which maps names to values.  As currently formulated, the CL
+Evaluation of a IL expression takes place within the context of a "lexical
+environment", which maps names to values.  As currently formulated, the IL
 has five types of expressions:
 
  * Function construction.  Like `lambda` in Lisp, a function construction
@@ -42,7 +42,7 @@ has five types of expressions:
    function and its arguments are first evaluated, and then the function is
    "called" with the resulting argument values.
 
-   There are two kinds of function values: CL and native functions.  CL
+   There are two kinds of function values: IL and native functions.  IL
    functions are those created by function definition expressions.  Native
    functions are implemented by the runtime environment.
 
@@ -63,15 +63,15 @@ Variable bindings and data structures are [immutable](#immutability).
 Variable visibility adheres strictly to lexical scoping.  There are no
 global or dynamic variables.
 
-The CL is dynamically typed.  Parameters may take on any value.  In fact,
-the CL has no knowledge even of dynamic types, except for functions and
+The IL is dynamically typed.  Parameters may take on any value.  In fact,
+the IL has no knowledge even of dynamic types, except for functions and
 booleans.  Other values can be differentiated only by their behavior, and
 their behavior is only observable via native functions.
 
-Other features in the Rio language build upon this CL foundation in the
+Other features in the Rio language build upon this IL foundation in the
 following ways:
 
- 1. Transforming Rio syntax to the internal CL structure ("de-sugaring").
+ 1. Transforming Rio syntax to the internal IL structure ("de-sugaring").
  2. Defining native functions that construct and operate on values.
  3. Supplying bindings for the intial lexical environment (the environment
     within which each Rio module is evaluated).

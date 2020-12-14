@@ -16,7 +16,7 @@
         so it must conform to the env interface.  Non-function
         values ("native data") could appear at @1, @2, ...
 
-   Core language: Objects are a poor man's closure.
+   Inner language: Objects are a poor man's closure.
    Surface language: Closures are a poor man's object.
 
 * Visualize execution

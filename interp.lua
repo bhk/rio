@@ -32,21 +32,21 @@ local function envArg(env, index)
 end
 
 ----------------------------------------------------------------
--- Core Language
+-- Inner Language
 ----------------------------------------------------------------
 
--- Core Language nodes (CExprs):
---   (CVal value)           -- constant/literal value
---   (CArg index)           -- argument reference
---   (CFun body)            -- function construction (lambda)
---   (CApp fn arg)          -- function application
---   (CNat nfn args)        -- native function call
---   (CBra cond then else)  -- branch (if)
+-- Inner Language nodes (IExpr's)
+--   (IVal value)           -- constant/literal value
+--   (IArg index)           -- argument reference
+--   (IFun body)            -- function construction (lambda)
+--   (IApp fn arg)          -- function application
+--   (INat nfn args)        -- native function call
+--   (IBra cond then else)  -- branch (if)
 --
 -- value : VNode
 -- index : (native) number
 -- nfn : (native) function
--- all others : CExpr or [CExpr]
+-- all others : IExpr or [IExpr]
 
 local valueType
 local faultIf
@@ -57,25 +57,25 @@ local function eval(expr, env)
       return eval(e, env)
    end
 
-   if typ == "CVal" then
+   if typ == "IVal" then
       return expr[1]
-   elseif typ == "CArg" then
+   elseif typ == "IArg" then
       local index = expr[1]
       local value = assert(envArg(env, index))
       return value
-   elseif typ == "CFun" then
+   elseif typ == "IFun" then
       local body = expr[1]
       return rec("VFun", env, body)
-   elseif typ == "CApp" then
+   elseif typ == "IApp" then
       local fn, arg = expr[1], expr[2]
       local fnValue = ee(fn)
       faultIf(valueType(fnValue) ~= "VFun", "NotFn", expr.ast, fnValue)
       local fenv, body = unpack(fnValue)
       return eval(body, envBind(fenv, ee(arg)))
-   elseif typ == "CNat" then
+   elseif typ == "INat" then
       local nfn, args = expr[1], expr[2]
       return nfn(unpack(imap(args, ee)))
-   elseif typ == "CBra" then
+   elseif typ == "IBra" then
       local condExpr, thenExpr, elseExpr = unpack(expr)
       local cond = ee(condExpr)
       -- Some ugliness here: we reach inside a primitve value...
@@ -89,10 +89,10 @@ end
 local valueFmt
 local nfnNames = {}
 
-local clFormatters = {
-   CArg = function (e) return "$" .. e[1] end,
-   CVal = function (e) return valueFmt(e[1]) end,
-   CNat = function (e, fmt)
+local ilFormatters = {
+   IArg = function (e) return "$" .. e[1] end,
+   IVal = function (e) return valueFmt(e[1]) end,
+   INat = function (e, fmt)
       local nfn, args = e[1], e[2]
       local name = nfnNames[nfn]
       if name == "vvecNth" then
@@ -107,8 +107,8 @@ local clFormatters = {
    end
 }
 
-local function clFmt(node)
-   return recFmt(node, clFormatters)
+local function ilFmt(node)
+   return recFmt(node, ilFormatters)
 end
 
 ----------------------------------------------------------------
@@ -154,7 +154,7 @@ function valueFmt(value)
       return "{" .. concat(o, ", ") .. "}"
    elseif value.type == "VFun" then
       local fenv, body = unpack(value)
-      return ("(...) => %s"):format(clFmt(body))
+      return ("(...) => %s"):format(ilFmt(body))
    elseif value.type == "VErr" then
       return "(VErr " .. astFmtV(value) .. ")"
    end
@@ -241,7 +241,7 @@ local numBinary = {
    ["Op_-"] = function (a, b) return a - b end,
    ["Op_<"] = function (a, b) return a < b end,
    ["Op_=="] = function (a, b) return a == b end,
-   ["Op_!="] = function (a, b) return a != b end,
+   ["Op_!="] = function (a, b) return a ~= b end,
    ["Op_<="] = function (a, b) return a <= b end,
    ["Op_<"] = function (a, b) return a < b end,
    ["Op_>="] = function (a, b) return a >= b end,
@@ -258,7 +258,7 @@ for op, fn in pairs(numBinary) do
       return fn(a, b)
    end
    natives["vnum:" .. op] = nfn
-   numMethods[op] = rec("CNat", nfn, {rec("CArg", 1), rec("CArg", 0)})
+   numMethods[op] = rec("INat", nfn, {rec("IArg", 1), rec("IArg", 0)})
 end
 
 
@@ -332,7 +332,7 @@ for name, fn in pairs(natives) do
 end
 
 ----------------------------------------------------------------
--- De-sugar Surface Language to Core
+-- De-sugar Surface Language to Inner Language
 ----------------------------------------------------------------
 
 local function nameToString(ast)
@@ -375,25 +375,25 @@ local function desugar(ast, scope)
       return {type=typ, ast=ast, ...}
    end
 
-   local function CVal(value)
+   local function IVal(value)
       -- promote Lua bool/num/string to Value, if necessary
-      return C("CVal", value)
+      return C("IVal", value)
    end
 
    local function nat(name, args)
-      return C("CNat", assert(natives[name]), args)
+      return C("INat", assert(natives[name]), args)
    end
 
    local function lambda(params, body)
-      return C("CFun", desugar(body, scopeExtend(scope, params)))
+      return C("IFun", desugar(body, scopeExtend(scope, params)))
    end
 
-   local function apply(fnCL, argsAST)
-      return C("CApp", fnCL, nat("vvecNew", imap(argsAST, ds)))
+   local function apply(fnIL, argsAST)
+      return C("IApp", fnIL, nat("vvecNew", imap(argsAST, ds)))
    end
 
    local function gp(valueAST, nameV)
-      return nat("getProp", {ds(valueAST), CVal(nameV)})
+      return nat("getProp", {ds(valueAST), IVal(nameV)})
    end
 
    local typ = ast.type
@@ -401,11 +401,11 @@ local function desugar(ast, scope)
    if typ == "Name" then
       local index, offset = scopeFind(scope, nameToString(ast))
       faultIf(index == nil, "Undefined", ast, nil)
-      return nat("vvecNth", {C("CArg", index), CVal(newVNum(offset))})
+      return nat("vvecNth", {C("IArg", index), IVal(newVNum(offset))})
    elseif typ == "Number" then
-      return CVal(newVNum(ast[1]))
+      return IVal(newVNum(ast[1]))
    elseif typ == "String" then
-      return CVal(newVStr(ast[1]))
+      return IVal(newVStr(ast[1]))
    elseif typ == "Fn" then
       local params, body = ast[1], ast[2]
       return lambda(params, body)
@@ -419,7 +419,7 @@ local function desugar(ast, scope)
       local value, name = ast[1], ast[2]
       return gp(value, nameToVStr(name))
    elseif typ == "If" then
-      return C("CBra", ds(ast[1][1]), ds(ast[1][2]), ds(ast[2]))
+      return C("IBra", ds(ast[1][1]), ds(ast[1][2]), ds(ast[2]))
    elseif typ == "Let" and ast[1][2] == "=" then
       local name, value, body = ast[1][1], ast[1][3], ast[2]
       return apply(lambda({name}, body), {value})
@@ -433,12 +433,12 @@ local function desugar(ast, scope)
       local keys = {}
       local values = {}
       for ii = 1, #rpairs, 2 do
-         keys[#keys+1] = CVal(nameToVStr(rpairs[ii]))
+         keys[#keys+1] = IVal(nameToVStr(rpairs[ii]))
          values[#values+1] = ds(rpairs[ii+1])
       end
       return nat("vrecNew", {nat("vvecNew", keys), unpack(values)})
    elseif typ == "IIf" then
-      return C("CBra", ds(ast[1]), ds(ast[2]), ds(ast[3]))
+      return C("IBra", ds(ast[1]), ds(ast[2]), ds(ast[3]))
    elseif typ:match("^Op_") then
       local a, b = ast[1], ast[2]
       return apply(gp(a, typ), {b})
