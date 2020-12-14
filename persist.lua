@@ -61,6 +61,15 @@ local function imap(t, fn)
 end
 
 
+local function map(t, fn)
+   local o = {}
+   for k, v in pairs(t) do
+      o[k] = fn(v)
+   end
+   return o
+end
+
+
 local exports = {
    override = override,
    move = move,
@@ -68,6 +77,7 @@ local exports = {
    set = set,
    append = append,
    imap = imap,
+   map = map,
 }
 
 

@@ -5,7 +5,8 @@ local syntax = require "syntax"
 local persist = require "persist"
 local reclib = require "rec"
 
-local imap, clone, move = persist.imap, persist.clone, persist.move
+local map, imap, clone, move, override = persist.map, persist.imap,
+    persist.clone, persist.move, persist.override
 local astFmt, astFmtV = syntax.astFmt, syntax.astFmtV
 local concat, unpack = table.concat, table.unpack
 local rec, recFmt = reclib.rec, reclib.recFmt
@@ -50,6 +51,31 @@ end
 
 local valueType
 local faultIf
+local valueFmt
+local nfnNames = {}
+
+local ilFormatters = {
+   IArg = function (e) return "$" .. e[1] end,
+   IVal = function (e) return valueFmt(e[1]) end,
+   INat = function (e, fmt)
+      local nfn, args = e[1], e[2]
+      local name = nfnNames[nfn]
+      if name == "vvecNth" then
+         assert(#args == 2)
+         return ("%s[%s]"):format(fmt(args[1]), fmt(args[2]))
+      end
+      local argValues = concat(imap(args, fmt), " ")
+      if name == "vvecNew" then
+         return "[" .. argValues .. "]"
+      end
+      return ("(%s %s)"):format(name, argValues)
+   end
+}
+
+local function ilFmt(node)
+   return recFmt(node, ilFormatters)
+end
+
 
 local function eval(expr, env)
    local typ = expr.type
@@ -86,31 +112,6 @@ local function eval(expr, env)
    end
 end
 
-local valueFmt
-local nfnNames = {}
-
-local ilFormatters = {
-   IArg = function (e) return "$" .. e[1] end,
-   IVal = function (e) return valueFmt(e[1]) end,
-   INat = function (e, fmt)
-      local nfn, args = e[1], e[2]
-      local name = nfnNames[nfn]
-      if name == "vvecNth" then
-         assert(#args == 2)
-         return ("%s[%s]"):format(fmt(args[1]), fmt(args[2]))
-      end
-      local argValues = concat(imap(args, fmt), " ")
-      if name == "vvecNew" then
-         return "[" .. argValues .. "]"
-      end
-      return ("(%s %s)"):format(name, argValues)
-   end
-}
-
-local function ilFmt(node)
-   return recFmt(node, ilFormatters)
-end
-
 ----------------------------------------------------------------
 -- Built-In Types
 ----------------------------------------------------------------
@@ -139,7 +140,9 @@ end
 -- functions)
 --
 function valueFmt(value)
-   if type(value) ~= "table" then
+   if type(value) == "string" then
+      return string.format("%q", value)
+   elseif type(value) ~= "table" then
       return tostring(value)
    end
 
@@ -168,17 +171,18 @@ function valueType(value)
    return typ
 end
 
--- behaviors are actually `getProperty` functions.
-local behaviors = {}
-
-local function getBehavior(value)
-   return behaviors[valueType(value)]
-end
-
+-- `natives` contains functions that are called via CNat and used
+-- directly by `desugar`.
+--
 local natives = {}
 
+-- A type's "behavior" is a function that obtains properties of its values:
+--   (value, propertyName) -> propertyValue
+--
+local behaviors = {}
+
 function natives.getProp(value, name)
-   local gp = getBehavior(value)
+   local gp = behaviors[valueType(value)]
    return gp(value, name)
 end
 
@@ -195,6 +199,75 @@ local function baseBehavior(value, name)
    faultIf(true, "UnknownProperty:" .. tostring(name), nil, value)
 end
 
+-- Wrap a Lua function operating on two values with a function suitable as a
+-- native function for use with makeMethodProp.
+--
+local function wrapBinop(typeName)
+   return function (fn)
+      return function(a, args)
+         -- The surface language calling convention, used to call the
+         -- method, puts its argument in a vector (arg bundle).
+         local b = args[1]
+         assert(b ~= nil)  -- should not happen
+         faultIf(valueType(b) ~= typeName, "Not" .. typeName, nil, b)
+         return fn(a, b)
+      end
+   end
+end
+
+-- nativeMethod: (self, args) -> value
+-- result: (value) -> VFun that calls `nativeMethod` with `value` and its arg
+--
+local function makeMethodProp(nativeMethod)
+   local body = rec("INat", nativeMethod, {rec("IArg", 1), rec("IArg", 0)})
+   return function (value)
+      return rec("VFun", envBind(emptyEnv, value), body)
+   end
+end
+
+-- Construct a behavior from a map of property names to functions that
+-- construct properties.
+--
+local function behaviorFn(propCtors, base)
+   base = base or baseBehavior
+   return function(value, name)
+      local pfn = propCtors[name]
+      if pfn then
+         return pfn(value)
+      end
+      return base(value, name)
+   end
+end
+
+-- Construct the behavior for a type.
+--
+-- unops: propName -> (self) -> value
+-- binops: propName -> (self, b) -> value
+-- methods: propName -> (self, args) -> value
+--
+-- `unops` receive only `self` and return the property value.  A `unop`
+--   is equivalent to a `getProperty` function.
+--
+-- `binops` and `methods` result in the property resolving to a function,
+--   and they will be called only when (and if) the property is invoked.
+--   Binop functions receive the extracted second argument, after it has
+--   been verified to be of the same type as `self`.  Method functions
+--   receive the arg bundle directly.
+--
+local function makeBehavior(unops, binops, methods, typeName, base)
+   local nativeMethods = map(binops, wrapBinop(typeName))
+   override(nativeMethods, methods)
+
+   -- record names of native functions for debugging
+   for name, nativeMethod in pairs(nativeMethods) do
+      nfnNames[nativeMethod] = typeName .. name
+   end
+
+   local propCtors = map(nativeMethods, makeMethodProp)
+   override(propCtors, unops)
+   return behaviorFn(propCtors, base)
+end
+
 --------------------------------
 -- VFun (exclusively constructed by `eval`...)
 --------------------------------
@@ -207,9 +280,19 @@ end
 -- VBool (happens to be Lua boolean)
 --------------------------------
 
-function behaviors.boolean(value, name)
-   return baseBehavior(value, name)
-end
+local boolUnops = {
+   ["Unop_not"] = function (b) return not b end,
+}
+
+local boolBinops = {
+   ["Op_or"] = function (a, b) return a or b end,
+   ["Op_and"] = function (a, b) return a and b end,
+   ["Op_=="] = function (a, b) return a == b end,
+   ["Op_!="] = function (a, b) return a ~= b end,
+}
+
+behaviors.boolean = makeBehavior(boolUnops, boolBinops, {}, "boolean")
+
 
 --------------------------------
 -- VStr  (happens to be Lua string)
@@ -219,9 +302,41 @@ local function newVStr(str)
    return tostring(str)
 end
 
-function behaviors.string(value, name)
-   return baseBehavior(value, name)
-end
+local strUnops = {
+   len = function (v) return #v end,
+}
+
+-- "Operators" operate on two values of the same type
+local strBinops = {
+   ["Op_<"] = function (a, b) return a < b end,
+   ["Op_=="] = function (a, b) return a == b end,
+   ["Op_!="] = function (a, b) return a ~= b end,
+   ["Op_<="] = function (a, b) return a <= b end,
+   ["Op_<"] = function (a, b) return a < b end,
+   ["Op_>="] = function (a, b) return a >= b end,
+   ["Op_>"] = function (a, b) return a > b end,
+   ["Op_++"] = function (a, b) return a .. b end,
+}
+
+local strMethods = {
+   slice = function (self, args)
+      local start, limit = args[1], args[2]
+      faultIf(valueType(start) ~= "number", "NotNumber", nil, start)
+      faultIf(valueType(limit) ~= "number", "NotNumber", nil, limit)
+      faultIf(start < 0 or start >= #self, "Bounds", nil, start)
+      faultIf(limit < start or limit >= #self, "Bounds", nil, start)
+      return self:sub(start+1, limit)
+   end,
+
+   ["Op_[]"] = function (self, args)
+      local offset = args[1]
+      faultIf(valueType(offset) ~= "number", "NotNumber", nil, offset)
+      faultIf(offset < 0 or offset >= #self, "Bounds", nil, offset)
+      return self:byte(offset+1)
+   end,
+}
+
+behaviors.string = makeBehavior(strUnops, strBinops, strMethods, "string")
 
 --------------------------------
 -- VNum (happens to be Lua number)
@@ -231,7 +346,11 @@ local function newVNum(str)
    return tonumber(str)
 end
 
-local numBinary = {
+local numUnops = {
+   ["Unop_-"] = function (a) return -a end,
+}
+
+local numBinops = {
    ["Op_^"] = function (a, b) return a ^ b end,
    ["Op_*"] = function (a, b) return a * b end,
    ["Op_/"] = function (a, b) return a / b end,
@@ -248,54 +367,58 @@ local numBinary = {
    ["Op_>"] = function (a, b) return a > b end,
 }
 
--- create native functions and method bodies for numeric ops
-local numMethods = {}
-for op, fn in pairs(numBinary) do
-   local function nfn(a, bArgs)
-      faultIf(type(a) ~= "number", "NotNumberL", nil, a)
-      local b = assert(bArgs[1])
-      faultIf(type(b) ~= "number", "NotNumberR", nil, b)
-      return fn(a, b)
-   end
-   natives["vnum:" .. op] = nfn
-   numMethods[op] = rec("INat", nfn, {rec("IArg", 1), rec("IArg", 0)})
-end
-
-
-function behaviors.number(value, name)
-   if name == "Unop_-" then
-      return -value
-   end
-   local body = numMethods[name]
-   if body then
-      return rec("VFun", envBind(emptyEnv, value), body)
-   end
-   return baseBehavior(value, name)
-end
-
+behaviors.number = makeBehavior(numUnops, numBinops, {}, "number")
 
 --------------------------------
 -- VVec
 --------------------------------
 
-local vvecEmpty = rec("VVec")
+local vecUnops = {
+   len = function (v) return #v end,
+}
 
-function behaviors.VVec(value, name)
-   return baseBehavior(value, name)
-end
+local vecBinops = {
+   ["Op_++"] = function (a, b)
+      local o = clone(a)
+      return move(b, 1, #b, #o+1, o)
+   end,
+}
+
+local vecMethods = {
+   slice = function (self, args)
+      local start, limit = args[1], args[2]
+      faultIf(valueType(start) ~= "number", "NotNumber", nil, start)
+      faultIf(valueType(limit) ~= "number", "NotNumber", nil, limit)
+      faultIf(start < 0 or start >= #self, "Bounds", nil, start)
+      faultIf(limit < start or limit >= #self, "Bounds", nil, start)
+      return rec("VVec", unpack(self, start+1, limit))
+   end,
+
+   ["Op_[]"] = function (self, args)
+      local offset = args[1]
+      faultIf(valueType(offset) ~= "number", "NotNumber", nil, offset)
+      faultIf(offset < 0 or offset >= #self, "Bounds", nil, offset)
+      return self[offset+1]
+   end,
+}
+
+behaviors.VVec = makeBehavior(vecUnops, vecBinops, vecMethods, "VVec")
 
 function natives.vvecNew(...)
    return {type="VVec", ...}
 end
 
-function natives.vvecNth(vec, n)
-   faultIf(valueType(vec) ~= "VVec", "NotVVec", nil, vec)
+-- Note different calling convention than vecIndex.  `self` is packed in an
+-- arg bundle.
+function natives.vvecNth(self, n)
+   faultIf(valueType(self) ~= "VVec", "NotVVec", nil, self)
    faultIf(valueType(n) ~= "number", "NotNumber", nil, n)
-   local value = vec[n + 1]
-   faultIf(value == nil, "VVecBounds", nil, vec)
-   return value
+   faultIf(n < 0 or n >= #self, "Bounds", nil, self)
+   return self[n + 1]
 end
 
+-- tests
+--
 local tv1 = natives.vvecNew(newVNum(9), newVNum(8))
 test.eq(tv1, rec("VVec", 9, 8))
 test.eq(natives.vvecNth(tv1, newVNum(0)), newVNum(9))
@@ -306,7 +429,7 @@ test.eq(natives.vvecNth(tv1, newVNum(0)), newVNum(9))
 
 local vrecEmpty = rec("VRec")
 
-function behaviors.VRec(value, name)
+behaviors.VRec = function (value, name)
    for _, pair in ipairs(value) do
       if pair[1] == name then
          return pair[2]
@@ -326,6 +449,10 @@ end
 test.eq(natives.vrecNew({"a", "b"}, 3, 5),
         rec("VRec", {"a", 3}, {"b", 5}))
 
+
+--------------------------------
+-- Store names of native functions for debugging
+--------------------------------
 
 for name, fn in pairs(natives) do
    nfnNames[fn] = name
@@ -412,9 +539,6 @@ local function desugar(ast, scope)
    elseif typ == "Op_()" then
       local fn, args = ast[1], ast[2]
       return apply(ds(fn), args)
-   elseif typ == "Op_[]" then
-      local v, key = ast[1], ast[2]
-      return nat("vvecNth", {ds(v), ds(key)})
    elseif typ == "Op_." then
       local value, name = ast[1], ast[2]
       return gp(value, nameToVStr(name))
@@ -461,6 +585,7 @@ end
 local function trapEval(fn, ...)
    local succ, value = xpcall(fn, debug.traceback, ...)
    if not succ and type(value) == "string" then
+      print(value)
       error(value, 0)
    end
    return value
@@ -483,15 +608,43 @@ et("x", "(VErr 'Undefined' x)")
 -- literals and constructors
 
 et("1.23", "1.23")
-et([["abc"]], "abc")
+et([["abc"]], [["abc"]])
 et("[1,2,3]", "[1, 2, 3]")
 et("{a: 1, b: 2}", "{a: 1, b: 2}")
 
--- operators
+-- operators and properties ...
 
+-- ... Boolean
+
+et("not (1==1)", "false")
+et("1==1 or 1==2", "true")
+et("1==1 and 1==2", "false")
+et("(1==1) != (1==2)", "true")
+
+-- ... Number
 et("1 + 2", "3")
-et("1 < 2", "true")
+et("7 // 3", "2")
 et("-(1)", "-1")
+et("1 < 2", "true")
+et("1 < 2 < 3", "true")
+
+-- ... String
+et([[ "abc" ++ "def" ]], [["abcdef"]])
+et([[ "abc".len ]], "3")
+et([[ "abcd".slice(1, 3) ]], [["bc"]])
+et([[ "abc" == "abc" ]], "true")
+et([[ "abc"[1] ]], "98")
+
+-- ... Vector
+
+et("[7,8,9].len", "3")
+et("[7,8,9,0].slice(1,3)", "[8, 9]")
+et("[7,8,9,0].slice(1,1)", "[]")
+et("[7,8,9][1]", "8")
+
+-- ... Record
+
+et("{a:1}.a", "1")
 
 -- Fn
 
@@ -501,14 +654,6 @@ et("x => x", "(...) => $0[0]")
 
 et("(x => 1)(2)", "1")
 et("(x => x+1)(2)", "3")
-
--- Op_.
-
-et("{a:1}.a", "1")
-
--- Op_[]
-
-et("[9,8,7][1]", "8")
 
 -- If
 

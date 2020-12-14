@@ -1,11 +1,18 @@
+TODO
 
 * Unimplemented language features:
-  - Properties/operators for: string, boolean, vector, record
+  - Manifest variables: true, false, ...
   - Let (other than `=`) & aliasing detection
   - Missing, For, Loop, LoopWhile, While, Act
-  - Op_$
-  - .?, <!
+  - Vectors: `==`, `!=`
+  - Records: `==`, `!=`
+  - `or` & `and`: lazy/short-circuit
+  - `$`
+  - `.?`, `<!`
   - assert
+  - type constructors
+  - `match`
+  - `<-`
 
 * Remove negative literals
 
@@ -23,7 +30,7 @@
   - collect execution trace
   - capture start & end of elements
 
-* Replace `CBra` with boolean method `then_else`?
+* Replace `CBra` with boolean method?
 
 * Record construction alternative approach in CL: first construct type (from
   const data) *then* instantiate?
