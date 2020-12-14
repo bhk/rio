@@ -245,3 +245,29 @@ The code to generate the CL for an `if` expression looks like this:
             CApp(CNat("getProperty", [desugar(cond), "then_else"]),
                  CNat("argsNew", te))
         ...
+
+
+## Negation
+
+Is `-3` treated as a literal, or `(negate 3)`?  In math, `-3^2` is `-9`.
+Our operator definitions honor that -- `^` has precedence over unary `-` --
+but allowing negative literals defeats that intent.  In retrospect, this
+feature (negative literals) is redundant with a negation prefix operator,
+and should be pruned.
+
+Given Rio's current numeric data type, IEEE floating point, all negative
+values have a corresponding positive counterpart, so eliminating negative
+literals presents no vexing problems.  Two's complement integer literals
+would present a different problem.  (This is a hairy problem in C.  Rust is
+curiously cagey on its actual semantics here.)  If Rust were to support such
+data types in the future, my hunch is the best solution for this be to have
+"pure" numeric literals that get quickly converted to floats/whatever.
+
+To be more specific: A "pure" number literal would retain all of the
+precision of its original textual description (hundreds of digits, if
+necessary.)  The conventional operations (`+`, `-`, `*`, `/`, ...) on this
+built-in data type convert its value to float and yield a float value.
+However, unary negation will result in another pure value.  When passed to a
+constructor of some other numeric data type (e.g. an arbitrary-precision
+data type), a pure literal's entire content will be available uncorrupted,
+via some interface yet to be defined.
