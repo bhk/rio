@@ -22,17 +22,14 @@ TODO
         fenv holds instance & class?  `eval` will bind arg to @0,
         so it must conform to the env interface.  Non-function
         values ("native data") could appear at @1, @2, ...
-
-   Inner language: Objects are a poor man's closure.
-   Surface language: Closures are a poor man's object.
+   - This makes behaviors IFun's, so this is best left until we
+     have user-defined behavior and know what it looks like.
 
 * Visualize execution
   - collect execution trace
   - capture start & end of elements
 
-* Replace `CBra` with boolean method?
-
-* Record construction alternative approach in CL: first construct type (from
+* Record construction alternative approach in IL: first construct type (from
   const data) *then* instantiate?
 
 * riodoc: concepts.txt --> concepts.md
@@ -42,29 +39,22 @@ TODO
   4. Index
   5. Comments
 
+
 ---- Long-term
 
- * Define "R1" language spec (a minimal subset, used for bootstrap)
- * R1 bootstrap interpreter, written in Lua
+ * "P1" (Phase 1) language definition
+ * P1 "bootstrap" interpreter (Lua)
     - parse & walk AST
     - may leak memory (no "free")
     - minimal set of OS bindings
- * R1 compiler, written in R1
-    - compiles to VM
+ * P2 interpreter/complier (written in Rio P1, supports P2 superset)
+    - compiles to Wasm
     - non-leaking (refcounting)
-    - with VM, obsoletes bootstrap
- * VM in C/C++ (develop, or select an existing project)
-    - includes VM spec (maybe WebASM?)
-    - loads VM code
- * OS Bindings for network & processes
+    - obsoletes bootstrap
+ * Choose native VM: Wasmtime, Wasmer, ?
+ * OS (WASI?) bindings
  * Web Server
- * R(n) implemented in R(n-1)
-    - richer data structuring
-    - lazy, concurrent, and incremental evaluation
-    - syntax changes
-    - specialization, reduction
-    - etc.
- * VM in JavaScript/WebASM
+ * P3+: Richer data structuring, lazy/parallel/etc., ...
  * IDE
    - display values (or `pending...`) [computed in parallel VM]
 

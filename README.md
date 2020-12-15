@@ -16,5 +16,5 @@ between dynamically-typed and statically-typed, compiled and interpreted,
 high-level and low-level, offering the best of each domain.
 
 The "concepts" document contains notes on a lot of these ideas, as well as
-[an introduction to Rio syntax](concepts.md#syntax-introduction) and some
-[Rio internals](concepts.md#rio-internals).
+[an introduction to Rio syntax](concepts.md#syntax-introduction) and a
+high-level [overview](concepts.md#rio-overview) of the semantics.

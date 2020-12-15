@@ -150,18 +150,23 @@ The `Operations` non-terminal refers a parsing expression that recognizes
 infix, prefix, and suffix expressions built on `Atom`s.  The operators are
 listed below, grouped by precedence, in decreasing order:
 
-|  Operators                 |  Associativity
-|----------------------------|------------------------------------
-|  .Name [Expr] (Expr,*)     |  Suffix
-|  ^                         |  Right
-|  not -                     |  Prefix
-|  * / // %                  |  Left
-|  + - ++                    |  Left
-|  == != < > <= >=           |  Relational (Pythonic)
-|  and                       |  Left
-|  or                        |  Left
-|  ?:                        |  Left (Ternary)
-|  $                         |  Right
+|  Operators                          |  Associativity
+|-------------------------------------|------------------------------------
+|  `.`Name, `[`Expr`]`, `(`Expr,*`)`  |  Left (Suffix)
+|  `^`                                |  Right
+|  `not`, `-`                         |  Right (Prefix)
+|  `*`, `/`, `//`, `%`                |  Left
+|  `+`, `-`, `++`                     |  Left
+|  `==`, `!=`, `<`, `>`, `<=`, `>=`   |  Relational (Pythonic)
+|  `and`                              |  Left
+|  `or`                               |  Left
+|  `?`Expr`:`                         |  Right
+|  `$`                                |  Right
+
+With relational associativity, both the right- and left-associative pairings
+of each term are evaluated, and the entire expression is true only if all
+the pairings are true. For example: `a < b < c < d` is equivalent to `(a <
+b) and (b < c) and (c < d)`.
 
 
 ## Implementation Notes

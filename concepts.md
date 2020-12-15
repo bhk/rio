@@ -1,18 +1,22 @@
 # Rio Concept Map
 
+This is a collection of notes on goals, rationales, design ideas,
+implementation ideas.  Beware that most statements about "Rio", what it
+does, and how it does it, are aspirational.
+
 This is a non-linear document, not necessarily read from top-to-bottom.
 Each section has hyperlinks to other sections that provide necessary
 background.
 
 ----
 
-## Rio Internals
+## Rio Overview
 
-The language design can be summarized by the following list of ingredients,
-which loosely follows the thought processes that lead to the current design.
+The following list of ingredients can give one a feel for the flavor of Rio.
 
- * [Inner Language](#inner-language)
- * [Methods And Properties](#methods-and-properties)
+ * [Immutability](#immutability)
+ * [Lexical scoping](#lexical-scoping)
+ * [Duck typing](#duck-typing)
  * [Imperative Syntax](#imperative-syntax)
  * [Partial Evaluation](#partial-evaluation)
  * [Typed Structures](#typed-structures)
@@ -21,6 +25,55 @@ which loosely follows the thought processes that lead to the current design.
  * Pattern Matching & Destructuring
  * [Gradual Typing](#gradual-typing)
 
+So, think "Smalltalk", but without mutation.  And with some Python-like
+syntax.  And with an implementation that heavily leverages inlining and
+partial evaluation.
+
+
+## Rio Internals
+
+The Rio "surface language" is converted to the [Inner
+Language](#inner-language) (IL) by a process called
+[desugaring](#desugaring).
+
+Features are built on the IL foundation in the following ways:
+
+ 1. Transforming Rio syntax to the internal IL structure ("de-sugaring").
+ 2. Defining native functions that construct and operate on values.
+ 3. Supplying bindings for the intial lexical environment (the environment
+    within which each Rio module is evaluated).
+
+
+## Desugaring
+
+A single AST node can expand to many IL expression nodes.  Some of the
+concepts in the surface language do not correspond *exactly* to the similar
+concepts in the IL, and some degree of expansion occurs (a single AST
+expression can result in many IL expressions).
+
+Here are the main aspects in which the AST and the IL differ:
+
+ * IL functions take a single argument, but surface language functions may
+   accept zero or more arguments.  Each Rio function desugars to one IL
+   function, but the IL function accepts a single vector as an argument.
+
+ * Operations on values are translated to work in terms of [methods and
+   properties](#methods-and-properties).  In the surface language,
+   everything is an object. In the IL, everything is a function.
+
+ * Variable assignments are trnaslated to function definitions and
+   application.
+
+ * Names are used to refer to parameters and values in the surface language.
+   In the IL, all parameter references use a [de Bruijn index](
+   https://en.wikipedia.org/wiki/De_Bruijn_index).  Desugaring keeps track
+   of names that are in scope, so it can detect references to undefined
+   variables and aliasing of variables.
+
+ * Some syntactic constructs require more involved transormations specific
+   to that construct.  For example, the [imperative
+   syntax](#imperative-syntax) features.
+
 
 ## Inner Language
 
@@ -28,27 +81,26 @@ The inner language (IL) is a minimal, pure functional language, similar to
 the lambda calculus with a strict evaluation strategy.  All Rio programs are
 translated to this internal representation before being evaluated.
 
-Evaluation of a IL expression takes place within the context of a "lexical
-environment", which maps names to values.  As currently formulated, the IL
-has five types of expressions:
+Evaluation of a IL expression takes place within the context of an
+"environment" that keeps track of arguments that were passed to functions.
+As currently formulated, the IL has five types of expressions:
 
  * Function construction.  Like `lambda` in Lisp, a function construction
    expression evaluates to a function value.  It consists of a snapshot of
-   the current lexical environment, a list of parameter names, and a
-   function "body" sub-expression.
+   the environment at the time of construction and a function "body"
+   sub-expression.
 
  * Function application.  This type of expression includes a sub-expression
-   for the function and a list of sub-expressions for arguments.  The
-   function and its arguments are first evaluated, and then the function is
-   "called" with the resulting argument values.
+   for the function and its argument.  Each function accepts one argument.
+   The function and its argument are first evaluated, and then the function
+   is "called" with the argument value.
 
-   There are two kinds of function values: IL and native functions.  IL
-   functions are those created by function definition expressions.  Native
-   functions are implemented by the runtime environment.
+ * Native function call.  This calls a function implemented by the
+   interpreter or runtime environment.
 
- * Parameter references.  This expression includes a parameter name, and
-   evaluates to the value associated with the parameter in the current
-   environment.
+ * Parameter references.  This expression includes an integral position: 0
+   for the agument to the current function, 1 for the argument passed to the
+   parent (the function that constructed the current function), and so on.
 
  * Constants.  A constant expression evaluates to a specific Rio value.
 
@@ -67,14 +119,6 @@ The IL is dynamically typed.  Parameters may take on any value.  In fact,
 the IL has no knowledge even of dynamic types, except for functions and
 booleans.  Other values can be differentiated only by their behavior, and
 their behavior is only observable via native functions.
-
-Other features in the Rio language build upon this IL foundation in the
-following ways:
-
- 1. Transforming Rio syntax to the internal IL structure ("de-sugaring").
- 2. Defining native functions that construct and operate on values.
- 3. Supplying bindings for the intial lexical environment (the environment
-    within which each Rio module is evaluated).
 
 
 ## Syntax Introduction
@@ -175,8 +219,8 @@ A "method" is nothing more than a property that evaluates to a function.  A
 method will typically be able to access the value from which it was obtained
 (its `self` value) as a captured value, so there is no need to pass its
 value to one of its own methods.  The expression `a.foo()` is equivalent to
-`tmp = a.foo; tmp()`, exactly as logic would dictate (but unlike some other
-languages).
+`tmp = a.foo; tmp()`, exactly as logic would dictate (but unlike as in some
+other programming languages).
 
 Also, Rio does not confuse properties with members of collections.  Indexing
 expressions -- e.g. `value[index]` -- access members of an array or
@@ -328,19 +372,22 @@ still reduce the amount of programming work dramatically.
 
 ## Compile-Time Evaluation
 
-"Compile-time execution" is a commonly used term for executing parts of a
-program during compilation, rather than at run-time.  Given Rio's
-[compile-time](#compile-time) flexibility, this definition is inadequate,
-and the concept reduces essentially to [partial
-evaluation](#partial-evaluation) of code before code generation, which in
-turn can be triggered by evaluation of a recursive function (e.g. a loop
-body) or construction of an executable.
+*Compile-time execution* or evaluation (CTE) is a commonly used term for
+executing parts of a program during "compilation", rather than at
+"run-time".  Given Rio's [compile-time](#compile-time) flexibility, this
+terminology is not ideal, but the essence of the term still applies.
+Generally, when we talk of something evaluated at "compile-time" we are
+referring to an expression that is evaluated once during the execution of
+the program, whereas "run-time" implies potentially many times.
 
-This affords affording many [zero-cost abstractions
-](#zero-cost-abstractions), and in many cases reduces dynamic language
-overheads, eliminating method lookups, "erasing" type information, inlining
-functions.  It effectively turns [inline tests](#inline-tests) into
-compile-time tests.
+In Rio, this is driven by [partial evaluation](#partial-evaluation) as an
+initial step in code generation.
+
+CTE affords many [zero-cost abstractions](#zero-cost-abstractions), and
+allows us to have "nice" semantics without paying the full price for them.
+CTE reduces dynamic language overheads by enabling inlining of function
+calls and erasure ot type information. It turns [inline
+stests](#inline-tests) into compile-time tests.
 
 
 ## Partial Evaluation
@@ -381,6 +428,8 @@ precise value for every library, and precise values for all the members of
 those libraries.  Functions imported from libraries are always available for
 inlining and specialization.
 
+There exists the possibility of partial evaluation at run-time when more is
+known about the values and their types.
 
 ## Specialization
 
@@ -393,8 +442,21 @@ evaluation](#partial-evaluation), we know the context is one in which the
 assumptions are valid.  Alternatively, we might generate multiple
 specialized forms of a function (as directed by programmer [hints](#hints)
 or [profiling](#profiling)) and select the appropriate one at run-time.
-Finally, specialization could be performed at run-time, like a JIT compiler,
-triggered by, perhaps, a previously unseen type for a paramter.
+
+Specialization could be performed at run-time, like a JIT compiler,
+triggered by, perhaps, a previously unseen type for a parameter.  This
+approach makes for an interesting comparison with trace-based JIT
+compilation.  In tracing, the VM normally tracks control flow while
+executing instructions by keeps a log (trace) of instructions.  After a
+certain amount of looping (usually triggered by a counter of backwards
+branches), the trace is then compiled to native code, optimizing out the
+control flow instructions.  Instead, we plan to symbolically execute all
+code the first time through the loop, constructing a structure more general
+than a trace.  One bane of trace-based JIT is dealing with subsequent passes
+through the compiled loop when a deviation from the trace is detected (when
+a "guard" fails).  With symbolic execution, we can generate completely
+generic code with no such guards, or we can generate more specialized code
+with appropriate guards.
 
 
 ## Partial Eval Algorithm Notes
@@ -404,15 +466,15 @@ appropriate, but each of those terms refers to a body of literature
 describing a specific set of techniques, and I am not familiar enough with
 them to say which term (if either) describes what I have in mind.]
 
-In the case of assignment expressions -- `V = EXPR1; EXPR2` -- we first
+In the case of assignment expressions -- `V = EXPR1 \ EXPR2` -- we first
 statically evaluate EXPR1 to obtain knowledge of V, and then statically
 evaluate EXPR2 with that knowledge of V.
 
 Conditional expressions can be short-circuited when the condition can be
 statically evaluated.  When they cannot be short-circuited, knowledge of the
-resulting value is given by the *intersection* of the knowledge of both
+resulting value is given by the *unification* of the knowledge of both
 branches.  The condition can provide additional knowledge of values within a
-branch.  For example, in the expression `if x == 7: x*x; 2`, the
+branch.  For example, in the expression `if x == 7: x*x \ 2`, the
 sub-expression `x*x` statically evaluates to `49` because the condition
 gives us knowledge of `x` in that branch.  Since both `49` and `2` are
 numbers, the result of the `if` expression is known to be a number.
@@ -443,7 +505,6 @@ Code generation (for dynamic evaluation) can take advantage of any static
 knowledge of values.  This enables inlining of functions, type erasure,
 eliminating of unreachable code, and skipping method lookup and even double
 dispatch steps.
-
 
 
 ## Hints
@@ -531,6 +592,12 @@ heights, and more flexible rendering that are enabled by GUI environments.
   directly enhances the readability of the names, and further improves
   readability by reducing the need for line breaking.
 
+- Display large number literals with a [thin space](
+  https://en.wikipedia.org/wiki/Thin_space) separating digit groups.  This
+  yields the readability benefits of an explicit separator, like `_` in
+  Rust, without embedding locale-specific representations in the source
+  code.
+
 - Automatically wrap long lines to the width of the window, breaking at at
   the lowest-precedence operators first.  This ensures readability across
   different window and font sizes, especially if code is viewed in different
@@ -542,8 +609,8 @@ heights, and more flexible rendering that are enabled by GUI environments.
 - "Syntax" within strings: `\\`, `\t`, and `\n`, can be made nore visually
   distinct, perhaps shown as boxed `n`, `t`, and `\` characters.
 
-- Show internal structure of string literals as determined by a parsing
-  function they are later passed to.  (When that parser returns an object
+- Show the internal structure of string literals as determined by a parsing
+  function they are later passed to (when that parser returns an object
   implementing a certain interface).
 
 - Display tablular data (constructors of vector-of-vectors or
@@ -616,9 +683,10 @@ where the language can easily identify the cycles at time of construction.
 Immutability of variables and data comes with some well-known downsides.
 Some people see it as less intuitive and find things more difficult to
 express in such a language than in languages with mutation, especially
-loops.  Our answer to this is two-fold.  First, [looping syntax
-](#looping-syntax) supports a more intuitive way of thinking about
-iteration.  Second, while a different "mode" of thinking will be more
+loops.  Our answer to this is two-fold.  First, it provides ["imperative
+syntax"](#imperative-syntax) features that support a more intuitive way of
+thinking about iteration (without actually involving side effects).  Second,
+while a different functional "mode" of thinking will be more
 front-and-center in Rio, this mode is essentially that of identifying
 invariants: asking "What can we say about the values at a given place in the
 program?"  It is necessary to think in this mode in order to analyze your
@@ -687,13 +755,17 @@ optimizing away a lookup when it can predict the type of the value.
 
 ## Duck Typing
 
-With duck typing, the behavior of a value is described entirely by the
-interface it exposes.  Rio supports this by defining its built-in operators
-using [dynamic dispatch](#dynamic-dispatch).
+Duck typing is a form of [dynamic typing](#dynamic-typing) in which the
+behavior of a value is described entirely by the interface it exposes.  Rio
+supports this through a consistent, thorough application of [dynamic
+dispatch](#dynamic-dispatch).
 
 Here is one illustrative example: `a + b` is defined as invoking the "+"
-method of `a`, passing it `b`.  This contrasts with languages that define
-"+" as a built-in function that has special cases for built-in types.
+method of `a`, passing it `b`.  This contrasts with dynamic languages that
+define "+" as a built-in function that has special cases for built-in types.
+
+The main benefit of this approach is to maximize the power of user-defined
+data types.  They are treated as first-class citizens.
 
 Rio built-in types are special only in that they are used to construct
 values from literal constants.  After construction, they have no special
@@ -774,13 +846,13 @@ the type annotations will not change what the code does, they will only make
 assertions about values.  This is not just a problem for dabblers, novices,
 or the less educated or less intelligent.  The "[too many
 languages](#too-many-languages)" problem means that even experts working in
-software often find themselves dabbling in some language.  Every language
-should pull its own weight, and some languages are too heavyweight.
+software often find themselves dabbling in one language or another.  Every
+language should pull its own weight, and some languages are too heavyweight.
 
 Languages that support dynamic typing are more powerful.  Functions in a
 dynamic language are inherently polymorphic.  Without polymorphism or
 "generics" we end up writing essentially the same function again and
-again. Statically typed languages require complex type systems for even
+again.  Statically typed languages require complex type systems for even
 modest degrees of polymorphism.
 
 Large projects in statically typed language often end up implementing their
@@ -1226,7 +1298,6 @@ code is syntactic sugar for something like the following:
 
 A chain of such clauses will result in a nested series of functions.  For example:
 
-
     x <- get("X")
     y <- get("Y")
     z <- get("Z")
@@ -1239,17 +1310,15 @@ A chain of such clauses will result in a nested series of functions.  For exampl
             y => get("Z").and_then(
                 z => REST)))
 
-
 This could be used to describe a chain of actions to be performed
 asynchronously:
 
-
-   connect = (auth) =>
-       (hostname, port) <- parse_authority(auth)
-       addr <- gethostbyname(hostname)
-       s <- socket()
-       () <- s.connect(addr, port)
-       OK(s)
+    connect = (auth) =>
+        (hostname, port) <- parse_authority(auth)
+        addr <- gethostbyname(hostname)
+        s <- socket()
+        () <- s.connect(addr, port)
+        OK(s)
 
 
 At each `<-` clause, execution of the "rest" of the block is at the
@@ -1264,7 +1333,6 @@ result in an action object.
 This composesly nicely with assignments, [update syntax](#update-syntax),
 and [looping syntax](#looping-syntax), as in this example:
 
-
     fetch_list = list_url =>
         list_text <- do_http("GET", list_url, {})
         urls <- parse_lines(list_text)
@@ -1274,7 +1342,6 @@ and [looping syntax](#looping-syntax), as in this example:
             items := items.push(data)
             repeat
         items
-
 
 An alternate syntax allows the programmer to specify how exceptional cases
 are to be handled:
@@ -1296,6 +1363,48 @@ For example:
     () <- socket.listen(20) else:
         Error("failed to listen")
 
+
+## Self-Hosting Phases
+
+The first Rio implementation is a "bootstrap".  The focus is on simplicity,
+not performance and feature richness.  It does not compile, and it does not
+perform partial evaluation.  The goal is to enable a Rio implementation
+written in Rio as quickly as possible to reduce the time spent on non-Rio
+code that will not automatically translate to all Rio-supported
+environments.
+
+The bootstrap interpreter is also called the Phase 1 or P1 implementation,
+and the subset of the Rio language that it implements is also called P1.
+The first Rio-based compiler will be P2: written *in* Rio P1, but
+*implementing* Rio P2.
+
+In order take advantage of a Rio feature that exists in P2, but not in P1,
+then we will need to create a P3.  It can be tempting to use a new feature
+that improves the code, and the additional validation it would provide is
+desirable, but the additional phases add a bit of complexity to the project.
+Indeed, for some time, it may be prudent to keep adding features to P1 for
+the benefit of the P2 code.  Note that *phases* do not denote versions or
+iterations, because P1 itself can change over time.  Instead a phase is just
+a position in this chain of hosting, like phases of booting a computer.
+
+Successive phases may be backwards compatible or not.  When a phase is
+backwards compatible, then its compiler can be called "self-hosting": it can
+compile itself, resulting in a compiler with the same functionality.  When a
+phase is not backwards compatible, then some work will be required to
+convert the previous compiler to the new dialect to create the next "Px".
+
+Given multiple phases, each with its own compiler version, a complete
+re-build from source would technically require running all the compilers,
+starting with the bootstrap interpreter.  In practice, we would keep some
+recently-generated binary as a "golden" compiler, and maintain work only on
+the most recent phase.
+
+I think it would be nice, however, to retain an unbroken "chain of custody"
+from the bootstrap compiler, even when not regularly invoking those older
+phases.  Perhaps this is partly driven by nostalgia, but also it can help
+resolve issues when things go wrong.  By the way, Ken Thompson's Turing
+Award lecture, "Reflections on Trusting Trust" is a great read, and touches
+on some of the issues one might run into.
 
 
 ## Think-Do Gap
@@ -1461,18 +1570,21 @@ This allows many of the benefits of meta-programming without the downsides
 Memoization is important for [reactive programming](#reactive-programming),
 to allow results at T(N+1) to reuse results calculated at T(N).
 
-Since memoization seems to inherently involve stateful side effects, so how
-do we have it in a purely function language?  Answer: We consider the state
-as part of the [execution context](#execution-context).  It is not
-observable by code running *within* that EC, so that code retains its
+Since memoization seems to inherently involve stateful side effects, how do
+we have it in a purely function language?  We can address this by
+considering the memoization cache as state managed by the [execution
+context](#execution-context), which is essentially an instance of the
+interpreter.  Those state changes are not observable by code running
+*within* that EC, so that code sees no side effects and retains its
 functional purity.  The EC itself explicitly deals with that state, not as a
 side effect.
 
-One problem is cleanup.  If we collect prior results indefinitely, we run
-out of resources over time.  We can associate the memoization cache with a
-[reactive programming](#reactive-programming) graph node -- visible to the
-EC, not the code it hosts.  Node "liveness" will control the lifetime of the
-memozation cache.  Together with [deterministic garbage collection
+One challenge with using memoization broadly is placing bounds on the memory
+usage.  If we accumulate prior results indefinitely, we run out of
+resources.  We can associate the memoization cache with a [reactive
+programming](#reactive-programming) graph node -- visible to the EC, not the
+code it hosts.  Node "liveness" will control the lifetime of the memozation
+cache.  Together with [deterministic garbage collection
 ](#deterministic-garbage-collection) this can ensure proper cleanup.  [This
 works for results accumulated over multiple reactive evaluation cycles;
 within any one evaluation cycles, all memoized results would accumulate, but
@@ -1553,3 +1665,155 @@ begin a new indentation level.  Test that introduces a multi-line block --
 assignments, `if` statements, etc. -- can easily be distinguished from other
 lines.  Such lines begin a new block, and other such lines are treated as
 continuation lines.
+
+
+## CTE of Constructors
+
+An implication of [compile-time evaluation](#compile-time-evaluation) that
+is fairly straightforward but still worth calling attention to is that we
+can rely on constructors to be executed at compile-time when they are
+invoked on literals.
+
+This reduces the pressure to complicate the language with grammar for
+literals of various types.  For example, regular expressions can be
+constructed from a string:
+
+    regex = RE("a(.*)b+")
+
+This is just as good as a regex literal from a performance perspective.
+Also, any mal-formedness *within* the string will be detected by the `RE`
+constructor at compile-time (in the live environment, *immediately*, as it
+is typed).
+
+Types derived from [`String`}(#string) can also benefit, without being
+hard-coded into the language with their own syntax (as in Python).
+
+    text = Utf8("abcdef")
+    text = Bin("abcdef")
+
+Perhaps the mot important implication of CTE for constructors is the
+construction of complex types involving typed data structures.  For example:
+
+    V32 = TypedVector(Uint32)
+    v = V32([1, 2, 3])
+
+Here, an untyped vector (a vector of `Any`) is being constructed and then
+passed to the `V32` constructor, which then packs the values into a typed
+vector.  This is all performed at compile-time, no matter what context it
+appears in.  At run-time this manifests only as a constant vector of 32-bit
+values.
+
+Rio does not need to summon "backwards-in-time" type inference in order to
+achieve this.  Dynamic typing provides a simple mental mental model for
+understanding the result.
+
+Going a bit further, consider the following example:
+
+    a = V32([x, y, z])
+
+Even when the values of `x`, `y`, and `z` are not known at compile-time, the
+size of the vector is known and the actual existence of the intermediate
+untyped vector is unnecessary.
+
+One option that may be explored is using an arbitrary precision numeric data
+type for numeric literals, in which ordinary operations (`+`, `-`, `==`,
+...) on the value will first convert it to float64.  This would ensure that
+CTE can easily reduce the values to float64 and avoid complex
+representations and heap allocation at run-time, yet preserve the original
+meaning of the literal when it is passed to a constructor for an alternate
+numeric type.
+
+    n = Bignum(123456789012345678901234567890)
+    d = Decimal(1.23)
+
+Such a constructor would extract information from the number using a special
+interface provided for bypassing coercion to float64.
+
+
+## Primitive Types
+
+### Number
+
+The `Number` data type, used for numeric literals, is 64-bit IEEE-754
+floating point.
+
+Downsides of this choice include:
+
+ * `0.1 * 10 != 1`
+ * `(x + 1) - 1 != x` for values of |x| >= 2^53
+ * `(x * 3) / 3 != x` for some values of x
+ * `0 == -0`, but doesn't always behave the same
+ * `NaN != NaN`
+ * `Inf` and `-Inf`
+
+The problem with decimal fractions is insidious.  Numbers immediately take
+on a value that is not equal to what was written.  This data type is not
+well suited to dealing with numbers produced by humans.  The language could
+detect literals that cannot be represented exactly (e.g. too large, too
+precise, etc.) and treat them as errors, but that would absolutely forbid
+literals like `0.1`.
+
+The inability to represent all 64-bit integer values appears to be a problem
+that presents itself primarily when interacting with C or other low-level
+languages in which programmers have tailored interfaces to the 64-bit
+integer types.  Otherwise, it would be quite rare to encounter situations in
+which one needs a value to hold integers bigger than 2^53 but not bigger
+than 2^64.
+
+Perhaps ideally, we could have arbitrary-precision decimal numbers, with all
+operations preserving precision, except for division, which would return
+floating point. CTE could (hopefully) tell the compiler when integers could
+be used to represent the values, such as in a loop counter.  Of couse, some
+`Float64` type would still have to be available in the language for type
+structures and vectors.
+
+However, floating point is overwhelmingly the practical choice.
+
+ * Modern hardware supports it well, so we get good performance right out of
+   the gate without exotic optimizations.
+
+ * Other dynamic languages use it as their numeric data type, so we can
+   leverage specification work done by, e.g., ECMAScript.
+
+ * It works just fine for almost all integer use cases.
+
+ * Having a single built-in numeric type keeps the language definition
+   simple.
+
+One alternative that would be clearly *better* is Douglas Crockford's
+[`DEC64`](https://www.crockford.com/dec64.html) proposal.  Something to
+keep in mind.
+
+Some other options under consideration:
+
+ * Hexadecimal literals.  Numbers must still begin with a digit, but may
+   contain A-F when followed by the suffix `_16` (visually rendered as a
+   trailing "16" subscript).
+
+ * Precise literals, converted to `Float64` when used.  This will allow
+   high-precision number types to leverage [CTE of
+   Constructors](#cte-of-constructors).
+
+
+### String
+
+Strings are typed vectors of 8-bit unsigned integers.
+
+A *typed vector of T* (`[T]`) behaves mostly like an ordinary untyped
+vector, but it differs in that its "mutation-like" operations will only
+accept values of type T.
+
+Strings have presentation behavior that is biased toward UTF-8 text.  In
+other words, they implement an interface that is used by the IDE to format
+values for display to the user, and that format, while it can represent any
+possible string, works best for readable text encoded in UTF-8.
+
+One may define types that derive from `String` and apply different
+presentation bias (e.g. hex display for binary data).
+
+One may derive a type that ensures the contents are well-formed UTF-8,
+allowing for optimization of some UTF-8-specific operations.  Perhaps this
+will be built into the language.
+
+Note that derived string types benefit from
+[CTE of Constructors](#cte-of-constructors) optimizations.
