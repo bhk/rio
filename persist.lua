@@ -22,9 +22,11 @@ end
 -- same as Lua 5.1.3's table.move
 --
 local function move(from, pstart, pend, at, to)
+   to = to or from
    for n = pstart, pend do
       to[n + at - pstart] = from[n]
    end
+   return to
 end
 
 

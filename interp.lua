@@ -23,13 +23,12 @@ local rec, recFmt = reclib.rec, reclib.recFmt
 local emptyEnv = {}
 
 local function envBind(env, arg)
-   local e = clone(env)
-   table.insert(e, arg)
-   return e
+   local e = {[1] = arg}
+   return move(env, 1, #env, 2, e)
 end
 
 local function envArg(env, index)
-   return env[#env - index]
+   return env[index+1]
 end
 
 ----------------------------------------------------------------
