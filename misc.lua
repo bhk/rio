@@ -63,39 +63,34 @@ local function map(t, fn)
    return o
 end
 
--- Construct a table that will be serialized as an S-expression list.
+-- Serialize a Lua "record" value in an S-expression-like syntax.
 --
-local function rec(name, ...)
-   return {type=name, ...}
-end
-
--- Serialize a Lua value as an S-expression.  Tables are rendered as
--- S-expression lists when their `type` member is non-nil; otherwise they
--- are rendered as vectors (enclosed in square brackets).  Non-table values
--- are serialized normally.
+--  * Tables where t.T == nil: Serialize t[1...] as a vector.
+--        {1, 2, 3}           -->  "[1 2 3]"
+--  * Tables where t.T ~= nil: Serialize as a list whose first element
+--    is a symbol given by t.T, and subsequent elements are t[1...].
+--        {T="Foo", 1, 2}     -->  "(Foo 1 2)"
+--  * Other values: use test.serialize.
 --
-local function recFmt(node, formatters)
-   if type(node) == "string" then
-      return "'" .. node:gsub("['\\]", "\\%1") .. "'"
-   elseif type(node) ~= "table" then
-      return test.serialize(node)
-   end
+local function sexprFmt(nodeTop, formatters)
+   local function format(node)
+      if type(node) ~= "table" then
+         return test.serialize(node)
+      end
 
-   local function fmt(v)
-      return recFmt(v, formatters)
-   end
+      local f = formatters and formatters[node.T or "[]"]
+      if f then
+         return f(node, format)
+      end
 
-   local f = formatters and formatters[node.type or "[]"]
-   if f then
-      return f(node, fmt)
+      local elems = concat(imap(node, format), " ")
+      if node.T then
+         return "(" .. node.T .. (elems == "" and "" or " " .. elems) .. ")"
+      else
+         return "[" .. elems .. "]"
+      end
    end
-
-   local elems = concat(imap(node, fmt), " ")
-   if node.type then
-      return "(" .. node.type .. (elems == "" and "" or " " .. elems) .. ")"
-   else
-      return "[" .. elems .. "]"
-   end
+   return format(nodeTop)
 end
 
 local exports = {
@@ -106,8 +101,7 @@ local exports = {
    append = append,
    imap = imap,
    map = map,
-   rec = rec,
-   recFmt = recFmt,
+   sexprFmt = sexprFmt,
 }
 
 if test.skip then
@@ -121,7 +115,7 @@ test.eq(t, {a=1})
 
 test.eq({5,4,3,2,1}, exports.append({5,4}, {3,2,1}))
 
-test.eq(recFmt({type="Foo", {"abc", 2, {type="Bar"}}}),
-        "(Foo ['abc' 2 (Bar)])")
+test.eq(sexprFmt({T="Foo", {"abc", 2, {T="Bar"}}}),
+        '(Foo ["abc" 2 (Bar)])')
 
 return exports

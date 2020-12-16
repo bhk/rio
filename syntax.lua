@@ -25,8 +25,8 @@ local misc = require "misc"
 
 local C, Cc, Ct, NoCaptures, NS, P, R, S, V =
    peg.C, peg.Cc, peg.Ct, peg.NoCaptures, peg.NS, peg.P, peg.R, peg.S, peg.V
-local append, imap, move, override, recFmt, set =
-   misc.append, misc.imap, misc.move, misc.override, misc.recFmt, misc.set
+local append, imap, move, override, sexprFmt, set =
+   misc.append, misc.imap, misc.move, misc.override, misc.sexprFmt, misc.set
 
 -- returns: match 0 or 1 occurrence of `p`
 local function opt(p)
@@ -138,7 +138,7 @@ local cp = peg.cpos
 
 -- Construct an AST node
 local function Node(typ, pos, ...)
-   return {type = typ, pos = pos, ...}
+   return {T = typ, pos = pos, ...}
 end
 
 
@@ -261,7 +261,7 @@ local grouping = T"(" * needExpr * (T")" + E"CloseParen")
 --
 local function joinBlock(a, b, ...)
    -- etype = type of expression we can construct from an "S-xxx" node
-   local astmt = string.match(a.type, "^S%-(.*)")
+   local astmt = string.match(a.T, "^S%-(.*)")
    if not astmt then
       if b then
          -- ILE followed by more lines...
@@ -460,7 +460,7 @@ local astFormatters = {
 }
 
 local function astFmt(node)
-   return recFmt(node, astFormatters)
+   return sexprFmt(node, astFormatters)
 end
 
 
@@ -561,7 +561,7 @@ testG(txt, blockBody,
 --------------------------------
 
 testG(" \nNext", ss, {}, nil, 2)
-testG(" # c\n  x\n", ss, {}, "(Comment '# c')", 8)
+testG(" # c\n  x\n", ss, {}, '(Comment "# c")', 8)
 
 testG("abc  ", O("abc"), {"abc"}, nil, 6)
 testG("abc+ ", O("abc"), {"abc"}, nil, 4)
@@ -578,14 +578,14 @@ testG("7 ", number, {"7"}, nil, 3)
 testG("7.5 ", number, {"7.5"})
 testG("7.0e0 ", number, {"7.0e0"})
 testG("7e+0 ", number, {"7e+0"})
-testG("7.e+1 ", number, {"7.e+1"}, "(Error 'NumDigitAfter')")
-testG("7a ", number, {"7"}, "(Error 'NumEnd')")
-testG("1.23.", number, {"1.23"}, "(Error 'NumEnd')")
-testG(".5", number, {".5"}, "(Error 'NumDigitBefore')")
+testG("7.e+1 ", number, {"7.e+1"}, '(Error "NumDigitAfter")')
+testG("7a ", number, {"7"}, '(Error "NumEnd")')
+testG("1.23.", number, {"1.23"}, '(Error "NumEnd")')
+testG(".5", number, {".5"}, '(Error "NumDigitBefore")')
 
 testG([["a\\\t\nb"   ]], qstring, {"a\\\t\nb"}, nil, 14)
-testG([["\a"]], qstring, {"\\a"}, "(Error 'StringBS')")
-testG([["abc]], qstring, {"abc"}, "(Error 'StringEnd')")
+testG([["\a"]], qstring, {"\\a"}, '(Error "StringBS")')
+testG([["abc]], qstring, {"abc"}, '(Error "StringEnd")')
 
 
 -- Match `subj` using LogLine.
@@ -615,31 +615,31 @@ end
 
 testL("ab_1", "ab_1")
 testL("1.23", "1.23")
-testL([["a\tb"]], "(String 'a\tb')")
+testL('"a\tb"', '(String "a\\tb")')
 
 -- errors
 
-testL("\t x", "x", "(Error 'BadChar')")
+testL("\t x", "x", '(Error "BadChar")')
 
 -- vector
 
-testL("[]", "(Vector [])")
-testL("[a]", "(Vector [a])")
-testL("[a, b, c]", "(Vector [a b c])")
-testL("[a ", "(Vector [a])", "(Error 'CloseSquare')")
-testL("[a,", "(Vector [a])", "(Error 'CloseSquare')")
+testL("[]", '(Vector [])')
+testL("[a]", '(Vector [a])')
+testL("[a, b, c]", '(Vector [a b c])')
+testL("[a ", '(Vector [a])', '(Error "CloseSquare")')
+testL("[a,", '(Vector [a])', '(Error "CloseSquare")')
 
 -- record
 
-testL("{}", "(Record [])")
-testL("{a: A, b: B}", "(Record [a A b B])")
-testL("{a: A,  ", "(Record [a A])", "(Error 'CloseCurly')")
-testL("{a:,}", "(Record [a (Missing)])")
+testL("{}", '(Record [])')
+testL("{a: A, b: B}", '(Record [a A b B])')
+testL("{a: A,  ", '(Record [a A])', '(Error "CloseCurly")')
+testL("{a:,}", '(Record [a (Missing)])')
 
 -- grouping
 
 testL("(a)", "a")
-testL("(a", "a", "(Error 'CloseParen')")
+testL("(a", "a", '(Error "CloseParen")')
 testL("((a)) ", "a")
 
 -- atoms
@@ -650,66 +650,66 @@ testL("(12)", "12")
 
 -- suffix operators
 
-testL("a.b", "(Op_. a b)")
-testL("a.", "(Op_. a (Missing))", "(Error 'DotName')")
-testL("a[1]", "(Op_[] a 1)")
-testL("a(1,x)", "(Op_() a [1 x])")
-testL("a . b [ 1 ] ( 2 ) ",  "(Op_() (Op_[] (Op_. a b) 1) [2])")
+testL("a.b", '(Op_. a b)')
+testL("a.", '(Op_. a (Missing))', '(Error "DotName")')
+testL("a[1]", '(Op_[] a 1)')
+testL("a(1,x)", '(Op_() a [1 x])')
+testL("a . b [ 1 ] ( 2 ) ",  '(Op_() (Op_[] (Op_. a b) 1) [2])')
 
 -- RTL operator
 
-testL("a^b^c", "(Op_^ a (Op_^ b c))")
+testL("a^b^c", '(Op_^ a (Op_^ b c))')
 
 -- prefix
 
-testL("-a", "(Unop_- a)")
+testL("-a", '(Unop_- a)')
 
 -- LTR operators
 
-testL("a+b-c", "(Op_- (Op_+ a b) c)")
+testL("a+b-c", '(Op_- (Op_+ a b) c)')
 
 -- precedence
 
-testL("-a^b+c*d", "(Op_+ (Unop_- (Op_^ a b)) (Op_* c d))")
+testL("-a^b+c*d", '(Op_+ (Unop_- (Op_^ a b)) (Op_* c d))')
 
 -- relational
 
-testL("a==b", "(Op_== a b)")
-testL("a<b<c", "(Op_and (Op_< a b) (Op_< b c))")
+testL("a==b", '(Op_== a b)')
+testL("a<b<c", '(Op_and (Op_< a b) (Op_< b c))')
 
 -- ?:, $
 
-testL("a or b ? f : g $ x", "(Op_$ (IIf (Op_or a b) f g) x)")
+testL("a or b ? f : g $ x", '(Op_$ (IIf (Op_or a b) f g) x)')
 testL("a ? x : b ? y : z",
-      "(IIf a x (IIf b y z))")
+      '(IIf a x (IIf b y z))')
 
 -- params => expr
 
-testL("()    => 1", "(Fn [] 1)")
-testL("(a)   => 1", "(Fn [a] 1)")
-testL("(a,b) => 1", "(Fn [a b] 1)")
-testL("a     => 1", "(Fn [a] 1)")
+testL("()    => 1", '(Fn [] 1)')
+testL("(a)   => 1", '(Fn [a] 1)')
+testL("(a,b) => 1", '(Fn [a b] 1)')
+testL("a     => 1", '(Fn [a] 1)')
 
 --
 -- statements
 --
 
-testL("x = 1", "(S-Let x '=' 1)")
-testL("x := 1", "(S-Let x ':=' 1)")
-testL("x <- a", "(S-Act [x] a)")
-testL("if a: x", "(S-If a x)")
-testL("loop:", "(S-Loop)")
-testL("while c:", "(S-While c)")
-testL("loop while C: B", "(S-LoopWhile C B)")
-testL("for x in E: B", "(S-For x E B)")
+testL("x = 1", '(S-Let x "=" 1)')
+testL("x := 1", '(S-Let x ":=" 1)')
+testL("x <- a", '(S-Act [x] a)')
+testL("if a: x", '(S-If a x)')
+testL("loop:", '(S-Loop)')
+testL("while c:", '(S-While c)')
+testL("loop while C: B", '(S-LoopWhile C B)')
+testL("for x in E: B", '(S-For x E B)')
 
 -- extraneous characters
 
-testL("a b c", "a", "(Error 'Garbage')")
+testL("a b c", "a", '(Error "Garbage")')
 
 -- block body
 
-testL("a + \n  x=1\n  x\n", "(Op_+ a (Let [x '=' 1] x))")
+testL("a + \n  x=1\n  x\n", '(Op_+ a (Let [x "=" 1] x))')
 
 
 -- test `Module`
@@ -723,7 +723,7 @@ f = (x) =>
 f(2)
 ]]
 
-testM(t1, "(Let [f '=' (Fn [x] (If [(Op_< x 1) 0] (Op_+ x 1)))] (Op_() f [2]))",
-      "(Comment '# C1')")
+testM(t1, '(Let [f "=" (Fn [x] (If [(Op_< x 1) 0] (Op_+ x 1)))] (Op_() f [2]))',
+      '(Comment "# C1")')
 
 return exports

@@ -4,8 +4,8 @@ local test = require "test"
 local misc = require "misc"
 local syntax = require "syntax"
 
-local map, imap, clone, move, override, rec, recFmt = misc.map,
-   misc.imap, misc.clone, misc.move, misc.override, misc.rec, misc.recFmt
+local map, imap, clone, move, override, sexprFmt =
+   misc.map, misc.imap, misc.clone, misc.move, misc.override, misc.sexprFmt
 local astFmt, astFmtV = syntax.astFmt, syntax.astFmtV
 local concat, unpack = table.concat, table.unpack
 
@@ -69,11 +69,11 @@ local ilFormatters = {
 }
 
 local function ilFmt(node)
-   return recFmt(node, ilFormatters)
+   return sexprFmt(node, ilFormatters)
 end
 
 local function eval(expr, env)
-   local typ = expr.type
+   local typ = expr.T
    local function ee(e)
       return eval(e, env)
    end
@@ -87,7 +87,7 @@ local function eval(expr, env)
       return value
    elseif typ == "IFun" then
       local body = expr[1]
-      return rec("VFun", env, body)
+      return {T="VFun", env, body}
    elseif typ == "IApp" then
       local fn, arg = expr[1], expr[2]
       local fnValue = ee(fn)
@@ -136,19 +136,19 @@ function valueFmt(value)
       return tostring(value)
    end
 
-   if value.type == "VVec" then
+   if value.T == "VVec" then
       local o = imap(value, valueFmt)
       return "[" .. concat(o, ", ") .. "]"
-   elseif value.type == "VRec" then
+   elseif value.T == "VRec" then
       local o = {}
       for _, pair in ipairs(value) do
          o[#o+1] = pair[1] .. ": " .. valueFmt(pair[2])
       end
       return "{" .. concat(o, ", ") .. "}"
-   elseif value.type == "VFun" then
+   elseif value.T == "VFun" then
       local fenv, body = unpack(value)
       return ("(...) => %s"):format(ilFmt(body))
-   elseif value.type == "VErr" then
+   elseif value.T == "VErr" then
       return "(VErr " .. astFmtV(value) .. ")"
    end
 end
@@ -156,7 +156,7 @@ end
 function valueType(value)
    local typ = type(value)
    if typ == "table" then
-      return value.type
+      return value.T
    end
    return typ
 end
@@ -181,7 +181,7 @@ end
 --
 function faultIf(cond, typ, where, what)
    if cond then
-      error(rec("VErr", typ, where, what))
+      error({T="VErr", typ, where, what})
    end
 end
 
@@ -209,9 +209,9 @@ end
 -- result: (value) -> VFun that calls `nativeMethod` with `value` and its arg
 --
 local function makeMethodProp(nativeMethod)
-   local body = rec("INat", nativeMethod, {rec("IArg", 1), rec("IArg", 0)})
+   local body = {T="INat", nativeMethod, {{T="IArg", 1}, {T="IArg", 0}}}
    return function (value)
-      return rec("VFun", envBind(emptyEnv, value), body)
+      return {T="VFun", envBind(emptyEnv, value), body}
    end
 end
 
@@ -394,7 +394,7 @@ local vecMethods = {
       faultIf(valueType(limit) ~= "number", "NotNumber", nil, limit)
       faultIf(start < 0 or start >= #self, "Bounds", nil, start)
       faultIf(limit < start or limit >= #self, "Bounds", nil, start)
-      return rec("VVec", unpack(self, start+1, limit))
+      return {T="VVec", unpack(self, start+1, limit)}
    end,
 
    ["Op_[]"] = function (self, args)
@@ -408,7 +408,7 @@ local vecMethods = {
 behaviors.VVec = makeBehavior(vecUnops, vecBinops, vecMethods, "VVec")
 
 function natives.vvecNew(...)
-   return {type="VVec", ...}
+   return {T="VVec", ...}
 end
 
 -- Note different calling convention than vecIndex.  `self` is packed in an
@@ -423,14 +423,14 @@ end
 -- tests
 --
 local tv1 = natives.vvecNew(newVNum(9), newVNum(8))
-test.eq(tv1, rec("VVec", 9, 8))
+test.eq(tv1, {T="VVec", 9, 8})
 test.eq(natives.vvecNth(tv1, newVNum(0)), newVNum(9))
 
 --------------------------------
 -- VRec
 --------------------------------
 
-local vrecEmpty = rec("VRec")
+local vrecEmpty = {T="VRec"}
 
 behaviors.VRec = function (value, name)
    for _, pair in ipairs(value) do
@@ -442,7 +442,7 @@ behaviors.VRec = function (value, name)
 end
 
 function natives.vrecNew(names, ...)
-   local v = rec("VRec")
+   local v = {T="VRec"}
    for ii, name in ipairs(names) do
       v[ii] = {name, assert( (select(ii, ...)) )}
    end
@@ -450,7 +450,7 @@ function natives.vrecNew(names, ...)
 end
 
 test.eq(natives.vrecNew({"a", "b"}, 3, 5),
-        rec("VRec", {"a", 3}, {"b", 5}))
+        {T="VRec", {"a", 3}, {"b", 5}})
 
 --------------------------------
 -- Store names of native functions for debugging
@@ -465,12 +465,12 @@ end
 ----------------------------------------------------------------
 
 local function nameToString(ast)
-   assert(ast.type == "Name")
+   assert(ast.T == "Name")
    return ast[1]
 end
 
 local function nameToVStr(name)
-   test.eq(name.type, "Name")
+   test.eq(name.T, "Name")
    return newVStr(name[1])
 end
 
@@ -501,7 +501,7 @@ local function desugar(ast, scope)
    end
 
    local function I(typ, ...)
-      return {type=typ, ast=ast, ...}
+      return {T=typ, ast=ast, ...}
    end
 
    local function IVal(value)
@@ -534,7 +534,7 @@ local function desugar(ast, scope)
       return apply(mcall(aCond, "switch", branches), {})
    end
 
-   local typ = ast.type
+   local typ = ast.T
 
    if typ == "Name" then
       local index, offset = scopeFind(scope, nameToString(ast))
@@ -613,11 +613,11 @@ end
 
 -- parse error
 
-et(".5", "0.5", "(Error 'NumDigitBefore')")
+et(".5", "0.5", '(Error "NumDigitBefore")')
 
 -- eval error
 
-et("x", "(VErr 'Undefined' x)")
+et("x", '(VErr "Undefined" x)')
 
 -- literals and constructors
 
@@ -644,11 +644,11 @@ et("1 < 2", "true")
 et("1 < 2 < 3", "true")
 
 -- ... String
-et([[ "abc" ++ "def" ]], [["abcdef"]])
-et([[ "abc".len ]], "3")
-et([[ "abcd".slice(1, 3) ]], [["bc"]])
-et([[ "abc" == "abc" ]], "true")
-et([[ "abc"[1] ]], "98")
+et(' "abc" ++ "def" ', '"abcdef"')
+et(' "abc".len ', '3')
+et(' "abcd".slice(1, 3) ', '"bc"')
+et(' "abc" == "abc" ', 'true')
+et(' "abc"[1] ', '98')
 
 -- ... Vector
 et("[7,8,9].len", "3")
