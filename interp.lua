@@ -1,15 +1,13 @@
 -- Rio interpreter
 
 local test = require "test"
+local misc = require "misc"
 local syntax = require "syntax"
-local persist = require "persist"
-local reclib = require "rec"
 
-local map, imap, clone, move, override = persist.map, persist.imap,
-    persist.clone, persist.move, persist.override
+local map, imap, clone, move, override, rec, recFmt = misc.map,
+   misc.imap, misc.clone, misc.move, misc.override, misc.rec, misc.recFmt
 local astFmt, astFmtV = syntax.astFmt, syntax.astFmtV
 local concat, unpack = table.concat, table.unpack
-local rec, recFmt = reclib.rec, reclib.recFmt
 
 ----------------------------------------------------------------
 -- Environments

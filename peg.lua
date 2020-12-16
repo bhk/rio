@@ -31,9 +31,9 @@
 -- doing).
 
 local test = require "test"
-local persist = require "persist"
+local misc = require "misc"
 
-local append = persist.append
+local append = misc.append
 
 
 -- Note: quote ']' so the result can be used in [...] contexts.

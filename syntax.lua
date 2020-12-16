@@ -19,22 +19,19 @@
 --   (Act [params act] k)
 --   (Ignore [expr] k)
 
-
 local test = require "test"
 local peg = require "peg"
-local persist = require "persist"
-local rec = require "rec"
+local misc = require "misc"
 
-local C, Cc, Ct, P, R, S, V = peg.C, peg.Cc, peg.Ct, peg.P, peg.R, peg.S, peg.V
-
-local set, append, override = persist.set, persist.append, persist.override
-
+local C, Cc, Ct, NoCaptures, NS, P, R, S, V =
+   peg.C, peg.Cc, peg.Ct, peg.NoCaptures, peg.NS, peg.P, peg.R, peg.S, peg.V
+local append, imap, move, override, recFmt, set =
+   misc.append, misc.imap, misc.move, misc.override, misc.recFmt, misc.set
 
 -- returns: match 0 or 1 occurrence of `p`
 local function opt(p)
    return p + P(0)
 end
-
 
 ----------------------------------------------------------------
 -- 2D Syntax
@@ -73,7 +70,7 @@ local function matchIndent(cmp)
       local indent = b - a + 1
       if cmp(indent, state.blockIndent) then
          state = set(state, "lineIndent", indent)
-         return pos+indent, state, peg.NoCaptures
+         return pos+indent, state, NoCaptures
       end
    end
    return P(m)
@@ -133,7 +130,7 @@ local p2dInitialState = {
 -- Inline Syntax
 --------------------------------
 
-local NonNL = peg.NS"\n"
+local NonNL = NS"\n"
 
 
 local cp = peg.cpos
@@ -156,7 +153,7 @@ local function Coob(pat)
    local function m(subj, pos, state)
       local pos, state, caps = pat.match(subj, pos, state)
       if pos then
-         return pos, set(state, "oob", append(state.oob, caps)), peg.NoCaptures
+         return pos, set(state, "oob", append(state.oob, caps)), NoCaptures
       end
    end
    return P(m)
@@ -219,7 +216,7 @@ local number = C(opt(P"-")
 
 -- String literals
 
-local qchar = C(peg.NS("\"\\\n")^1)
+local qchar = C(NS("\"\\\n")^1)
    + P"\\\\" * Cc("\\")
    + P"\\\"" * Cc("\"")
    + P"\\r" * Cc("\r")
@@ -274,7 +271,7 @@ local function joinBlock(a, b, ...)
       -- a is a statement: fold with rest of lines
       local e = b and joinBlock(b, ...) or Node("Missing", a.pos)
       local args = {}
-      persist.move(a, 1, #a, 1, args)
+      move(a, 1, #a, 1, args)
       a = Node(astmt, a.pos, args, e)
    end
    return a
@@ -463,12 +460,12 @@ local astFormatters = {
 }
 
 local function astFmt(node)
-   return rec.recFmt(node, astFormatters)
+   return recFmt(node, astFormatters)
 end
 
 
 local function astFmtV(nodes)
-   return table.concat(persist.imap(nodes, astFmt), " ")
+   return table.concat(imap(nodes, astFmt), " ")
 end
 
 
