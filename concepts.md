@@ -68,7 +68,7 @@ Here are the main aspects in which the AST and the IL differ:
    In the IL, all parameter references use a [de Bruijn index](
    https://en.wikipedia.org/wiki/De_Bruijn_index).  Desugaring keeps track
    of names that are in scope, so it can detect references to undefined
-   variables and aliasing of variables.
+   variables and shadowing of variables.
 
  * Some syntactic constructs require more involved transormations specific
    to that construct.  For example, the [imperative
@@ -131,8 +131,8 @@ Here is a quick summary of Rio's "inline" syntax:
  - Prefix operations:  `not a`,  `-x`
  - Function construction: `(x) => x * 2`
  - Function application: `f(x, y)`
- - Array construction: `[x, y, z]`
- - Array de-reference: `a[1]`
+ - Vector construction: `[x, y, z]`
+ - Vector de-reference: `a[1]`
  - Record construction: `{a: 1, b: 2, c: 3}`
  - Property de-reference: `r.prop`
 
@@ -223,7 +223,7 @@ value to one of its own methods.  The expression `a.foo()` is equivalent to
 other programming languages).
 
 Also, Rio does not confuse properties with members of collections.  Indexing
-expressions -- e.g. `value[index]` -- access members of an array or
+expressions -- e.g. `value[index]` -- access members of a vector or
 dictionary, not their properties.
 
 `a.?foo` evaluates to `true` if `a` has a `foo` property.
@@ -406,7 +406,7 @@ possible.  There are different kinds of knowledge we may have about a value:
 
   - We may know its type.
 
-  - We may know that the value is a composite (array or record), and have
+  - We may know that the value is a composite (vector or record), and have
     further knowledge about some of its members.
 
   - Over time, there are more granular forms of knowledge that we may
@@ -1099,7 +1099,7 @@ constant parameters.
 
 ## Unique Values
 
-In many dynamic languages we can create "unique" values -- arrays,
+In many dynamic languages we can create "unique" values -- vectors,
 functions, etc. -- that can be differentiated from any other value
 constructed in any other part of the program.  For example, in Lua: `local x
 = {}` assigns a new table to `x`.  These can be useful as sentinel values
@@ -1156,14 +1156,14 @@ Shadowing requires `:=`, `+=`, etc..
 
 ## Update Syntax
 
-Due to [immutability](#immutability), we do not literally modify arrays or
+Due to [immutability](#immutability), we do not literally modify vectors or
 structures, but we can construct new values that include the "modification"
 we want.  Rio's update syntax allows such operations to be expressed easily:
 
     MEMBER_EXPR <! EXPR
 
 
-MEMBER_EXPR must end in a property reference or an array/dictionary item
+MEMBER_EXPR must end in a property reference or a vector/dictionary item
 reference.  This syntax "peels" off the last de-reference and converts it to
 a `set_prop` or `set` call.
 
@@ -1542,7 +1542,7 @@ that allow a variable number of fields, each of which can hold any type of
 value.
 
 However, dynamic languaes are not incompatible with the notion of typed
-structures and arrays, which can allow a precise, efficient memory layout.
+structures and vectors, which can allow a precise, efficient memory layout.
 The best example of this is LuaJIT and its C FFI, which can actually be used
 to great effect without ever calling into C.  Another example is
 JavaScript's typed arrays.

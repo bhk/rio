@@ -42,22 +42,23 @@ and/or blocks.
 
 ## Inline Syntax
 
-A logical line is treated as a sequence of text and/or blocks.  The line
-boundaries before or after continuation lines are treated as whitespace and
-have no other significance.
+A logical line is a sequence of text and/or blocks.  The line boundaries
+between physical lines are treated as whitespace and have no other
+significance.
 
-Logical lines may be statements or inline expressions.
+Logical lines may contain statements or inline expressions.
 
-A *statement* is a logical line that must followed by one or more logical
+A *statement* is a logical line that must be followed by one or more logical
 lines in the same block.  It does not constitute a complete expression by
-itself, but paired with the "rest" of the block, it does.  Statements
-generally begin one of a small number of keywords (`if`, `loop`, etc.) , or
-are variable definitions.  For example:
+itself, but when combined with the "rest" of the block it does.
 
     if cond:           # statement first line       \   "vertical"
       true             #   statement continuation    >  expression
     REST               # remainder of block         /
 
+Statements begin with one of a small number of keywords (`if`, `loop`,
+etc.), except for assignment statements, which are easily identified by
+their assignment operators.
 
 An *inline expression* (ILE) is a complete expression on its own.  Every
 block ends in a logical line that consists of an ILE.  ILEs use a fairly

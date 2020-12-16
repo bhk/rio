@@ -3,16 +3,20 @@ TODO
 * Unimplemented language features:
   - Manifest variables: true, false, ...
   - Let (other than `=`) & aliasing detection
-  - Missing, For, Loop, LoopWhile, While, Act
+  - Missing
+  - For, Loop, LoopWhile, While
+  - recursive definitions (forward declarations)
   - Vectors: `==`, `!=`
   - Records: `==`, `!=`
-  - `or` & `and`: lazy/short-circuit
+  - short-circuiting `or` & `and`
   - `$`
-  - `.?`, `<!`
+  - `.?`
+  - `<!`
   - assert
   - type constructors
   - `match`
-  - `<-`
+  - Act
+  - String syntax: `\xXX` and `\u{X...}`
 
 * Remove negative literals
 
@@ -34,7 +38,7 @@ TODO
 
 * riodoc: concepts.txt --> concepts.md
   1. [[a b c]]  -->  [a b c](#a-b-c)
-  2. Broken link notifications
+  2. Broken link detection
   3. "See also: ..."
   4. Index
   5. Comments
@@ -57,43 +61,3 @@ TODO
  * P3+: Richer data structuring, lazy/parallel/etc., ...
  * IDE
    - display values (or `pending...`) [computed in parallel VM]
-
-----
-
-Notes:
-
-* Adequate performance (for my expectations) will requires specialization of
-  functions *at least* on the types of arguments, in order to eliminate
-  dispatching overhead and enable inlining.
-
-  Types cannot generally be predicted at "compile/deploy" time, so run-time
-  specialization and compilation may be *required* in those cases.
-
-  Run-time compilation would be triggered by a "guard" failure (type does
-  not match the specialized-for type).  But how to perform this check
-  efficiently, given duck-typing and structural typing?  [Wherein there is
-  no "true identity" of a type that affects behavior; only its interface and
-  the behavior thereof distinguishes it from other types.]  Specialization
-  can work at a lower level, where "true identity" is in fact known, even if
-  it does not factor into behavior.  This might result in run-time
-  compilation of a specialized version that results in the same code as a
-  previously specialized version for a different type.  Or, short circuiting
-  some of the work, it could result in a run-time validation of equivalence.
-  In either case, the new specialized type will be recognized on subsequent
-  invocations and not require specialization again.  "True identity" could
-  be based on where in the program the type or value is constructed --
-  `type.id = where` -- or if that type constructing is a function of some
-  type value, then `type.id = (where, inputType.id)`.
-
-* The ability to explicitly structure data based on appropriate primitive
-  types is important for performance in some cases.  LuaJIT and JS's typed
-  arrays provide examples.
-
-  It is unclear to what extent "primitive" types are required outside of
-  that context.  For example, adding two UInt16's could produce a Number or
-  a UInt16.  Considering only the structuring concerns, we would want
-  Number, since that would always succeed and would not present surprising
-  semantics (to non-C/ASM programmers).  Considering optimization of inlined
-  functions, manipulation of UInt16's in ways that guarantee a UInt16 result
-  could facilitate optimization; note that this could be achieved via a
-  different "modular addition" meta-method.
