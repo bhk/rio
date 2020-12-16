@@ -132,7 +132,7 @@ The notation used is from PEG[1], with some added conveniences:
     Name     <- ![0-9] NameCh+ Spacing
     NameCh   <- [a-zA-Z0-9_]
 
-    Number   <- '-'? [0-9]+ ('.' [0-9]+)? ([eE] [0-9]+)? ![a-zA-Z.] Spacing
+    Number   <- [0-9]+ ('.' [0-9]+)? ([eE] [0-9]+)? ![a-zA-Z.] Spacing
 
     String   <- ["] StringCh* ["] Spacing
     StringCh <- !["\\] . / '\\' [\\"nrt]

@@ -207,9 +207,8 @@ end
 -- Numeric literals
 
 local digits = R"09" ^ 1
-local number = C(opt(P"-")
-                    * (digits * opt(P"." * (digits + E"NumDigitAfter"))
-                          + #P"." * E"NumDigitBefore" * P"." * digits)
+local number = C((digits * opt(P"." * (digits + E"NumDigitAfter"))
+                     + #P"." * E"NumDigitBefore" * P"." * digits)
                     * opt(S"eE" * opt(S"+-") * digits))
    * (-(nameChar + ".") + E"NumEnd") * ss
 
@@ -670,7 +669,7 @@ testL("a+b-c", '(Op_- (Op_+ a b) c)')
 
 -- precedence
 
-testL("-a^b+c*d", '(Op_+ (Unop_- (Op_^ a b)) (Op_* c d))')
+testL("-3^b+c*d", '(Op_+ (Unop_- (Op_^ 3 b)) (Op_* c d))')
 
 -- relational
 

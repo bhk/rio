@@ -18,8 +18,6 @@ TODO
   - Act
   - String syntax: `\xXX` and `\u{X...}`
 
-* Remove negative literals
-
 * Going "full lambda": implementing Rio values as CFun
    - Rio "function" => CFun that expects an ArgBundle argument
    - Other values => CFun that expects property name.
