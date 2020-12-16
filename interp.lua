@@ -39,7 +39,6 @@ end
 --   (IFun body)            -- function construction (lambda)
 --   (IApp fn arg)          -- function application
 --   (INat nfn args)        -- native function call
---   (IBra cond then else)  -- branch (if)
 --
 -- value : VNode
 -- index : (native) number
@@ -73,7 +72,6 @@ local function ilFmt(node)
    return recFmt(node, ilFormatters)
 end
 
-
 local function eval(expr, env)
    local typ = expr.type
    local function ee(e)
@@ -84,7 +82,8 @@ local function eval(expr, env)
       return expr[1]
    elseif typ == "IArg" then
       local index = expr[1]
-      local value = assert(envArg(env, index))
+      local value = envArg(env, index)
+      assert(value ~= nil)
       return value
    elseif typ == "IFun" then
       local body = expr[1]
@@ -98,12 +97,6 @@ local function eval(expr, env)
    elseif typ == "INat" then
       local nfn, args = expr[1], expr[2]
       return nfn(unpack(imap(args, ee)))
-   elseif typ == "IBra" then
-      local condExpr, thenExpr, elseExpr = unpack(expr)
-      local cond = ee(condExpr)
-      -- Some ugliness here: we reach inside a primitve value...
-      faultIf(valueType(cond) ~= "boolean", "NotBool", expr.ast, cond)
-      return ee(cond and thenExpr or elseExpr)
    else
       test.fail("Unsupported: %Q", expr)
    end
@@ -288,8 +281,21 @@ local boolBinops = {
    ["Op_!="] = function (a, b) return a ~= b end,
 }
 
-behaviors.boolean = makeBehavior(boolUnops, boolBinops, {}, "boolean")
+local boolMethods = {
+   switch = function (self, args)
+      faultIf(#args ~= 2, "SwitchArity", nil, args[3])
+      return self and args[1] or args[2]
+   end,
 
+   ["Op_[]"] = function (self, args)
+      local offset = args[1]
+      faultIf(valueType(offset) ~= "number", "NotNumber", nil, offset)
+      faultIf(offset < 0 or offset >= #self, "Bounds", nil, offset)
+      return self:byte(offset+1)
+   end,
+}
+
+behaviors.boolean = makeBehavior(boolUnops, boolBinops, boolMethods, "boolean")
 
 --------------------------------
 -- VStr  (happens to be Lua string)
@@ -446,7 +452,6 @@ end
 test.eq(natives.vrecNew({"a", "b"}, 3, 5),
         rec("VRec", {"a", 3}, {"b", 5}))
 
-
 --------------------------------
 -- Store names of native functions for debugging
 --------------------------------
@@ -495,29 +500,38 @@ local function desugar(ast, scope)
       return desugar(a, scope)
    end
 
-   local function C(typ, ...)
+   local function I(typ, ...)
       return {type=typ, ast=ast, ...}
    end
 
    local function IVal(value)
       -- promote Lua bool/num/string to Value, if necessary
-      return C("IVal", value)
+      return I("IVal", value)
    end
 
    local function nat(name, args)
-      return C("INat", assert(natives[name]), args)
+      return I("INat", assert(natives[name]), args)
    end
 
    local function lambda(params, body)
-      return C("IFun", desugar(body, scopeExtend(scope, params)))
+      return I("IFun", desugar(body, scopeExtend(scope, params)))
    end
 
-   local function apply(fnIL, argsAST)
-      return C("IApp", fnIL, nat("vvecNew", imap(argsAST, ds)))
+   local function apply(fnIL, argsIL)
+      return I("IApp", fnIL, nat("vvecNew", argsIL))
    end
 
    local function gp(valueAST, nameV)
       return nat("getProp", {ds(valueAST), IVal(nameV)})
+   end
+
+   local function mcall(valueAST, propNameV, argsIL)
+      return apply(gp(valueAST, propNameV), argsIL)
+   end
+
+   local function branch(aCond, aThen, aElse)
+      local branches = {lambda({}, aThen), lambda({}, aElse)}
+      return apply(mcall(aCond, "switch", branches), {})
    end
 
    local typ = ast.type
@@ -525,7 +539,7 @@ local function desugar(ast, scope)
    if typ == "Name" then
       local index, offset = scopeFind(scope, nameToString(ast))
       faultIf(index == nil, "Undefined", ast, nil)
-      return nat("vvecNth", {C("IArg", index), IVal(newVNum(offset))})
+      return nat("vvecNth", {I("IArg", index), IVal(newVNum(offset))})
    elseif typ == "Number" then
       return IVal(newVNum(ast[1]))
    elseif typ == "String" then
@@ -535,15 +549,17 @@ local function desugar(ast, scope)
       return lambda(params, body)
    elseif typ == "Op_()" then
       local fn, args = ast[1], ast[2]
-      return apply(ds(fn), args)
+      return apply(ds(fn), imap(args, ds))
    elseif typ == "Op_." then
       local value, name = ast[1], ast[2]
       return gp(value, nameToVStr(name))
    elseif typ == "If" then
-      return C("IBra", ds(ast[1][1]), ds(ast[1][2]), ds(ast[2]))
+      -- Desugar to: aCond.switch(() => aThen, () => aElse)()
+      local c, a, b = ast[1][1], ast[1][2], ast[2]
+      return branch(c, a, b)
    elseif typ == "Let" and ast[1][2] == "=" then
       local name, value, body = ast[1][1], ast[1][3], ast[2]
-      return apply(lambda({name}, body), {value})
+      return apply(lambda({name}, body), {ds(value)})
    elseif typ == "Ignore" then
       return ds(ast[2])
    elseif typ == "Vector" then
@@ -559,10 +575,11 @@ local function desugar(ast, scope)
       end
       return nat("vrecNew", {nat("vvecNew", keys), unpack(values)})
    elseif typ == "IIf" then
-      return C("IBra", ds(ast[1]), ds(ast[2]), ds(ast[3]))
+      local c, a, b = ast[1], ast[2], ast[3]
+      return branch(c, a, b)
    elseif typ:match("^Op_") then
       local a, b = ast[1], ast[2]
-      return apply(gp(a, typ), {b})
+      return apply(gp(a, typ), {ds(b)})
    elseif typ:match("^Unop_") then
       local a = ast[1]
       return gp(a, typ)
@@ -612,11 +629,12 @@ et("{a: 1, b: 2}", "{a: 1, b: 2}")
 -- operators and properties ...
 
 -- ... Boolean
-
 et("not (1==1)", "false")
 et("1==1 or 1==2", "true")
 et("1==1 and 1==2", "false")
 et("(1==1) != (1==2)", "true")
+et("(2==2).switch(1,0)", "1")
+et("(2==3).switch(1,0)", "0")
 
 -- ... Number
 et("1 + 2", "3")
@@ -633,14 +651,12 @@ et([[ "abc" == "abc" ]], "true")
 et([[ "abc"[1] ]], "98")
 
 -- ... Vector
-
 et("[7,8,9].len", "3")
 et("[7,8,9,0].slice(1,3)", "[8, 9]")
 et("[7,8,9,0].slice(1,1)", "[]")
 et("[7,8,9][1]", "8")
 
 -- ... Record
-
 et("{a:1}.a", "1")
 
 -- Fn

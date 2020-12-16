@@ -677,9 +677,11 @@ testL("-a^b+c*d", "(Op_+ (Unop_- (Op_^ a b)) (Op_* c d))")
 testL("a==b", "(Op_== a b)")
 testL("a<b<c", "(Op_and (Op_< a b) (Op_< b c))")
 
--- ?:
+-- ?:, $
 
 testL("a or b ? f : g $ x", "(Op_$ (IIf (Op_or a b) f g) x)")
+testL("a ? x : b ? y : z",
+      "(IIf a x (IIf b y z))")
 
 -- params => expr
 
