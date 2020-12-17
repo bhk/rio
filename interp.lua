@@ -464,26 +464,20 @@ end
 -- De-sugar Surface Language to Inner Language
 ----------------------------------------------------------------
 
-local function nameToString(ast)
-   assert(ast.T == "Name")
-   return ast[1]
-end
-
-local function nameToVStr(name)
-   test.eq(name.T, "Name")
-   return newVStr(name[1])
-end
+--------------------------------
+-- Scope object
+--------------------------------
 
 local emptyScope = {
    depth = 0
 }
 
-local function scopeExtend(scope, params)
+local function scopeExtend(scope, names)
    local s = clone(scope)
    local depth = scope.depth + 1
    s.depth = depth
-   for ii, name in ipairs(params) do
-      s[nameToString(name)] = {depth = depth, offset = ii-1}
+   for ii, name in ipairs(names) do
+      s[name] = {depth = depth, offset = ii-1}
    end
    return s
 end
@@ -493,6 +487,20 @@ local function scopeFind(scope, name)
    if defn then
       return scope.depth - defn.depth, defn.offset
    end
+end
+
+--------------------------------
+-- Desugar
+--------------------------------
+
+local function snameToString(ast)
+   assert(ast.T == "Name")
+   return ast[1]
+end
+
+local function snameToVStr(name)
+   test.eq(name.T, "Name")
+   return newVStr(name[1])
 end
 
 local function desugar(ast, scope)
@@ -505,7 +513,7 @@ local function desugar(ast, scope)
    end
 
    local function IVal(value)
-      -- promote Lua bool/num/string to Value, if necessary
+      -- Going forward: promote Lua bool/num/string to Value if necessary
       return I("IVal", value)
    end
 
@@ -514,7 +522,8 @@ local function desugar(ast, scope)
    end
 
    local function lambda(params, body)
-      return I("IFun", desugar(body, scopeExtend(scope, params)))
+      local names = imap(params, snameToString)
+      return I("IFun", desugar(body, scopeExtend(scope, names)))
    end
 
    local function apply(fnIL, argsIL)
@@ -537,7 +546,7 @@ local function desugar(ast, scope)
    local typ = ast.T
 
    if typ == "Name" then
-      local index, offset = scopeFind(scope, nameToString(ast))
+      local index, offset = scopeFind(scope, snameToString(ast))
       faultIf(index == nil, "Undefined", ast, nil)
       return nat("vvecNth", {I("IArg", index), IVal(newVNum(offset))})
    elseif typ == "Number" then
@@ -551,15 +560,15 @@ local function desugar(ast, scope)
       local fn, args = ast[1], ast[2]
       return apply(ds(fn), imap(args, ds))
    elseif typ == "Op_." then
-      local value, name = ast[1], ast[2]
-      return gp(value, nameToVStr(name))
+      local svalue, sname = ast[1], ast[2]
+      return gp(svalue, snameToVStr(sname))
    elseif typ == "If" then
       -- Desugar to: aCond.switch(() => aThen, () => aElse)()
       local c, a, b = ast[1][1], ast[1][2], ast[2]
       return branch(c, a, b)
    elseif typ == "Let" and ast[1][2] == "=" then
-      local name, value, body = ast[1][1], ast[1][3], ast[2]
-      return apply(lambda({name}, body), {ds(value)})
+      local sname, svalue, sbody = ast[1][1], ast[1][3], ast[2]
+      return apply(lambda({sname}, sbody), {ds(svalue)})
    elseif typ == "Ignore" then
       return ds(ast[2])
    elseif typ == "Vector" then
@@ -570,7 +579,7 @@ local function desugar(ast, scope)
       local keys = {}
       local values = {}
       for ii = 1, #rpairs, 2 do
-         keys[#keys+1] = IVal(nameToVStr(rpairs[ii]))
+         keys[#keys+1] = IVal(snameToVStr(rpairs[ii]))
          values[#values+1] = ds(rpairs[ii+1])
       end
       return nat("vrecNew", {nat("vvecNew", keys), unpack(values)})
@@ -593,13 +602,24 @@ end
 ----------------------------------------------------------------
 
 local function evalAST(ast)
-   return eval(desugar(ast, emptyScope), emptyEnv)
+   local manifest = {
+      ["true"] = true,
+      ["false"] = false,
+   }
+
+   -- create `scope` and `env` for manifest
+   local names = misc.getSortedKeys(manifest)
+   local values = imap(names, function (k) return manifest[k] end)
+   local scope = scopeExtend(emptyScope, names)
+   local env = envBind(emptyEnv, natives.vvecNew(unpack(values)))
+
+   return eval(desugar(ast, scope), env)
 end
 
 local function trapEval(fn, ...)
    local succ, value = xpcall(fn, debug.traceback, ...)
    if not succ and type(value) == "string" then
-      print(value)
+      print(value)  --for "should not happen" errors
       error(value, 0)
    end
    return value
@@ -610,6 +630,10 @@ local function et(source, evalue, eoob)
    test.eqAt(2, eoob or "", astFmtV(oob or {}))
    test.eqAt(2, evalue, valueFmt(trapEval(evalAST, ast)))
 end
+
+-- manifest variables
+
+et("true", 'true')
 
 -- parse error
 

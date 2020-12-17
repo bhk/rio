@@ -63,6 +63,25 @@ local function map(t, fn)
    return o
 end
 
+-- Return an array containing keys in `tbl` that are strings, sorted.
+--
+local function getSortedKeys(tbl)
+   local keys = {}
+   for k in pairs(tbl) do
+      if type(k) == "string" then
+         table.insert(keys, k)
+      end
+   end
+   table.sort(keys)
+   return keys
+end
+
+-- Iterate over elements with string keys, in order. Used as an alternative
+-- to `pairs`.
+local function pairsSorted(tbl)
+   return next, getSortedKeys(tbl), nil
+end
+
 -- Serialize a Lua "record" value in an S-expression-like syntax.
 --
 --  * Tables where t.T == nil: Serialize t[1...] as a vector.
@@ -101,6 +120,8 @@ local exports = {
    append = append,
    imap = imap,
    map = map,
+   getSortedKeys = getSortedKeys,
+   pairsSorted = pairsSorted,
    sexprFmt = sexprFmt,
 }
 

@@ -1,7 +1,6 @@
 TODO
 
 * Unimplemented language features:
-  - Manifest variables: true, false, ...
   - Let (other than `=`) & aliasing detection
   - Missing
   - For, Loop, LoopWhile, While
