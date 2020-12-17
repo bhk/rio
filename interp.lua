@@ -566,8 +566,19 @@ local function desugar(ast, scope)
       -- Desugar to: aCond.switch(() => aThen, () => aElse)()
       local c, a, b = ast[1][1], ast[1][2], ast[2]
       return branch(c, a, b)
-   elseif typ == "Let" and ast[1][2] == "=" then
-      local sname, svalue, sbody = ast[1][1], ast[1][3], ast[2]
+   elseif typ == "Let" then
+      -- operators:  =  :=  +=  *= ...
+      local sname, op, svalue, sbody = ast[1][1], ast[1][2], ast[1][3], ast[2]
+      -- aliasing: `=` must not; all others must
+      local index, offset = scopeFind(scope, snameToString(sname))
+      if (op == "=") ~= (index == nil) then
+         faultIf(true, (op == "=" and "Alias" or "Undefined"), ast, sname)
+      end
+      -- handle +=, etc.
+      local modop = op:match("^([^:=]+)")
+      if modop then
+         svalue = {T="Op_"..modop, sname, svalue}
+      end
       return apply(lambda({sname}, sbody), {ds(svalue)})
    elseif typ == "Ignore" then
       return ds(ast[2])
@@ -700,6 +711,10 @@ et("if 1 < 0: 1\n0\n", "0")
 -- Let
 
 et("x = 1\nx + 2\n", "3")
+et("x = 1\nx := 2\nx + 2\n", "4")
+et("x = 1\nx += 2\nx + 2\n", "5")
+et("x = 1\nx = 2\nx\n", '(VErr "Alias" (Let [x "=" 2] x) x)')
+et("x := 1\nx\n", '(VErr "Undefined" (Let [x ":=" 1] x) x)')
 
 local fib = [[
 _fib = (_fib, n) =>

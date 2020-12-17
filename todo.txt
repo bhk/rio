@@ -1,7 +1,6 @@
 TODO
 
 * Unimplemented language features:
-  - Let (other than `=`) & aliasing detection
   - Missing
   - For, Loop, LoopWhile, While
   - recursive definitions (forward declarations)
