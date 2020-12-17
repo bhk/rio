@@ -555,6 +555,9 @@ local function desugar(ast, scope)
       return IVal(newVStr(ast[1]))
    elseif typ == "Fn" then
       local params, body = ast[1], ast[2]
+      for _, sname in ipairs(params) do
+         faultIf(scopeFind(scope, snameToString(sname)), "Alias", ast, sname)
+      end
       return lambda(params, body)
    elseif typ == "Op_()" then
       local fn, args = ast[1], ast[2]
@@ -717,8 +720,8 @@ et("x = 1\nx = 2\nx\n", '(VErr "Alias" (Let [x "=" 2] x) x)')
 et("x := 1\nx\n", '(VErr "Undefined" (Let [x ":=" 1] x) x)')
 
 local fib = [[
-_fib = (_fib, n) =>
-    fib = n => _fib(_fib, n)
+_fib = (_self, n) =>
+    fib = n2 => _self(_self, n2)
     if n <= 1: 0
     if n == 2: 1
     fib(n - 1) + fib(n - 2)
