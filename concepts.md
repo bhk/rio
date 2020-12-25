@@ -18,7 +18,7 @@ The following list of ingredients can give one a feel for the flavor of Rio.
  * [Lexical scoping](#lexical-scoping)
  * [Duck typing](#duck-typing)
  * [Imperative Syntax](#imperative-syntax)
- * [Partial Evaluation](#partial-evaluation)
+ * [Compile-Time Evaluation](#compile-time-evaluation)
  * [Typed Structures](#typed-structures)
  * [Reactive Programming](#reactive-programming)
  * [Order Annotations](#order-annotations)
@@ -103,12 +103,6 @@ As currently formulated, the IL has five types of expressions:
    parent (the function that constructed the current function), and so on.
 
  * Constants.  A constant expression evaluates to a specific Rio value.
-
- * Branch.  A branch has three sub-expressions, a condition, a "then"
-   expression, and an "else" expression.  When a branch is evaluated, the
-   condition is first evaluated. If the result is `true`, the "then" expression
-   is evaluated and returned.  Otherwise, the "else" expression is evaluated
-   and returned.
 
 Variable bindings and data structures are [immutable](#immutability).
 
@@ -305,19 +299,19 @@ functions and variables defined at the top level than for variables defined
 within a function body.  In Rust, this means that the programmer cannot rely
 on type inference for globals, and must explicitly declare types.
 
-In Lua, JS, and Python, top-level code is function body code.  Compilation
-is just an optimization that does not complicate the language.
+In Lua, JavaScript, and Python, top-level code is function body code.
+Compilation is just an optimization that does not complicate the language.
 
 The motivations for assigning a different meaning to top-level code stem
 from the model for compilation and linking used by those language
 implementations, and from performance concerns.  These motivations disappear
-when [partial evaluation](#partial-evaluation) is supported.  The modules
-can be discovered, loaded, and evaluated at "compile-time".  Module return
-values, such as exported functions, are typically constant, allowing their
-returned functions to be directly linked with call sites, or even inlined.
-[Note that "bundle-time" or "deploy-time" is perhaps a better term in this
-case, since compilation of code, such as user-supplied code, at "run-time"
-is not absolutely forbidden.]
+when [compile-time evaluation](#compile-time-evaluation) is supported.  The
+modules can be discovered, loaded, and evaluated at "compile-time".  Module
+return values, such as exported functions, are typically constant, allowing
+their returned functions to be directly linked with call sites, or even
+inlined.  [Note that "bundle-time" or "deploy-time" is perhaps a better term
+in this case, since compilation of code, such as user-supplied code, at
+"run-time" is not absolutely forbidden.]
 
 
 ## Reactive Programming
@@ -824,95 +818,109 @@ the effort required in solving increases with the number of variables.
 
 ## Dynamic Typing
 
-We start with dynamic typing because it is easy to implement.  We like the
-assurances provided by static type checking, and look forward to introducing
-gradual typing in the future, and even beyond that, automated proof
-checking.  However, we first want to experiment with language design issues
-that are more fundamental, after which we can evaluate different approaches
-to static typing.  We anticipate an approach that views [type annotations
-as assertions](#type-annotations-as-assertions).
+Dynamic languages present a simple mental model of execution, making them
+relatively easy to learn and use.  One does not need to first learn a
+complex type system to understand the fundamentals.  This is not just a
+problem for novices, or the less educated or less intelligent.  The "[too
+many languages](#too-many-languages)" problem means that anyone working in
+software often find themselves needing to "dabble" in one language or
+another.
 
-Aside from type checking, statically typed languages usually offer
-performance benefits, because they allow type erasure, static method lookup,
-and better inlining.  However, we anticipate that [compile-time
-evaluation](#compile-time-evaluation) can yield the same benefits in a
-dynamic language.
-
-Dynamic language present a simple mental model of execution, making the
-language easier to learn and use.  One must learn the types of values the
-language supports, and the operations it allows.  One does not need to first
-learn a complex type system to understand the language constructs, because
-the type annotations will not change what the code does, they will only make
-assertions about values.  This is not just a problem for dabblers, novices,
-or the less educated or less intelligent.  The "[too many
-languages](#too-many-languages)" problem means that even experts working in
-software often find themselves dabbling in one language or another.  Every
-language should pull its own weight, and some languages are too heavyweight.
-
-Languages that support dynamic typing are more powerful.  Functions in a
-dynamic language are inherently polymorphic.  Without polymorphism or
-"generics" we end up writing essentially the same function again and
-again.  Statically typed languages require complex type systems for even
-modest degrees of polymorphism.
+Functions in a dynamic language are inherently polymorphic.  Without
+polymorphism or "generics" we end up writing essentially the same function
+again and again.  Statically typed languages require complex type systems
+for even modest degrees of polymorphism.
 
 Large projects in statically typed language often end up implementing their
 own mechanisms that mimic a dynamic language (see Greenspun's Tenth Rule).
 Instances where reflection is useful are good examples of this.  For
-example, consider writing a function that will serialize *any* value in your
-favorite statically typed language.
+example, consider writing a function that will serialize *any* data
+structure in your favorite statically typed language.
 
-Some even resort to meta-programming, which I see as an unfortunate result of
-a language's rigidity in its data typing and its notion of [compile-time](#compile-time).
-These are related concepts, since the whole notion of static typing is that
-a certain class of errors must be found at "compile-time", which is an
-arbitrary boundary in the case of large, evolving systems.
+One drawback typically expected from dynamic typing is lower performance,
+because without static typing we do not have type erasure, static method
+lookups, and inlining.  However, we anticipate that [compile-time
+evaluation](#compile-time-evaluation) can yield the same benefits in a
+dynamic language.
 
 
-## Type Annotations As Assertions
+## Gradual Typing
 
-If the language is defined appropriately, static type analysis can be seen
-as a set of inferences about the behavior/correctness of a program, and type
-annotations can be seen as assertions about its behavior, rather than
-something that is necessary to specify its behavior.  For example, in such a
-language the following code:
+Gradual typing allows a program to be written with or without static type
+declarations.  Adding type annotations to variables can help identify errors
+at compile-time, improve the maintainability of code, and enable performance
+optimizations.
 
-    function f(x : Integer) {
-       return x * 2;
-    }
+In the approach to gradual typing envisioned for Rio, type annotations will
+not influence the behavior of a program, other than by restricting the types
+of values that variables or expressions may take on.  To wit, if one were to
+strip all of the type annotations from a program, the resulting program will
+be as functional: it will behave equivalently for all inputs that the
+annotated program handled without errors.
 
-could be interpreted as equivalent to the following, given a suitable
-definition of “assert”:
+One can learn to use Rio, therefore, first by understanding its data types
+and operations allowed on them.  The concepts of type values, type
+expressions, and static typing may then be introduced to the programmer by
+describing them as run-time assertions.  For example:
 
-    function f(x) {
-       assert(typeof(x) == “Integer”);
-       return x * 2;
-    }
+    sq : Number -> Number
+        = x -> x*x
 
-The type information constrains the usage of this function, but does not
-influence what it does.
+Is equivalent to:
 
-By contrast, in other languages, type annotations complicate the model of
-computation.  One example is function overloading.  Another example is
-“backward” type propagation, in which type inference on the output of a
-function can influence the types used within the function.
+    sq = x ->
+        assert type(x) == Number
+        n*n
 
-[An alternative to backward type propagation is passing reified types to
-functions.  For example, if one wants a sum to be computed using floats, one
-can write “x = sum(Float, collection)” rather than “Float x =
-sum(collection)”, which results in a definition of `sum` that is explicit
-and less potentially confusing.]
+Given the [compile-time evaluation](#compile-time-evaluation) performed by
+Rio, the execution and failure of an assertion can often be predicted before
+the code is evaluated.  For example, even when the values of certain
+expressions are not known until run time, the types of those expressions may
+be known and run-time error may be deduced in advance.  In these cases, Rio
+will report the error immediately (e.g. at "compile time").
 
-There may be cases where an assertion will fail that cannot be predicted by
-static analysis.  Static analysis could, alternatively, ensure that it can
-prove that assertions will not fail, resulting in behavior equivalent to
-static type checking.  Such checks will in general forbid otherwise valid
-programs; the language could provide a directive for programmers to indicate
-the contexts in which this kind of checking is desired.
+An exhaustive set of unit tests (integrated into the program) will help
+ensure that run-time errors are either triggered by evaluation or predicted
+at compile time.  However, run-time errors may remain unpredicted, and this
+model of analysis (typing as assertions) provides no guarantee of soundness.
 
-Another observation is that this form of static analysis does not need to be
-limited to assertions about the *types* of values.  Predicting failures of
-other kinds of assertion failures (or proving them impossible) would be much
-more powerful than simply checking types.
+We then introduce a means for a programmer to identify a function as
+"sound".  This alters what the compiler will treat as an error, flipping the
+burden of proof.  Instead of raising errors when it can prove that the
+function will be called and encounter a type error at run-time, it will
+raise errors it *cannot* prove that the function will *not* be encounter a
+type error, *if* called.
+
+This form of static analysis does not need to be limited to assertions about
+the *types* of values.  Predicting failures of other kinds of assertion
+failures (or proving them impossible) would be much more powerful than
+simply checking types, and is an intriguing possibility to explore.
+
+These gradual typing objectives influence language design in the following
+ways (among others):
+
+The language must adhere to a simple model of execution. Types are a
+mechanism for making assertions about the program, not something that
+dictates the meaning of the program.  We do not have overloading in the
+sense of multiple alternative definitions of a variable bound at different
+places.  We do not have "backwards-in-time" type inference, so when one
+writes `x : BigNum = sum(vec)`, the type of `x` does not change the meaning
+of `sum(vec)`; it just makes an assertion about its result.  (If we want to
+a function to behave differently, we specify that in its inputs, as in `x =
+sum(vec, BigNum)`.)
+
+Methods and properties of the built-in data types should work well with the
+type system.  They should enable the compiler to infer types easily, and
+they should be easily describable in the type system, in order to minimize
+the number of type declarations required to achieve soundness.
+
+In order to increase opportunities for finding errors at compile-time, and
+to maximize the knowledge that can be propagated during [partial
+evaluation](#partial-evaluation), Rio semantics will often be "tighter" than
+those of other dynamic languages.  The arguments passed to a function must
+agree with its formal parameter list.  Rio provides fewer implicit type
+conversions, such as coercion to boolean.  Rio does not have a "null" value,
+and treats accesses of undefined vector or dictionary members as errors.
 
 
 ## The REPL Problem
@@ -1513,7 +1521,7 @@ When behavior is not completely specified by the language, it creates
 problems for programmers.  Unit tests may work one run, and fail the next.
 Programs working for months may suddenly fail.  Instead, we should prefer
 clearly specified behavior.  JavaScript's HashMap enumeration behavior is a
-good example of avoiding undefined behavior.
+good example of a design that avoids undefined behavior.
 
 Under no circumstances is it acceptable to use the C language's "all bets
 are off" definition of undefined behavior. When you cannot place any bounds
