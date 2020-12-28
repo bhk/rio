@@ -271,14 +271,14 @@ end
 --------------------------------
 
 local boolUnops = {
-   ["Unop_not"] = function (b) return not b end,
+   ["not"] = function (b) return not b end,
 }
 
 local boolBinops = {
-   ["Op_or"] = function (a, b) return a or b end,
-   ["Op_and"] = function (a, b) return a and b end,
-   ["Op_=="] = function (a, b) return a == b end,
-   ["Op_!="] = function (a, b) return a ~= b end,
+   ["{}or"] = function (a, b) return a or b end,
+   ["{}and"] = function (a, b) return a and b end,
+   ["{}=="] = function (a, b) return a == b end,
+   ["{}!="] = function (a, b) return a ~= b end,
 }
 
 local boolMethods = {
@@ -287,7 +287,7 @@ local boolMethods = {
       return self and args[1] or args[2]
    end,
 
-   ["Op_[]"] = function (self, args)
+   ["{}[]"] = function (self, args)
       local offset = args[1]
       faultIf(valueType(offset) ~= "number", "NotNumber", nil, offset)
       faultIf(offset < 0 or offset >= #self, "Bounds", nil, offset)
@@ -311,14 +311,14 @@ local strUnops = {
 
 -- "Operators" operate on two values of the same type
 local strBinops = {
-   ["Op_<"] = function (a, b) return a < b end,
-   ["Op_=="] = function (a, b) return a == b end,
-   ["Op_!="] = function (a, b) return a ~= b end,
-   ["Op_<="] = function (a, b) return a <= b end,
-   ["Op_<"] = function (a, b) return a < b end,
-   ["Op_>="] = function (a, b) return a >= b end,
-   ["Op_>"] = function (a, b) return a > b end,
-   ["Op_++"] = function (a, b) return a .. b end,
+   ["{}<"] = function (a, b) return a < b end,
+   ["{}=="] = function (a, b) return a == b end,
+   ["{}!="] = function (a, b) return a ~= b end,
+   ["{}<="] = function (a, b) return a <= b end,
+   ["{}<"] = function (a, b) return a < b end,
+   ["{}>="] = function (a, b) return a >= b end,
+   ["{}>"] = function (a, b) return a > b end,
+   ["{}++"] = function (a, b) return a .. b end,
 }
 
 local strMethods = {
@@ -331,7 +331,7 @@ local strMethods = {
       return self:sub(start+1, limit)
    end,
 
-   ["Op_[]"] = function (self, args)
+   ["{}[]"] = function (self, args)
       local offset = args[1]
       faultIf(valueType(offset) ~= "number", "NotNumber", nil, offset)
       faultIf(offset < 0 or offset >= #self, "Bounds", nil, offset)
@@ -350,24 +350,24 @@ local function newVNum(str)
 end
 
 local numUnops = {
-   ["Unop_-"] = function (a) return -a end,
+   ["-"] = function (a) return -a end,
 }
 
 local numBinops = {
-   ["Op_^"] = function (a, b) return a ^ b end,
-   ["Op_*"] = function (a, b) return a * b end,
-   ["Op_/"] = function (a, b) return a / b end,
-   ["Op_//"] = function (a, b) return math.floor(a / b) end,
-   ["Op_%"] = function (a, b) return a % b end,
-   ["Op_+"] = function (a, b) return a + b end,
-   ["Op_-"] = function (a, b) return a - b end,
-   ["Op_<"] = function (a, b) return a < b end,
-   ["Op_=="] = function (a, b) return a == b end,
-   ["Op_!="] = function (a, b) return a ~= b end,
-   ["Op_<="] = function (a, b) return a <= b end,
-   ["Op_<"] = function (a, b) return a < b end,
-   ["Op_>="] = function (a, b) return a >= b end,
-   ["Op_>"] = function (a, b) return a > b end,
+   ["{}^"] = function (a, b) return a ^ b end,
+   ["{}*"] = function (a, b) return a * b end,
+   ["{}/"] = function (a, b) return a / b end,
+   ["{}//"] = function (a, b) return math.floor(a / b) end,
+   ["{}%"] = function (a, b) return a % b end,
+   ["{}+"] = function (a, b) return a + b end,
+   ["{}-"] = function (a, b) return a - b end,
+   ["{}<"] = function (a, b) return a < b end,
+   ["{}=="] = function (a, b) return a == b end,
+   ["{}!="] = function (a, b) return a ~= b end,
+   ["{}<="] = function (a, b) return a <= b end,
+   ["{}<"] = function (a, b) return a < b end,
+   ["{}>="] = function (a, b) return a >= b end,
+   ["{}>"] = function (a, b) return a > b end,
 }
 
 behaviors.number = makeBehavior(numUnops, numBinops, {}, "number")
@@ -381,7 +381,7 @@ local vecUnops = {
 }
 
 local vecBinops = {
-   ["Op_++"] = function (a, b)
+   ["{}++"] = function (a, b)
       local o = clone(a)
       return move(b, 1, #b, #o+1, o)
    end,
@@ -397,7 +397,7 @@ local vecMethods = {
       return {T="VVec", unpack(self, start+1, limit)}
    end,
 
-   ["Op_[]"] = function (self, args)
+   ["{}[]"] = function (self, args)
       local offset = args[1]
       faultIf(valueType(offset) ~= "number", "NotNumber", nil, offset)
       faultIf(offset < 0 or offset >= #self, "Bounds", nil, offset)
@@ -530,7 +530,7 @@ local function desugarS(ast)
    end
 
    local function binop(op, a, b)
-      return call(gp(a, "Op_"..op), {b})
+      return call(gp(a, "{}"..op), {b})
    end
 
    local typ = ast.T
@@ -544,12 +544,18 @@ local function desugarS(ast)
    elseif typ == "Fn" then
       local params, body = ast[1], ast[2]
       return lambda(imap(params, snameToString), ds(body))
-   elseif typ == "Op_()" then
+   elseif typ =="Call" then
       local fn, args = ast[1], ast[2]
       return {T="MCall", ds(fn), imap(args, ds)}
-   elseif typ == "Op_." then
-      local svalue, sname = ast[1], ast[2]
-      return gp(ds(svalue), snameToString(sname))
+   elseif typ =="Dot" then
+      local a, b = ast[1], ast[2]
+      return gp(ds(a), snameToString(b))
+   elseif typ =="Index" then
+      local a, b = ast[1], ast[2]
+      return binop("[]", ds(a), ds(b))
+   elseif typ =="Binop" then
+      local op, a, b = ast[1], ast[2], ast[3]
+      return binop(op, ds(a), ds(b))
    elseif typ == "If" then
       -- Desugar to: aCond.switch(() => aThen, () => aElse)()
       local c, a, b = ast[1][1], ast[1][2], ast[2]
@@ -582,16 +588,11 @@ local function desugarS(ast)
    elseif typ == "IIf" then
       local c, a, b = ast[1], ast[2], ast[3]
       return branch(ds(c), ds(a), ds(b))
-   elseif typ:match("^Op_") then
-      local a, b = ast[1], ast[2]
-      local op = typ:match("Op_(.*)")
-      return binop(op, ds(a), ds(b))
-   elseif typ:match("^Unop_") then
-      local a = ast[1]
-      return gp(ds(a), typ)
-   else
-      return N("MError", string.format("Unsupported: %s", astFmt(ast)))
+   elseif typ == "Unop" then
+      local op, svalue = ast[1], ast[2]
+      return gp(ds(svalue), op)
    end
+   return N("MError", string.format("Unsupported: %s", astFmt(ast)))
 end
 
 ----------------------------------------------------------------
@@ -785,7 +786,7 @@ et("{a:1}.a", "1")
 
 et("x => x", "(...) => $0[0]")
 
--- Op_()
+-- Binop ()
 
 et("(x => 1)(2)", "1")
 et("(x => x+1)(2)", "3")

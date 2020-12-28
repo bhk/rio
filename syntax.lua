@@ -8,8 +8,11 @@
 --   (Vector [items...])
 --   (Record [name value ...])
 --   (Fn [params...] body)
---   (Op_X a b)
---   (Unop_X a)
+--   (Op op a b)
+--   (Unop op a)
+--   (Call fn args)
+--   (Dot a name)
+--   (Index a b)
 --   (IIf a b c)
 --   (For [name seq body] k)
 --   (If [cond then] k)
@@ -288,28 +291,35 @@ local atom =
    + nlBlock * ss / joinBlock
 
 
--- left-associative binary operators
-local function joinLTR(e, ...)
-   for ii = 1, select("#", ...), 3 do
-      local pos, op, param = select(ii, ...)
-      e = Node("Op_" .. op, pos, e, param)
+local function binop(op, pos, a, b)
+   return Node("Binop", pos, op, a, b)
+end
+
+-- left-associative operators
+local function joinLTR(mergeOp)
+   -- captures = expr (pos op expr)...
+   return function (e, ...)
+      for ii = 1, select("#", ...), 3 do
+         local pos, op, param = select(ii, ...)
+         e = mergeOp(op, pos, e, param)
+      end
+      return e
    end
-   return e
 end
 
 local function matchLTR(e, pat)
-   return e * (cp * pat * e)^0 / joinLTR
+   return e * (cp * pat * e)^0 / joinLTR(binop)
 end
 
 local function matchSuf(e, pat)
-   return e * (cp * pat)^0 / joinLTR
+   return e * (cp * pat)^0 / joinLTR(Node)
 end
 
 
 -- right-associative binary operators
 local function joinRTL(a, pos, op, ...)
    if op then
-      return Node("Op_" .. op, pos, a, joinRTL(...))
+      return binop(op, pos, a, joinRTL(...))
    end
    return a
 end
@@ -322,7 +332,7 @@ end
 -- unary prefix operators
 local function joinPre(pos, op, ...)
    if op then
-      return Node("Unop_" .. op, pos, joinPre(...))
+      return Node("Unop", pos, op, joinPre(...))
    end
    -- final capture is the expression
    return pos
@@ -337,11 +347,11 @@ local function joinRel(e1, pos, op, e2, pos2, ...)
    if not pos then
       return e1
    end
-   local rel = Node("Op_" .. op, pos, e1, e2)
+   local rel = binop(op, pos, e1, e2)
    if not pos2 then
       return rel
    end
-   return Node("Op_and", pos, rel, joinRel(e2, pos2, ...))
+   return binop("and", pos, rel, joinRel(e2, pos2, ...))
 end
 
 local function matchRel(e, pat)
@@ -364,10 +374,10 @@ local function joinFn(pos, params, ...)
    return Node("Fn", pos, params, joinFn(...))
 end
 
-
-local callSuffix = T"(" * Cc"()" * cseq(expr) * (T")" + E"CloseParen")
-local memberSuffix = T"[" * Cc"[]" * needExpr * (T"]" + E"CloseSquare")
-local dotSuffix = O"." * (nameNode + N("Missing", P(0)) * E"DotName")
+-- Each suffix captures two values: nodeType & expr
+local callSuffix = T"(" * Cc"Call" * cseq(expr) * (T")" + E"CloseParen")
+local memberSuffix = T"[" * Cc"Index" * needExpr * (T"]" + E"CloseSquare")
+local dotSuffix = T"." * Cc"Dot" * (nameNode + N("Missing", P(0)) * E"DotName")
 
 local params = T"(" * cseq(varNode) * T")" + Ct(varNode)
 
@@ -650,36 +660,36 @@ testL("(12)", "12")
 
 -- suffix operators
 
-testL("a.b", '(Op_. a b)')
-testL("a.", '(Op_. a (Missing))', '(Error "DotName")')
-testL("a[1]", '(Op_[] a 1)')
-testL("a(1,x)", '(Op_() a [1 x])')
-testL("a . b [ 1 ] ( 2 ) ",  '(Op_() (Op_[] (Op_. a b) 1) [2])')
+testL("a.b", '(Dot a b)')
+testL("a.", '(Dot a (Missing))', '(Error "DotName")')
+testL("a[1]", '(Index a 1)')
+testL("a(1,x)", '(Call a [1 x])')
+testL("a . b [ 1 ] ( 2 ) ",  '(Call (Index (Dot a b) 1) [2])')
 
 -- RTL operator
 
-testL("a^b^c", '(Op_^ a (Op_^ b c))')
+testL("a^b^c", '(Binop "^" a (Binop "^" b c))')
 
 -- prefix
 
-testL("-a", '(Unop_- a)')
+testL("-a", '(Unop "-" a)')
 
 -- LTR operators
 
-testL("a+b-c", '(Op_- (Op_+ a b) c)')
+testL("a+b-c", '(Binop "-" (Binop "+" a b) c)')
 
 -- precedence
 
-testL("-3^b+c*d", '(Op_+ (Unop_- (Op_^ 3 b)) (Op_* c d))')
+testL("-3^b+c*d", '(Binop "+" (Unop "-" (Binop "^" 3 b)) (Binop "*" c d))')
 
 -- relational
 
-testL("a==b", '(Op_== a b)')
-testL("a<b<c", '(Op_and (Op_< a b) (Op_< b c))')
+testL("a==b", '(Binop "==" a b)')
+testL("a<b<c", '(Binop "and" (Binop "<" a b) (Binop "<" b c))')
 
 -- ?:, $
 
-testL("a or b ? f : g $ x", '(Op_$ (IIf (Op_or a b) f g) x)')
+testL("a or b ? f : g $ x", '(Binop "$" (IIf (Binop "or" a b) f g) x)')
 testL("a ? x : b ? y : z",
       '(IIf a x (IIf b y z))')
 
@@ -711,7 +721,7 @@ testL("a b c", "a", '(Error "Garbage")')
 
 -- block body
 
-testL("a + \n  x=1\n  x\n", '(Op_+ a (Let [x "=" 1] x))')
+testL("a + \n  x=1\n  x\n", '(Binop "+" a (Let [x "=" 1] x))')
 
 -- test `Module`
 
@@ -724,7 +734,8 @@ f = (x) =>
 f(2)
 ]]
 
-testM(t1, '(Let [f "=" (Fn [x] (If [(Op_< x 1) 0] (Op_+ x 1)))] (Op_() f [2]))',
+testM(t1, ('(Let [f "=" (Fn [x] (If [(Binop "<" x 1) 0] (Binop "+" x 1)))]'
+              .. ' (Call f [2]))'),
       '(Comment "# C1")')
 
 testM([[
