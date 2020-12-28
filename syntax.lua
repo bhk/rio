@@ -13,6 +13,7 @@
 --   (IIf a b c)
 --   (For [name seq body] k)
 --   (If [cond then] k)
+--   (Loop k)
 --   (LoopWhile [cond body] k)
 --   (While [cond] k)
 --   (Let [name op value] k)
@@ -402,7 +403,7 @@ local statement =
    N("S-For", Tfor * varNode * T"in" * expr * T":" * expr)
    + N("S-If", Tif * expr * T":" * expr)
    + N("S-LoopWhile", T"loop" * Twhile * expr * T":" * expr)
-   + N("S-Loop", T"loop" * T":")
+   + N("S-Loop", T"loop" * T":" * needExpr)
    + N("S-While", Twhile * needExpr)
    + N("S-Let", varNode * letOp * needExpr)
    + N("S-Act", params * T"<-" * needExpr)
@@ -697,7 +698,9 @@ testL("x = 1", '(S-Let x "=" 1)')
 testL("x := 1", '(S-Let x ":=" 1)')
 testL("x <- a", '(S-Act [x] a)')
 testL("if a: x", '(S-If a x)')
-testL("loop:", '(S-Loop)')
+testL("loop:", '(S-Loop (Missing))')
+testL("loop: repeat\n  repeat\n", '(S-Loop repeat)')
+testL("loop:\n  repeat\n", '(S-Loop repeat)')
 testL("while c:", '(S-While c)')
 testL("loop while C: B", '(S-LoopWhile C B)')
 testL("for x in E: B", '(S-For x E B)')
@@ -709,7 +712,6 @@ testL("a b c", "a", '(Error "Garbage")')
 -- block body
 
 testL("a + \n  x=1\n  x\n", '(Op_+ a (Let [x "=" 1] x))')
-
 
 -- test `Module`
 
@@ -724,5 +726,13 @@ f(2)
 
 testM(t1, '(Let [f "=" (Fn [x] (If [(Op_< x 1) 0] (Op_+ x 1)))] (Op_() f [2]))',
       '(Comment "# C1")')
+
+testM([[
+loop:
+  x += 1
+  repeat
+x
+]],
+      '(Loop [(Let [x "+=" 1] repeat)] x)')
 
 return exports
