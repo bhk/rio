@@ -62,7 +62,7 @@ local ilFormatters = {
       end
       local argValues = concat(imap(args, fmt), " ")
       if name == "vvecNew" then
-         return "[" .. argValues .. "]"
+         return "@[" .. argValues .. "]"
       end
       return ("(%s %s)"):format(name, argValues)
    end
@@ -142,7 +142,7 @@ function valueFmt(value)
    elseif value.T == "VRec" then
       local o = {}
       for _, pair in ipairs(value) do
-         o[#o+1] = pair[1] .. ": " .. valueFmt(pair[2])
+         o[#o+1] = tostring(pair[1]) .. ": " .. valueFmt(pair[2])
       end
       return "{" .. concat(o, ", ") .. "}"
    elseif value.T == "VFun" then
@@ -441,16 +441,22 @@ behaviors.VRec = function (value, name)
    return baseBehavior(value, name)
 end
 
-function natives.vrecNew(names, ...)
+function natives.vrecNew(names, values)
    local v = {T="VRec"}
    for ii, name in ipairs(names) do
-      v[ii] = {name, assert( (select(ii, ...)) )}
+      v[ii] = {name, values[ii]}
    end
    return v
 end
 
-test.eq(natives.vrecNew({"a", "b"}, 3, 5),
-        {T="VRec", {"a", 3}, {"b", 5}})
+-- recDef: names -> values -> record
+function natives.recDef(names)
+   return {
+      T="VFun",
+      emptyEnv,
+      {T="INat", natives.vrecNew, {{T="IVal", names}, {T="IArg", 0}}}
+   }
+end
 
 --------------------------------
 -- Store names of native functions for debugging
@@ -461,7 +467,135 @@ for name, fn in pairs(natives) do
 end
 
 ----------------------------------------------------------------
--- De-sugar Surface Language to Inner Language
+-- desugarS: Surface Language to Middle Language
+----------------------------------------------------------------
+--
+-- This translation requires no knowledge of the enclosing scope, and could
+-- be replaced by a set of constructors passed to the parser.
+--
+-- The middle language retains surface language semantics but uses a reduced
+-- set of primitives.  Functions accept argument bundles, and values have
+-- properties.
+--
+--     (MVal value)
+--     (MName name)
+--     (MFun params mexpr sOK)
+--     (MCall fn args)
+--     (MProp value name)
+--     (MLoop body k)
+--     (MError desc)
+--
+-- params: {string...}
+-- name: string
+--
+-- There is no "native" construct, but constructed expressions may reference
+-- the free variables ".vecNew" and ".recDef", with meanings to be supplied
+-- by M->I desugaring.
+
+local function snameToString(ast)
+   assert(ast.T == "Name")
+   return ast[1]
+end
+
+local function snameToVStr(ast)
+   return newVStr(snameToString(ast))
+end
+
+local function desugarS(ast)
+   local ds = desugarS
+
+   local function N(typ, ...)
+      return {T=typ, ast=ast, ...}
+   end
+
+   local function lambda(params, body, isShadow)
+      return N("MFun", params, body, isShadow or false)
+   end
+
+   local function call(mfn, margs)
+      return N("MCall", mfn, margs)
+   end
+
+   local function gp(mvalue, name)
+      return N("MProp", mvalue, name)
+   end
+
+   local function send(value, name, args)
+      return call(gp(value, name), args)
+   end
+
+   local function branch(mcond, mthen, melse)
+      return call(send(mcond, "switch", {lambda({}, mthen), lambda({}, melse)}),
+                  {})
+   end
+
+   local function binop(op, a, b)
+      return call(gp(a, "Op_"..op), {b})
+   end
+
+   local typ = ast.T
+
+   if typ == "Name" then
+      return N("MName", ast[1])
+   elseif typ == "Number" then
+      return N("MVal", newVNum(ast[1]))
+   elseif typ == "String" then
+      return N("MVal", newVStr(ast[1]))
+   elseif typ == "Fn" then
+      local params, body = ast[1], ast[2]
+      return lambda(imap(params, snameToString), ds(body))
+   elseif typ == "Op_()" then
+      local fn, args = ast[1], ast[2]
+      return {T="MCall", ds(fn), imap(args, ds)}
+   elseif typ == "Op_." then
+      local svalue, sname = ast[1], ast[2]
+      return gp(ds(svalue), snameToString(sname))
+   elseif typ == "If" then
+      -- Desugar to: aCond.switch(() => aThen, () => aElse)()
+      local c, a, b = ast[1][1], ast[1][2], ast[2]
+      return branch(ds(c), ds(a), ds(b))
+   elseif typ == "Let" then
+      -- operators:  =  :=  +=  *= ...
+      local sname, op, svalue, sbody = ast[1][1], ast[1][2], ast[1][3], ast[2]
+      local name, value, body = snameToString(sname), ds(svalue), ds(sbody)
+      -- handle +=, etc.
+      local modop = op:match("^([^:=]+)")
+      if modop then
+         value = binop(modop, ds(sname), value)
+      end
+      return call(lambda({name}, body, op ~= "="), {value})
+   elseif typ == "Ignore" then
+      return ds(ast[2])
+   elseif typ == "Vector" then
+      local elems = ast[1]
+      return call(N("MName", ".vecNew"), imap(elems, ds))
+   elseif typ == "Record" then
+      local rpairs = ast[1]
+      local keys = {}
+      local values = {}
+      for ii = 1, #rpairs, 2 do
+         keys[#keys+1] = N("MVal", snameToVStr(rpairs[ii]))
+         values[#values+1] = ds(rpairs[ii+1])
+      end
+      local recCons = call(N("MName", ".recDef"), keys)
+      return call(recCons, values)
+   elseif typ == "IIf" then
+      local c, a, b = ast[1], ast[2], ast[3]
+      return branch(ds(c), ds(a), ds(b))
+   elseif typ:match("^Op_") then
+      local a, b = ast[1], ast[2]
+      local op = typ:match("Op_(.*)")
+      return binop(op, ds(a), ds(b))
+   elseif typ:match("^Unop_") then
+      local a = ast[1]
+      return gp(ds(a), typ)
+   else
+      return N("MError", string.format("Unsupported: %s", astFmt(ast)))
+   end
+end
+
+----------------------------------------------------------------
+-- desugarM: Middle Language to Inner Language
 ----------------------------------------------------------------
 
 --------------------------------
@@ -490,125 +624,75 @@ local function scopeFind(scope, name)
 end
 
 --------------------------------
--- Desugar
+-- DesugarM
 --------------------------------
 
-local function snameToString(ast)
-   assert(ast.T == "Name")
+local builtins = {
+   -- Just return the arg bundle (currently the same as a vector)
+   [".vecNew"] = {T="VFun", emptyEnv, {T="IArg", 0}},
+   [".recDef"] = {T="VFun", emptyEnv, {T="INat",
+                                       assert(natives.recDef),
+                                       {{T="IArg", 0}}}},
+}
+
+local function mnameToString(ast)
+   assert(ast.T == "MName")
    return ast[1]
 end
 
-local function snameToVStr(name)
-   test.eq(name.T, "Name")
-   return newVStr(name[1])
-end
-
-local function desugar(ast, scope)
+local function desugarM(node, scope)
    local function ds(a)
-      return desugar(a, scope)
+      return desugarM(a, scope)
    end
 
-   local function I(typ, ...)
-      return {T=typ, ast=ast, ...}
-   end
-
-   local function IVal(value)
-      -- Going forward: promote Lua bool/num/string to Value if necessary
-      return I("IVal", value)
+   local function N(typ, ...)
+      return {T=typ, ast=node.ast, ...}
    end
 
    local function nat(name, args)
-      return I("INat", assert(natives[name]), args)
+      return N("INat", assert(natives[name]), args)
    end
 
-   local function lambda(params, body)
-      local names = imap(params, snameToString)
-      return I("IFun", desugar(body, scopeExtend(scope, names)))
-   end
+   local typ = node.T
 
-   local function apply(fnIL, argsIL)
-      return I("IApp", fnIL, nat("vvecNew", argsIL))
-   end
-
-   local function gp(valueAST, nameV)
-      return nat("getProp", {ds(valueAST), IVal(nameV)})
-   end
-
-   local function mcall(valueAST, propNameV, argsIL)
-      return apply(gp(valueAST, propNameV), argsIL)
-   end
-
-   local function branch(aCond, aThen, aElse)
-      local branches = {lambda({}, aThen), lambda({}, aElse)}
-      return apply(mcall(aCond, "switch", branches), {})
-   end
-
-   local typ = ast.T
-
-   if typ == "Name" then
-      local index, offset = scopeFind(scope, snameToString(ast))
-      faultIf(index == nil, "Undefined", ast, nil)
-      return nat("vvecNth", {I("IArg", index), IVal(newVNum(offset))})
-   elseif typ == "Number" then
-      return IVal(newVNum(ast[1]))
-   elseif typ == "String" then
-      return IVal(newVStr(ast[1]))
-   elseif typ == "Fn" then
-      local params, body = ast[1], ast[2]
-      for _, sname in ipairs(params) do
-         faultIf(scopeFind(scope, snameToString(sname)), "Alias", ast, sname)
+   if typ == "MName" then
+      local name = node[1]
+      if builtins[name] then
+         return {T="IVal", builtins[name]}
       end
-      return lambda(params, body)
-   elseif typ == "Op_()" then
-      local fn, args = ast[1], ast[2]
-      return apply(ds(fn), imap(args, ds))
-   elseif typ == "Op_." then
-      local svalue, sname = ast[1], ast[2]
-      return gp(svalue, snameToVStr(sname))
-   elseif typ == "If" then
-      -- Desugar to: aCond.switch(() => aThen, () => aElse)()
-      local c, a, b = ast[1][1], ast[1][2], ast[2]
-      return branch(c, a, b)
-   elseif typ == "Let" then
-      -- operators:  =  :=  +=  *= ...
-      local sname, op, svalue, sbody = ast[1][1], ast[1][2], ast[1][3], ast[2]
-      -- aliasing: `=` must not; all others must
-      local index, offset = scopeFind(scope, snameToString(sname))
-      if (op == "=") ~= (index == nil) then
-         faultIf(true, (op == "=" and "Alias" or "Undefined"), ast, sname)
+      local index, offset = scopeFind(scope, name)
+      faultIf(index == nil, "Undefined", node.ast, name)
+      return nat("vvecNth", {N("IArg", index), N("IVal", newVNum(offset))})
+   elseif typ == "MVal" then
+      local value = node[1]
+      return N("IVal", value)
+   elseif typ == "MFun" then
+      local params, body, isShadow = node[1], node[2], node[3]
+      -- check for un-sanctioned shadowing
+      for _, name in ipairs(params) do
+         local index = scopeFind(scope, name)
+         faultIf(isShadow == not index,
+                 index and "Alias" or "Undefined",
+                 node.ast, name)
       end
-      -- handle +=, etc.
-      local modop = op:match("^([^:=]+)")
-      if modop then
-         svalue = {T="Op_"..modop, sname, svalue}
-      end
-      return apply(lambda({sname}, sbody), {ds(svalue)})
-   elseif typ == "Ignore" then
-      return ds(ast[2])
-   elseif typ == "Vector" then
-      local elems = ast[1]
-      return nat("vvecNew", imap(elems, ds))
-   elseif typ == "Record" then
-      local rpairs = ast[1]
-      local keys = {}
-      local values = {}
-      for ii = 1, #rpairs, 2 do
-         keys[#keys+1] = IVal(snameToVStr(rpairs[ii]))
-         values[#values+1] = ds(rpairs[ii+1])
-      end
-      return nat("vrecNew", {nat("vvecNew", keys), unpack(values)})
-   elseif typ == "IIf" then
-      local c, a, b = ast[1], ast[2], ast[3]
-      return branch(c, a, b)
-   elseif typ:match("^Op_") then
-      local a, b = ast[1], ast[2]
-      return apply(gp(a, typ), {ds(b)})
-   elseif typ:match("^Unop_") then
-      local a = ast[1]
-      return gp(a, typ)
+      return N("IFun", desugarM(body, scopeExtend(scope, params)))
+   elseif typ == "MCall" then
+      local fn, args = node[1], node[2]
+      return N("IApp", ds(fn), nat("vvecNew", imap(args, ds)))
+   elseif typ == "MProp" then
+      local value, name = node[1], node[2]
+      return nat("getProp", {ds(value), N("IVal", name)})
+   elseif typ == "MLoop" then
+      faultIf(true, "Unimplemented: MLoop", node, nil)
+   elseif typ == "MError" then
+      faultIf(true, "Error", node, nil)
    else
-      test.fail("Unsupported: %s", astFmt(ast))
+      assert("unknown M-record: " .. recFmt(node))
    end
+end
+
+local function desugar(ast, scope)
+   return desugarM(desugarS(ast), scope)
 end
 
 ----------------------------------------------------------------
@@ -633,7 +717,7 @@ end
 local function trapEval(fn, ...)
    local succ, value = xpcall(fn, debug.traceback, ...)
    if not succ and type(value) == "string" then
-      print(value)  --for "should not happen" errors
+      -- print(value)  --for "should not happen" errors
       error(value, 0)
    end
    return value
@@ -655,7 +739,7 @@ et(".5", "0.5", '(Error "NumDigitBefore")')
 
 -- eval error
 
-et("x", '(VErr "Undefined" x)')
+et("x", '(VErr "Undefined" x "x")')
 
 -- literals and constructors
 
@@ -716,8 +800,8 @@ et("if 1 < 0: 1\n0\n", "0")
 et("x = 1\nx + 2\n", "3")
 et("x = 1\nx := 2\nx + 2\n", "4")
 et("x = 1\nx += 2\nx + 2\n", "5")
-et("x = 1\nx = 2\nx\n", '(VErr "Alias" (Let [x "=" 2] x) x)')
-et("x := 1\nx\n", '(VErr "Undefined" (Let [x ":=" 1] x) x)')
+et("x = 1\nx = 2\nx\n", '(VErr "Alias" (Let [x "=" 2] x) "x")')
+et("x := 1\nx\n", '(VErr "Undefined" (Let [x ":=" 1] x) "x")')
 
 local fib = [[
 _fib = (_self, n) =>

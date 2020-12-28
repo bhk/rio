@@ -1,24 +1,27 @@
 TODO
 
 * Unimplemented language features:
-  - Missing
   - For, Loop, LoopWhile, While
   - recursive definitions (forward declarations)
-  - Vectors: `==`, `!=`
-  - Records: `==`, `!=`
   - short-circuiting `or` & `and`
   - `$`
   - `.?`
   - `<!`
   - assert
   - type constructors
+  - `where`
   - `match`
+  - destructuring assignment with "else:" clause
   - Act
+  - Vector & record equality
   - String syntax: `\xXX` and `\u{X...}`
+  - `'` suffixes in variable names (shadowing avoidance)
+  - Rest/spread in vector constructors/destructors
+  - dictionaries/hashmaps
 
-* Going "full lambda": implementing Rio values as CFun
-   - Rio "function" => CFun that expects an ArgBundle argument
-   - Other values => CFun that expects property name.
+* Going "full lambda": implementing Rio values as IFun
+   - Rio "function" => IFun that expects an ArgBundle argument
+   - Other values => IFun that expects property name.
         fenv holds instance & class?  `eval` will bind arg to @0,
         so it must conform to the env interface.  Non-function
         values ("native data") could appear at @1, @2, ...
@@ -28,9 +31,6 @@ TODO
 * Visualize execution
   - collect execution trace
   - capture start & end of elements
-
-* Record construction alternative approach in IL: first construct type (from
-  const data) *then* instantiate?
 
 * riodoc: concepts.txt --> concepts.md
   1. [[a b c]]  -->  [a b c](#a-b-c)
