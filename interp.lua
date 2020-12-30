@@ -4,8 +4,9 @@ local test = require "test"
 local misc = require "misc"
 local syntax = require "syntax"
 
-local map, imap, clone, move, override, sexprFmt =
-   misc.map, misc.imap, misc.clone, misc.move, misc.override, misc.sexprFmt
+local append, clone, ifilter, imap, map, move, override, sexprFmt =
+   misc.append, misc.clone, misc.ifilter, misc.imap, misc.map,
+   misc.move, misc.override, misc.sexprFmt
 local astFmt, astFmtV = syntax.astFmt, syntax.astFmtV
 local concat, unpack = table.concat, table.unpack
 
@@ -497,8 +498,12 @@ local function snameToString(ast)
    return ast[1]
 end
 
-local function snameToVStr(ast)
-   return newVStr(snameToString(ast))
+local mlFormatters = {
+   MName = function (v) return v[1] end,
+}
+
+local function mlFmt(node)
+   return sexprFmt(node, mlFormatters)
 end
 
 local function desugarS(ast)
@@ -508,8 +513,8 @@ local function desugarS(ast)
       return {T=typ, ast=ast, ...}
    end
 
-   local function lambda(params, body, isShadow)
-      return N("MFun", params, body, isShadow or false)
+   local function lambda(params, body, shadowMode)
+      return N("MFun", params, body, shadowMode)
    end
 
    local function call(mfn, margs)
@@ -556,6 +561,12 @@ local function desugarS(ast)
    elseif typ =="Binop" then
       local op, a, b = ast[1], ast[2], ast[3]
       return binop(op, ds(a), ds(b))
+   elseif typ == "Unop" then
+      local op, svalue = ast[1], ast[2]
+      return gp(ds(svalue), op)
+   elseif typ == "IIf" then
+      local c, a, b = ast[1], ast[2], ast[3]
+      return branch(ds(c), ds(a), ds(b))
    elseif typ == "If" then
       -- Desugar to: aCond.switch(() => aThen, () => aElse)()
       local c, a, b = ast[1][1], ast[1][2], ast[2]
@@ -569,7 +580,8 @@ local function desugarS(ast)
       if modop then
          value = binop(modop, ds(sname), value)
       end
-      return call(lambda({name}, body, op ~= "="), {value})
+      local shadowMode = op == "=" and "=" or ":="
+      return call(lambda({name}, body, shadowMode), {value})
    elseif typ == "Ignore" then
       return ds(ast[2])
    elseif typ == "Vector" then
@@ -580,19 +592,17 @@ local function desugarS(ast)
       local keys = {}
       local values = {}
       for ii = 1, #rpairs, 2 do
-         keys[#keys+1] = N("MVal", snameToVStr(rpairs[ii]))
+         keys[#keys+1] = N("MVal", newVStr(snameToString(rpairs[ii])))
          values[#values+1] = ds(rpairs[ii+1])
       end
       local recCons = call(N("MName", ".recDef"), keys)
       return call(recCons, values)
-   elseif typ == "IIf" then
-      local c, a, b = ast[1], ast[2], ast[3]
-      return branch(ds(c), ds(a), ds(b))
-   elseif typ == "Unop" then
-      local op, svalue = ast[1], ast[2]
-      return gp(ds(svalue), op)
+   elseif typ == "Loop" then
+      local body, k = ast[1][1], ast[2]
+      return N("MLoop", ds(body), ds(k))
+   else
+      test.fail("Unknown AST: %s", astFmt(ast))
    end
-   return N("MError", string.format("Unsupported: %s", astFmt(ast)))
 end
 
 ----------------------------------------------------------------
@@ -604,7 +614,8 @@ end
 --------------------------------
 
 local emptyScope = {
-   depth = 0
+   depth = 0,
+   macros = {},
 }
 
 local function scopeExtend(scope, names)
@@ -641,6 +652,64 @@ local function mnameToString(ast)
    return ast[1]
 end
 
+-- Return array of variable names assigned within `node`
+--
+local function findLets(node)
+   local typ = node.T
+   local vars = {}
+   local subexprs = {}
+   if typ == "MFun" then
+      local params, body = node[1], node[2]
+      vars = params
+      subexprs = {body}
+   elseif typ == "MCall" then
+      local fn, args = node[1], node[2]
+      subexprs = append({fn}, args)
+   elseif typ == "MProp" then
+      local value, name = node[1], node[2]
+      subexprs = {value}
+   elseif typ == "MLoop" then
+      local body, k = node[1], node[2]
+      subexprs = {body, k}
+   end
+
+   for _, e in ipairs(subexprs) do
+      vars = append(vars, findLets(e))
+   end
+   return vars
+end
+
+local function nm(str)
+   return {T="MName", str}
+end
+
+local function mbreak(loopVars)
+   return {T="MCall", nm".post", imap(loopVars, nm)}
+end
+
+local function mrepeat(loopVars)
+   return {T="MCall", nm".body", imap(append({".body"}, loopVars), nm)}
+end
+
+local function mlet(name, value, expr)
+   return {T="MCall", {T="MFun", {name}, expr}, {value}}
+end
+
+-- Reduce an MLoop expression to other ML expressions
+--
+--  (Loop BODY K) ==>
+--     .post = (VARS) => K
+--     break ~~> .post(VARS)
+--     repeat ~~> .body(body, VARS)
+--     .body = (.body, VARS) -> BODY
+--     repeat
+--
+local function reduceMLoop(body, k, vars)
+   return mlet(".post", {T="MFun", vars, k},
+               mlet(".body", {T="MFun", append({".body"}, vars), body},
+                    mrepeat(vars)))
+end
+
 local function desugarM(node, scope)
    local function ds(a)
       return desugarM(a, scope)
@@ -654,12 +723,19 @@ local function desugarM(node, scope)
       return N("INat", assert(natives[name]), args)
    end
 
+   local function isDefined(name)
+      return nil ~= scopeFind(scope, name)
+   end
+
    local typ = node.T
 
    if typ == "MName" then
       local name = node[1]
       if builtins[name] then
          return {T="IVal", builtins[name]}
+      end
+      if scope.macros[name] then
+         return ds(scope.macros[name])
       end
       local index, offset = scopeFind(scope, name)
       faultIf(index == nil, "Undefined", node.ast, name)
@@ -668,13 +744,14 @@ local function desugarM(node, scope)
       local value = node[1]
       return N("IVal", value)
    elseif typ == "MFun" then
-      local params, body, isShadow = node[1], node[2], node[3]
+      local params, body, shadowMode = node[1], node[2], node[3]
       -- check for un-sanctioned shadowing
       for _, name in ipairs(params) do
-         local index = scopeFind(scope, name)
-         faultIf(isShadow == not index,
-                 index and "Alias" or "Undefined",
-                 node.ast, name)
+         if shadowMode == "=" then
+            faultIf(isDefined(name), "Shadow", node.ast, name)
+         elseif shadowMode == ":=" then
+            faultIf(not isDefined(name), "Undefined", node.ast, name)
+         end
       end
       return N("IFun", desugarM(body, scopeExtend(scope, params)))
    elseif typ == "MCall" then
@@ -684,11 +761,17 @@ local function desugarM(node, scope)
       local value, name = node[1], node[2]
       return nat("getProp", {ds(value), N("IVal", name)})
    elseif typ == "MLoop" then
-      faultIf(true, "Unimplemented: MLoop", node, nil)
+      local body, k = node[1], node[2]
+      local vars = ifilter(findLets(body), isDefined)
+      local macros = {
+         ["break"] = mbreak(vars),
+         ["repeat"] = mrepeat(vars),
+      }
+      return desugarM(reduceMLoop(body, k, vars), clone(scope, {macros=macros}))
    elseif typ == "MError" then
       faultIf(true, "Error", node, nil)
    else
-      assert("unknown M-record: " .. recFmt(node))
+      test.fail("unknown M-record: %s", recFmt(node))
    end
 end
 
@@ -718,7 +801,7 @@ end
 local function trapEval(fn, ...)
    local succ, value = xpcall(fn, debug.traceback, ...)
    if not succ and type(value) == "string" then
-      -- print(value)  --for "should not happen" errors
+      -- re-throw
       error(value, 0)
    end
    return value
@@ -801,8 +884,40 @@ et("if 1 < 0: 1\n0\n", "0")
 et("x = 1\nx + 2\n", "3")
 et("x = 1\nx := 2\nx + 2\n", "4")
 et("x = 1\nx += 2\nx + 2\n", "5")
-et("x = 1\nx = 2\nx\n", '(VErr "Alias" (Let [x "=" 2] x) "x")')
+et("x = 1\nx = 2\nx\n", '(VErr "Shadow" (Let [x "=" 2] x) "x")')
 et("x := 1\nx\n", '(VErr "Undefined" (Let [x ":=" 1] x) "x")')
+
+-- Loop
+
+test.eq(mlFmt(desugarS{T="Loop", {{T="Name", "repeat"}}, {T="Name", "x"}}),
+        '(MLoop repeat x)')
+
+test.eq(findLets({T="MCall",
+                  {T="MFun", {"x", "y"}, {T="MVal", nil}, true},
+                  {{T="MFun", {"z"}, {T="MVal", nil}, true}}}),
+        {"x", "y", "z"})
+
+local function fmtLet(name, value, expr)
+   return ('(MCall (MFun ["%s"] %s) [%s])'):format(name, expr, value)
+end
+
+test.eq(mlFmt(reduceMLoop({T="MName", "break"}, {T="MName", "x"}, {"x"})),
+        fmtLet(".post",
+               '(MFun ["x"] x)',
+               fmtLet(".body",
+                      '(MFun [".body" "x"] break)',
+                      '(MCall .body [.body x])')))
+
+et([[
+x = 1
+loop:
+  x *= 2
+  if x > 10: break
+  repeat
+x
+]],
+   '16')
+
 
 local fib = [[
 _fib = (_self, n) =>

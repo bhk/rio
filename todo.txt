@@ -1,7 +1,7 @@
 TODO
 
 * Unimplemented language features:
-  - For, Loop, LoopWhile, While
+  - For, LoopWhile, While
   - recursive definitions (forward declarations)
   - short-circuiting `or` & `and`
   - `$`

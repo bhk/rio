@@ -30,8 +30,8 @@ end
 
 -- Non-mutating functions...
 
-local function clone(t)
-   return override({}, t)
+local function clone(t, ...)
+   return override({}, t, ...)
 end
 
 local function set(tbl, k, v)
@@ -41,9 +41,26 @@ local function set(tbl, k, v)
 end
 
 local function append(a, b)
+   if not (a[1] and b[1]) then
+      if a[1] then
+         return a
+      end
+      return b
+   end
+
    local o = {}
    move(a, 1, #a, 1, o)
    move(b, 1, #b, #a+1, o)
+   return o
+end
+
+local function ifilter(t, fn)
+   local o = {}
+   for _, v in ipairs(t) do
+      if fn(v) then
+         o[#o+1] = v
+      end
+   end
    return o
 end
 
@@ -118,6 +135,7 @@ local exports = {
    clone = clone,
    set = set,
    append = append,
+   ifilter = ifilter,
    imap = imap,
    map = map,
    getSortedKeys = getSortedKeys,
@@ -134,7 +152,17 @@ test.eq(set(t, "a", 2), {a=2})
 test.eq(set(t, "b", 2), {a=1, b=2})
 test.eq(t, {a=1})
 
+local t = {a=1}
+test.eq({a=1, b=2}, clone(t, {b=2}))
+test.eq({a=1}, t)
+
 test.eq({5,4,3,2,1}, exports.append({5,4}, {3,2,1}))
+
+test.eq({9, 8}, exports.ifilter({9,1,8,5}, function (x) return x > 5 end))
+
+test.eq({1,2}, exports.append({1,2}, {}))
+test.eq({3,4}, exports.append({}, {3,4}))
+test.eq({1,2}, exports.append({1}, {2}))
 
 test.eq(sexprFmt({T="Foo", {"abc", 2, {T="Bar"}}}),
         '(Foo ["abc" 2 (Bar)])')
