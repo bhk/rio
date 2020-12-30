@@ -182,7 +182,7 @@ end
 --
 function faultIf(cond, typ, where, what)
    if cond then
-      error({T="VErr", typ, where, what})
+      error({T="VErr", typ, where or {}, what})
    end
 end
 
@@ -484,7 +484,7 @@ end
 --     (MCall fn args)
 --     (MProp value name)
 --     (MLoop body k)
---     (MError desc)
+--     (MError desc ast)
 --
 -- params: {string...}
 -- name: string
@@ -492,6 +492,7 @@ end
 -- There is no "native" construct, but constructed expressions may reference
 -- the free variables ".vecNew" and ".recDef", with meanings to be supplied
 -- by M->I desugaring.
+
 
 local function snameToString(ast)
    assert(ast.T == "Name")
@@ -506,103 +507,135 @@ local function mlFmt(node)
    return sexprFmt(node, mlFormatters)
 end
 
-local function desugarS(ast)
-   local ds = desugarS
+local function mname(str)
+   return {T="MName", str}
+end
 
-   local function N(typ, ...)
-      return {T=typ, ast=ast, ...}
-   end
+local function mlambda(params, body, shadowMode)
+   return {T="MFun", params, body, shadowMode}
+end
 
-   local function lambda(params, body, shadowMode)
-      return N("MFun", params, body, shadowMode)
-   end
+local function mcall(mfn, margs)
+   return {T="MCall", mfn, margs}
+end
 
-   local function call(mfn, margs)
-      return N("MCall", mfn, margs)
-   end
+local function mprop(mvalue, name)
+   return {T="MProp", mvalue, name}
+end
 
-   local function gp(mvalue, name)
-      return N("MProp", mvalue, name)
-   end
+local function mlet(name, value, expr, shadowMode)
+   return mcall(mlambda({name}, expr, shadowMode), {value})
+end
 
-   local function send(value, name, args)
-      return call(gp(value, name), args)
-   end
+local function msend(value, name, args)
+   return mcall(mprop(value, name), args)
+end
 
-   local function branch(mcond, mthen, melse)
-      return call(send(mcond, "switch", {lambda({}, mthen), lambda({}, melse)}),
-                  {})
-   end
+local function mbranch(mcond, mthen, melse)
+   return mcall(msend(mcond, "switch", {mlambda({}, mthen), mlambda({}, melse)}),
+               {})
+end
 
-   local function binop(op, a, b)
-      return call(gp(a, "{}"..op), {b})
-   end
+local function mbinop(op, a, b)
+   return mcall(mprop(a, "{}"..op), {b})
+end
 
+local desugarBlock
+
+-- Translate AST expression into Middle Language
+--
+local function desugarExpr(ast)
+   local ds = desugarExpr
    local typ = ast.T
 
    if typ == "Name" then
-      return N("MName", ast[1])
+      return mname(ast[1])
    elseif typ == "Number" then
-      return N("MVal", newVNum(ast[1]))
+      return {T="MVal", newVNum(ast[1])}
    elseif typ == "String" then
-      return N("MVal", newVStr(ast[1]))
+      return {T="MVal", newVStr(ast[1])}
    elseif typ == "Fn" then
       local params, body = ast[1], ast[2]
-      return lambda(imap(params, snameToString), ds(body))
+      return mlambda(imap(params, snameToString), ds(body))
    elseif typ =="Call" then
       local fn, args = ast[1], ast[2]
-      return {T="MCall", ds(fn), imap(args, ds)}
+      return mcall(ds(fn), imap(args, ds))
    elseif typ =="Dot" then
       local a, b = ast[1], ast[2]
-      return gp(ds(a), snameToString(b))
+      return mprop(ds(a), snameToString(b))
    elseif typ =="Index" then
       local a, b = ast[1], ast[2]
-      return binop("[]", ds(a), ds(b))
+      return mbinop("[]", ds(a), ds(b))
    elseif typ =="Binop" then
       local op, a, b = ast[1], ast[2], ast[3]
-      return binop(op, ds(a), ds(b))
+      return mbinop(op, ds(a), ds(b))
    elseif typ == "Unop" then
       local op, svalue = ast[1], ast[2]
-      return gp(ds(svalue), op)
+      return mprop(ds(svalue), op)
    elseif typ == "IIf" then
       local c, a, b = ast[1], ast[2], ast[3]
       return branch(ds(c), ds(a), ds(b))
-   elseif typ == "If" then
-      -- Desugar to: aCond.switch(() => aThen, () => aElse)()
-      local c, a, b = ast[1][1], ast[1][2], ast[2]
-      return branch(ds(c), ds(a), ds(b))
-   elseif typ == "Let" then
-      -- operators:  =  :=  +=  *= ...
-      local sname, op, svalue, sbody = ast[1][1], ast[1][2], ast[1][3], ast[2]
-      local name, value, body = snameToString(sname), ds(svalue), ds(sbody)
-      -- handle +=, etc.
-      local modop = op:match("^([^:=]+)")
-      if modop then
-         value = binop(modop, ds(sname), value)
-      end
-      local shadowMode = op == "=" and "=" or ":="
-      return call(lambda({name}, body, shadowMode), {value})
-   elseif typ == "Ignore" then
-      return ds(ast[2])
    elseif typ == "Vector" then
       local elems = ast[1]
-      return call(N("MName", ".vecNew"), imap(elems, ds))
+      return mcall(mname".vecNew", imap(elems, ds))
    elseif typ == "Record" then
       local rpairs = ast[1]
       local keys = {}
       local values = {}
       for ii = 1, #rpairs, 2 do
-         keys[#keys+1] = N("MVal", newVStr(snameToString(rpairs[ii])))
+         keys[#keys+1] = {T="MVal", newVStr(snameToString(rpairs[ii]))}
          values[#values+1] = ds(rpairs[ii+1])
       end
-      local recCons = call(N("MName", ".recDef"), keys)
-      return call(recCons, values)
-   elseif typ == "Loop" then
-      local body, k = ast[1][1], ast[2]
-      return N("MLoop", ds(body), ds(k))
+      local recCons = mcall(mname ".recDef", keys)
+      return mcall(recCons, values)
+   elseif typ == "Block" then
+      local lines = ast[1]
+      return desugarBlock(lines)
+   elseif typ == "Missing" then
+      return {T="MError", "MissingExpr", ast}
    else
       test.fail("Unknown AST: %s", astFmt(ast))
    end
+end
+
+local function desugarStmt(ast, k)
+   local typ = ast.T
+   if typ == "S-If" then
+      local scond, sthen = ast[1], ast[2]
+      return mbranch(desugarExpr(scond), desugarExpr(sthen), k)
+   elseif typ == "S-Let" then
+      -- operators:  =  :=  +=  *= ...
+      local sname, op, svalue = ast[1], ast[2], ast[3]
+      local name, value = snameToString(sname), desugarExpr(svalue)
+      -- handle +=, etc.
+      local modop = op:match("^([^:=]+)")
+      if modop then
+         value = mbinop(modop, desugarExpr(sname), value)
+      end
+      local shadowMode = op == "=" and "=" or ":="
+      return mcall(mlambda({name}, k, shadowMode), {value})
+   elseif typ == "S-Loop" then
+      local block = ast[1]
+      return {T="MLoop", desugarBlock(block), k}
+   else
+      test.fail("Unknown statement: %s", astFmt(ast))
+   end
+end
+
+-- Translate AST block into Middle Language, starting at index `ii`
+--
+function desugarBlock(lines, ii)
+   ii = ii or 1
+   local k = lines[ii+1] and desugarBlock(lines, ii+1)
+   local line = lines[ii]
+
+   if string.match(line.T, "^S%-") then
+      return desugarStmt(line, k or {T="MError", "MissingFinalExpr", line})
+   elseif k then
+      -- silently ignore extraneous expression
+      return k
+   end
+   return desugarExpr(line)
 end
 
 ----------------------------------------------------------------
@@ -679,20 +712,12 @@ local function findLets(node)
    return vars
 end
 
-local function nm(str)
-   return {T="MName", str}
-end
-
 local function mbreak(loopVars)
-   return {T="MCall", nm".post", imap(loopVars, nm)}
+   return mcall(mname".post", imap(loopVars, mname))
 end
 
 local function mrepeat(loopVars)
-   return {T="MCall", nm".body", imap(append({".body"}, loopVars), nm)}
-end
-
-local function mlet(name, value, expr)
-   return {T="MCall", {T="MFun", {name}, expr}, {value}}
+   return mcall(mname".body", imap(append({".body"}, loopVars), mname))
 end
 
 -- Reduce an MLoop expression to other ML expressions
@@ -769,14 +794,15 @@ local function desugarM(node, scope)
       }
       return desugarM(reduceMLoop(body, k, vars), clone(scope, {macros=macros}))
    elseif typ == "MError" then
-      faultIf(true, "Error", node, nil)
+      local desc, ast = node[1], node[2]
+      faultIf(true, "Error: " .. desc, ast, nil)
    else
       test.fail("unknown M-record: %s", recFmt(node))
    end
 end
 
 local function desugar(ast, scope)
-   return desugarM(desugarS(ast), scope)
+   return desugarM(desugarExpr(ast), scope)
 end
 
 ----------------------------------------------------------------
@@ -823,7 +849,7 @@ et(".5", "0.5", '(Error "NumDigitBefore")')
 
 -- eval error
 
-et("x", '(VErr "Undefined" x "x")')
+et("x", '(VErr "Undefined" [] "x")')
 
 -- literals and constructors
 
@@ -884,13 +910,19 @@ et("if 1 < 0: 1\n0\n", "0")
 et("x = 1\nx + 2\n", "3")
 et("x = 1\nx := 2\nx + 2\n", "4")
 et("x = 1\nx += 2\nx + 2\n", "5")
-et("x = 1\nx = 2\nx\n", '(VErr "Shadow" (Let [x "=" 2] x) "x")')
-et("x := 1\nx\n", '(VErr "Undefined" (Let [x ":=" 1] x) "x")')
+et("x = 1\nx = 2\nx\n", '(VErr "Shadow" [] "x")')
+et("x := 1\nx\n", '(VErr "Undefined" [] "x")')
 
 -- Loop
 
-test.eq(mlFmt(desugarS{T="Loop", {{T="Name", "repeat"}}, {T="Name", "x"}}),
-        '(MLoop repeat x)')
+local loop0 = [[
+loop:
+  x := 1
+  repeat
+x
+]]
+test.eq(mlFmt(desugarExpr(syntax.parseModule(loop0))),
+        '(MLoop (MCall (MFun ["x"] repeat ":=") [(MVal 1)]) x)')
 
 test.eq(findLets({T="MCall",
                   {T="MFun", {"x", "y"}, {T="MVal", nil}, true},

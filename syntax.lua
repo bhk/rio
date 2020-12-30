@@ -1,27 +1,35 @@
 -- Rio syntax parser
 --
--- AST nodes:
+-- The result of parsing a module is a Block, which is an array of logical
+-- lines, each of which is an expression or a statement.
+--
+-- Block: [ (expr | stmt)... ]
+--
+-- Expression:
 --   (Name str)
 --   (Missing)
 --   (Number str)
 --   (String str)
---   (Vector [items...])
---   (Record [name value ...])
---   (Fn [params...] body)
+--   (Vector [expr...])
+--   (Record [str expr ...])
+--   (Fn [param...] body)
 --   (Op op a b)
 --   (Unop op a)
 --   (Call fn args)
 --   (Dot a name)
 --   (Index a b)
 --   (IIf a b c)
---   (For [name seq body] k)
---   (If [cond then] k)
---   (Loop k)
---   (LoopWhile [cond body] k)
---   (While [cond] k)
---   (Let [name op value] k)
---   (Act [params act] k)
---   (Ignore [expr] k)
+--   (Block block)
+--
+-- Statement:
+--   (S-Let name op value)
+--   (S-If cond then)
+--   (S-Loop block)
+--   (S-For name seq body)
+--   (S-LoopWhile cond body)
+--   (S-While cond)
+--   (S-Act params act)
+--
 
 local test = require "test"
 local peg = require "peg"
@@ -259,28 +267,6 @@ local record = T"{" * cseq(recordNV) * (T"}" + E"CloseCurly")
 
 local grouping = T"(" * needExpr * (T")" + E"CloseParen")
 
-
---construct an expression from a sequence of logical lines
---
-local function joinBlock(a, b, ...)
-   -- etype = type of expression we can construct from an "S-xxx" node
-   local astmt = string.match(a.T, "^S%-(.*)")
-   if not astmt then
-      if b then
-         -- ILE followed by more lines...
-         a = Node("Ignore", a.pos, a, joinBlock(b, ...))
-      end
-   else
-      -- a is a statement: fold with rest of lines
-      local e = b and joinBlock(b, ...) or Node("Missing", a.pos)
-      local args = {}
-      move(a, 1, #a, 1, args)
-      a = Node(astmt, a.pos, args, e)
-   end
-   return a
-end
-
-
 local atom =
    N("Number", number)
    + N("String", qstring)
@@ -288,7 +274,7 @@ local atom =
    + N("Vector", vector)
    + N("Record", record)
    + grouping
-   + nlBlock * ss / joinBlock
+   + N("Block", Ct(nlBlock) * ss)
 
 
 local function binop(op, pos, a, b)
@@ -408,12 +394,13 @@ local letOp = O("=", ":=", "+=", "++=", "*=")
 -- work around lua-mode.el indentation bug...
 local Tif, Tfor, Twhile = T"if", T"for", T"while"
 
+local needBlock = Ct(nlBlock) * ss + N("MissingBlock", P(0))
 
 local statement =
    N("S-For", Tfor * varNode * T"in" * expr * T":" * expr)
    + N("S-If", Tif * expr * T":" * expr)
    + N("S-LoopWhile", T"loop" * Twhile * expr * T":" * expr)
-   + N("S-Loop", T"loop" * T":" * needExpr)
+   + N("S-Loop", T"loop" * T":" * needBlock)
    + N("S-While", Twhile * needExpr)
    + N("S-Let", varNode * letOp * needExpr)
    + N("S-Act", params * T"<-" * needExpr)
@@ -433,7 +420,7 @@ local logLine =
    * (#nlEOL + discardEOL)
 
 
-local rioModule = p2dModule / joinBlock
+local rioModule = N("Block", Ct(p2dModule))
 
 
 local rioG = {
@@ -708,9 +695,8 @@ testL("x = 1", '(S-Let x "=" 1)')
 testL("x := 1", '(S-Let x ":=" 1)')
 testL("x <- a", '(S-Act [x] a)')
 testL("if a: x", '(S-If a x)')
-testL("loop:", '(S-Loop (Missing))')
-testL("loop: repeat\n  repeat\n", '(S-Loop repeat)')
-testL("loop:\n  repeat\n", '(S-Loop repeat)')
+testL("loop:", '(S-Loop (MissingBlock))')
+testL("loop:\n  if a: x\n  b\n", '(S-Loop [(S-If a x) b])')
 testL("while c:", '(S-While c)')
 testL("loop while C: B", '(S-LoopWhile C B)')
 testL("for x in E: B", '(S-For x E B)')
@@ -721,7 +707,8 @@ testL("a b c", "a", '(Error "Garbage")')
 
 -- block body
 
-testL("a + \n  x=1\n  x\n", '(Binop "+" a (Let [x "=" 1] x))')
+testL("a + \n  x=1\n  x\n",
+      '(Binop "+" a (Block [(S-Let x "=" 1) x]))')
 
 -- test `Module`
 
@@ -734,8 +721,9 @@ f = (x) =>
 f(2)
 ]]
 
-testM(t1, ('(Let [f "=" (Fn [x] (If [(Binop "<" x 1) 0] (Binop "+" x 1)))]'
-              .. ' (Call f [2]))'),
+testM(t1, '(Block [(S-Let f "=" ' ..
+         '(Fn [x] (Block [(S-If (Binop "<" x 1) 0) (Binop "+" x 1)]))' ..
+         ') (Call f [2])])',
       '(Comment "# C1")')
 
 testM([[
@@ -744,6 +732,6 @@ loop:
   repeat
 x
 ]],
-      '(Loop [(Let [x "+=" 1] repeat)] x)')
+      '(Block [(S-Loop [(S-Let x "+=" 1) repeat]) x])')
 
 return exports
