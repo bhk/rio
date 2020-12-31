@@ -618,6 +618,9 @@ local function desugarStmt(ast, k)
       local block = ast[1]
       local rep = {T="Name", pos=ast.pos, "repeat"}
       return {T="MLoop", desugarBlock(append(block, {rep})), k}
+   elseif typ == "S-While" then
+      local cond = ast[1]
+      return mbranch(desugarExpr(cond), k, mname"break")
    else
       test.fail("Unknown statement: %s", astFmt(ast))
    end
@@ -944,7 +947,7 @@ et([[
 x = 1
 loop:
   x *= 2
-  if x > 10: break
+  while x < 10
 x
 ]],
    '16')
