@@ -616,7 +616,8 @@ local function desugarStmt(ast, k)
       return mcall(mlambda({name}, k, shadowMode), {value})
    elseif typ == "S-Loop" then
       local block = ast[1]
-      return {T="MLoop", desugarBlock(block), k}
+      local rep = {T="Name", pos=ast.pos, "repeat"}
+      return {T="MLoop", desugarBlock(append(block, {rep})), k}
    else
       test.fail("Unknown statement: %s", astFmt(ast))
    end
@@ -633,7 +634,7 @@ function desugarBlock(lines, ii)
       return desugarStmt(line, k or {T="MError", "MissingFinalExpr", line})
    elseif k then
       -- silently ignore extraneous expression
-      return k
+      return {T="MError", "Extraneous", line}
    end
    return desugarExpr(line)
 end
@@ -918,7 +919,6 @@ et("x := 1\nx\n", '(VErr "Undefined" [] "x")')
 local loop0 = [[
 loop:
   x := 1
-  repeat
 x
 ]]
 test.eq(mlFmt(desugarExpr(syntax.parseModule(loop0))),
@@ -945,7 +945,6 @@ x = 1
 loop:
   x *= 2
   if x > 10: break
-  repeat
 x
 ]],
    '16')
