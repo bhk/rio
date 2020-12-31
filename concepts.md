@@ -219,26 +219,15 @@ Also, Rio does not confuse properties with members of collections.  Indexing
 expressions -- e.g. `value[index]` -- access members of a vector or
 dictionary, not their properties.
 
-`a.?foo` evaluates to `true` if `a` has a `foo` property.
+Rio's infix operators are defined in terms of properties.  Assuming a
+hypothetical function called `get_property` that allows direct access to all
+properties...
 
-Internally, a Rio primitive function `get_property(value, name)` is used to
-obtain properties.  `a.foo` is shorthand for `get_property(a, "foo")`.
-Breaking this down to more primitive operations, `get_property` obtains the
-type of the value, and from that obtains the type's own `get_property`
-method, and then calls it.
+    x + y    <==>   get_property(x, "{}+")(y)
 
-     get_property = (value, name) =>
-        type = type_of(value)
-        gp = get_get_property(type)
-        gp(value, name)
+Member access is done via a property:
 
-Rio's infix operators are defined in terms of properties.
-
-    x + y    <==>   get_property(x, "+")(y)
-
-Member access is done via the "[]" property:
-
-    a[k]     <==>   get_property(a, "[]")(k)
+    a[k]     <==>   get_property(a, "{}[]")(k)
 
 Properties express essentially all of the behavior of a value, except for
 function invocation.
@@ -248,8 +237,6 @@ Abstract data types are constructed by providing an implementation of
 
     gp = (self, name) => ...
     new_type = derive(old_type, gp)
-
-TBD: defining structures and constructors.
 
 
 ## "Compile-time"
@@ -1513,27 +1500,28 @@ Some of the lower-level concerns are:
 When behavior is not completely specified by the language, it creates
 problems for programmers.  Unit tests may work one run, and fail the next.
 Programs working for months may suddenly fail.  Instead, we should prefer
-clearly specified behavior.  JavaScript's HashMap enumeration behavior is a
-good example of a design that avoids undefined behavior.
+clearly specified behavior.  Stable sorts and deterministic enumeration of
+record/dictionary members are to be preferred.  (JavaScript's HashMap
+enumeration behavior is a good example).
 
 Under no circumstances is it acceptable to use the C language's "all bets
 are off" definition of undefined behavior. When you cannot place any bounds
 around the implications of an isolated programming mistake, you cannot come
 to any meaningful conclusions when analyzing a large code base.
 
-Another consequence of undefined behavior is that the C language is
-effectively unstable.  C programs that compile today might not compile
-tomorrow.  The reason is that C is not inherently safe, but still some
-unsafe usage can be identified by the compiler and reported as a "warning".
-In fact they go further and report warnings based on circumstantial evidence
-when there many not be an actual bug.  The compiler can never detect all
-unsafe usage, but it can get "better" at it over time, so more warnings show
-up with newer compiler versions.  Due to the catatrophic consequences of
-unsafety, any responsible developer treats warnings as errors, so when new
-warnings show up they break the project.  The set of things forbidden by
-warnings constitute a de facto language definition ... a language that is
-unspecified, constantly changing, and that differs from compiler to
-compiler.
+Another consequence of C's notion of undefined behavior is that the C
+language is effectively unstable.  C programs that compile today might not
+compile tomorrow.  The reason is that C is not inherently safe, but still
+some unsafe usage can be identified by the compiler and reported as a
+"warning".  In fact they go further and report warnings based on
+circumstantial evidence when there many not be an actual bug.  The compiler
+can never detect all unsafe usage, but it can get "better" at it over time,
+so more warnings show up with newer compiler versions.  Due to the
+catatrophic consequences of unsafety, any responsible developer treats
+warnings as errors, so when new warnings show up they break the project.
+The set of things forbidden by warnings constitute a de facto language
+definition ... a language that is unspecified, constantly changing, and that
+differs from compiler to compiler.
 
 
 ## Typed Structures
