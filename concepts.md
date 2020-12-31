@@ -147,7 +147,6 @@ For example:
         loop while x < 10:
             total += x
             x += 1
-            repeat
         total
 
 Other syntax topics:
@@ -170,11 +169,11 @@ pitfalls of mutable data, are implemented as syntactic sugar.
 ## Vertical Syntax
 
 Rio syntax supports a "vertical" program structure, so that code reads down
-the page instead of diagonally down and to the right insome other functional
-langauges.  Likewise, data flow (during execution) generally progesses down
-the page, which can help in visualizing and understanding the code, as well
-as authoring in a worksheet-based [live programming](#live-programming)
-environment.
+the page instead of diagonally down and to the right in some other
+functional langauges.  Likewise, data flow (during execution) generally
+progesses down the page, which can help in visualizing and understanding the
+code, as well as authoring in a worksheet-based [live
+programming](#live-programming) environment.
 
 Assignment expressions consist of a `NAME = EXPR` line followed vertically by
 a `BODY`.  The assigned variable is visible only in the body, not in the
@@ -1204,7 +1203,6 @@ For example:
     x.a[5].b := 1     <==>    x := (x.a <! (x.a[5] <! (x.a[5].b <! 1)))
 
 
-
 ## Looping Syntax
 
 There are commonly encountered problems in programming that require
@@ -1216,16 +1214,12 @@ variables.
 Variables shadowed by assignments in a loop body will have their values
 propagated to the next iteration of the loop, and when the loop exits, the
 shadowed values will be propagated to the expression that follows the loop.
-Within the loop body, the following expressions are defined:
+Within the loop body, the following are defined:
 
-  * `repeat` proceeds to the top of the loop body
+  * `repeat` skips the rest of the loop body, and proceeds directly to the top
+    at the next iteration.
   * `break` transitions to the expression after the loop
-  * `while COND \ REST` is equivalent to `if not COND: break \ REST`
-  * TBD: `return EXPR` bypasses REST.  (Note it "returns" from the
-    loop, not necessarily the current function.)
-
-[Perhaps it should be required that every branch of the loop body evaluates
-to either `repeat` or `break`.]
+  * `while COND` is equivalent to `if not COND: break`
 
 Here is a simple example:
 
@@ -1235,24 +1229,40 @@ Here is a simple example:
         loop while n < a.length:
             total += a[n]
             n += 1
-            repeat
         total
+
+Similarly, iterating over a collection can be done with a `for` statement:
+
+    for NAME in EXPR:
+        BODY
+    REST
+
+For example:
+
+    sum = a =>
+        total = 0
+        for x in a:
+            total += x
+        total
+
+### Implementation Details
 
 More precisely, looping syntax translates an expression of this general
 form...
 
-    loop: BODY
+    loop:
+        BODY
     AFTER
 
 ... to this purely functional equivalent:
 
     _post = (VARS...) => AFTER
-    _loop = (_loop, VARS...) => Substitute[BODY]
+    _loop = (_loop, VARS...) => loopx[BODY]
     _loop(_loop, VARS...)
 
 ... where `VARS...` is a sequence of variable names (those shadowed in the
-body), and where `Substitute[BODY]` performs the following textual
-substitutions:
+body), and where `loopx[BODY]` appends a `repeat` line to BODY and performs
+the following textual substitutions:
 
        break        -->   _post(VARS...)
        repeat       -->   _loop(_loop, VARS...)
@@ -1272,28 +1282,12 @@ Translating the above example, we get:
             _loop(_loop, n, total)
         _loop(_loop, n, total)
 
-Similarly, iterating over a collection can be done with a `for` statement:
-
-    for NAME in EXPR: BODY
-    REST
-
-For example:
-
-    sum = a =>
-        total = 0
-        for n in a:
-            total += a[n]
-            repeat
-        total
-
-
 ## Action Syntax
 
 Rio provides a syntax for elegantly dealing with callbacks:
 
     PARAMS <- ACTION
     REST
-
 
 The first line is a clause that designates the "rest" of the block as a
 callback.  PARMS is a parameter list, as it would appear in a function
@@ -1348,7 +1342,6 @@ and [looping syntax](#looping-syntax), as in this example:
         for url in urls:
             data <- do_http("GET", url, {})
             items := items.push(data)
-            repeat
         items
 
 An alternate syntax allows the programmer to specify how exceptional cases

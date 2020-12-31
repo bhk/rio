@@ -1,7 +1,6 @@
 TODO
 
 * Unimplemented language features:
-  - For, LoopWhile, While
   - recursive definitions (forward declarations)
   - short-circuiting `or` & `and`
   - `$`
@@ -11,6 +10,7 @@ TODO
   - type constructors
   - `where`
   - `match`
+  - For
   - destructuring assignment with "else:" clause
   - Act
   - Vector & record equality

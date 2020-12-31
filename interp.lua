@@ -621,6 +621,9 @@ local function desugarStmt(ast, k)
    elseif typ == "S-While" then
       local cond = ast[1]
       return mbranch(desugarExpr(cond), k, mname"break")
+   elseif typ == "S-LoopWhile" then
+      local cond, block = ast[1], ast[2]
+      return desugarStmt({T="S-Loop", append({{T="S-While", cond}}, block)}, k)
    else
       test.fail("Unknown statement: %s", astFmt(ast))
    end
@@ -945,9 +948,8 @@ test.eq(mlFmt(reduceMLoop({T="MName", "break"}, {T="MName", "x"}, {"x"})),
 
 et([[
 x = 1
-loop:
+loop while x < 10:
   x *= 2
-  while x < 10
 x
 ]],
    '16')

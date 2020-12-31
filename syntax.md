@@ -35,8 +35,8 @@ or more.  Physical lines that are more indented than the first line of a
 logical line but are not part of a nested block are called continuation
 lines.
 
-The logical structure of a Rio module, therefore, is a block; blocks are
-sequences of logical lines; logical lines are sequences of physical lines
+The logical structure of a Rio module, therefore, is a block.  A block is a
+sequence of logical lines.  A logical line is a sequence of physical lines
 and/or blocks.
 
 
@@ -48,9 +48,9 @@ significance.
 
 Logical lines may contain statements or inline expressions.
 
-A *statement* is a logical line that must be followed by one or more logical
-lines in the same block.  It does not constitute a complete expression by
-itself, but when combined with the "rest" of the block it does.
+A *statement* is not a complete expression, but is the initial portion of an
+expression.  It must be combined with an expression (usually given by the
+lines that follow in its block) to make a new expression.
 
     if cond:           # statement first line       \   "vertical"
       true             #   statement continuation    >  expression
@@ -102,9 +102,9 @@ The notation used is from PEG[1], with some added conveniences:
     Statement <- Name LetOp Expr
                 / Params "<-" Expr
                 / "if" Expr ":" Expr
-                / "loop" ":"
-                / "loop while" Expr ":"
-                / "for" Name "in" Expr ":"
+                / "loop" ":" Block
+                / "loop while" Expr ":" Block
+                / "for" Name "in" Expr ":" Block
 
     LetOp    <- "=" / ":=" / "+=" / "++=" / "*="
 

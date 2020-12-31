@@ -399,7 +399,7 @@ local needBlock = Ct(nlBlock) * ss + N("MissingBlock", P(0))
 local statement =
    N("S-For", Tfor * varNode * T"in" * expr * T":" * expr)
    + N("S-If", Tif * expr * T":" * expr)
-   + N("S-LoopWhile", T"loop" * Twhile * expr * T":" * expr)
+   + N("S-LoopWhile", T"loop" * Twhile * expr * T":" * needBlock)
    + N("S-Loop", T"loop" * T":" * needBlock)
    + N("S-While", Twhile * needExpr)
    + N("S-Let", varNode * letOp * needExpr)
@@ -698,7 +698,7 @@ testL("if a: x", '(S-If a x)')
 testL("loop:", '(S-Loop (MissingBlock))')
 testL("loop:\n  if a: x\n  b\n", '(S-Loop [(S-If a x) b])')
 testL("while c:", '(S-While c)')
-testL("loop while C: B", '(S-LoopWhile C B)')
+testL("loop while C:\n  x := 1\n", '(S-LoopWhile C [(S-Let x ":=" 1)])')
 testL("for x in E: B", '(S-For x E B)')
 
 -- extraneous characters

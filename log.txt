@@ -271,3 +271,57 @@ However, unary negation will result in another pure value.  When passed to a
 constructor of some other numeric data type (e.g. an arbitrary-precision
 data type), a pure literal's entire content will be available uncorrupted,
 via some interface yet to be defined.
+
+
+## Notes on `break`, `repeat`, `return X`
+
+One minor aside: `repeat` behaves similarly to the `continue` statement of
+many languages, but "continue" is at best ambiguous and on balance does not
+seem an apt choice, even in all those other languages.  Their `continue`
+dawdles on inside the loop and does not actually *continue* on with
+execution after the loop.  Languages that have a `repeat` *and* a `continue`
+have them do the same thing!  Really it is `break` that continues (and in
+Rio, `break` literally calls the "continutation").
+
+The current implementation of `break` and `repeat` as expressions has some
+UX glitches.
+
+First, it allows for a wide range of unanticipated use cases whose behavior
+would be difficult to characterize without exposing all the implementation
+details.  Consider, for example, this block expression which should yield
+26:
+
+    x = 1
+    loop while x < 10:
+       x += break + 1
+    x*2
+
+[Read `break` as "the value this block would evaluate to *if* this loop were
+to break now."]
+
+Second, when the loop body fails to evaluate to either `break` or `repeat`
+it short-circuits the rest of the block in a manner that is likely too
+stealthy.  Perhaps we could ensure that every branch of the loop body
+evaluates to either `repeat` or `break`.  One concern here is that
+restricting `break` and `repeat` in this way might forbid the graceful
+composition of loops and action statments.
+
+Yet, the short-circuiting behavior might be valuable, so an explicit `return
+X` might be waranted.  Note that `return` will "return" just from the
+current loop, *not* the current function.
+
+"Extraneous" expressions within a block are particularly fraught.  No matter
+which of them we ignore (the early ones, or the later), ignoring a `break`
+or `repeat` could be puzzling to the programmer.
+
+One potential way to avoid all of this is to treat `break` and `repeat` (and
+`return X`) as *statements* instead of expressions.  This would forbid them
+appearing in the unexpected contexts, but this leads to...
+
+ 1. Perhaps `if` must then be imperative, rather than an expression, since a
+    `break` or `repeat` inside an `if` clause is an important use case.  If
+    so, it would require `return X` to retain the current role of `if`.
+    (There's a certain appeal to this hard "divide" between the imperative
+    and functional syntax.)
+
+ 2. Imperative `if` begs for a dangling `else: BLOCK` option.
