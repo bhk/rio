@@ -108,7 +108,7 @@ end
 --        {T="Foo", 1, 2}     -->  "(Foo 1 2)"
 --  * Other values: use test.serialize.
 --
-local function sexprFmt(nodeTop, formatters)
+local function sexprFormatter(formatters)
    local function format(node)
       if type(node) ~= "table" then
          return test.serialize(node)
@@ -126,7 +126,7 @@ local function sexprFmt(nodeTop, formatters)
          return "[" .. elems .. "]"
       end
    end
-   return format(nodeTop)
+   return format
 end
 
 local exports = {
@@ -140,7 +140,7 @@ local exports = {
    map = map,
    getSortedKeys = getSortedKeys,
    pairsSorted = pairsSorted,
-   sexprFmt = sexprFmt,
+   sexprFormatter = sexprFormatter,
 }
 
 if test.skip then
@@ -164,7 +164,8 @@ test.eq({1,2}, exports.append({1,2}, {}))
 test.eq({3,4}, exports.append({}, {3,4}))
 test.eq({1,2}, exports.append({1}, {2}))
 
-test.eq(sexprFmt({T="Foo", {"abc", 2, {T="Bar"}}}),
+local f = sexprFormatter(nil)
+test.eq(f({T="Foo", {"abc", 2, {T="Bar"}}}),
         '(Foo ["abc" 2 (Bar)])')
 
 return exports

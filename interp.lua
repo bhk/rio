@@ -4,11 +4,189 @@ local test = require "test"
 local misc = require "misc"
 local syntax = require "syntax"
 
-local append, clone, ifilter, imap, map, move, override, sexprFmt =
+local append, clone, ifilter, imap, map, move, override, sexprFormatter =
    misc.append, misc.clone, misc.ifilter, misc.imap, misc.map,
-   misc.move, misc.override, misc.sexprFmt
+   misc.move, misc.override, misc.sexprFormatter
 local astFmt, astFmtV = syntax.astFmt, syntax.astFmtV
 local concat, unpack = table.concat, table.unpack
+
+----------------------------------------------------------------
+-- desugar: Surface Language to Middle Language
+----------------------------------------------------------------
+--
+-- This translation requires no knowledge of the enclosing scope.  Instead
+-- of translating an AST tree to an ML tree, we could construct the ML tree
+-- directly during parsing.  That would be more performant and simplify this
+-- code slightly, but it would complicate initialization/construction of the
+-- parser.
+--
+-- The middle language retains surface language semantics but uses a reduced
+-- set of primitives.  Functions accept argument bundles, and values have
+-- properties.
+--
+--     (MVal nativevalue)
+--     (MName name)
+--     (MFun params mexpr sOK)
+--     (MCall fn args)
+--     (MProp value name)
+--     (MLoop body k)
+--     (MError desc ast)
+--
+-- params: {string...}
+-- name: string
+-- nativevalue: string | number
+--
+-- There is no notion of "native" functions in ML, but constructed
+-- expressions reference the following free variables:
+--     .vecNew : values -> vector
+--     .recDef : names -> values -> record
+
+local mlFmt = sexprFormatter {
+   MName = function (v) return v[1] end,
+}
+
+local function snameToString(ast)
+   assert(ast.T == "Name")
+   return ast[1]
+end
+
+local function mname(str)
+   return {T="MName", str}
+end
+
+local function mlambda(params, body, shadowMode)
+   return {T="MFun", params, body, shadowMode}
+end
+
+local function mcall(mfn, margs)
+   return {T="MCall", mfn, margs}
+end
+
+local function mprop(mvalue, name)
+   return {T="MProp", mvalue, name}
+end
+
+local function mlet(name, value, expr, shadowMode)
+   return mcall(mlambda({name}, expr, shadowMode), {value})
+end
+
+local function msend(value, name, args)
+   return mcall(mprop(value, name), args)
+end
+
+local function mbranch(mcond, mthen, melse)
+   return mcall(msend(mcond, "switch", {mlambda({}, mthen), mlambda({}, melse)}),
+               {})
+end
+
+local function mbinop(op, a, b)
+   return mcall(mprop(a, "{}"..op), {b})
+end
+
+local desugarBlock
+
+-- Translate AST expression into Middle Language
+--
+local function desugarExpr(ast)
+   local ds = desugarExpr
+   local typ = ast.T
+
+   if typ == "Name" then
+      return mname(ast[1])
+   elseif typ == "Number" then
+      return {T="MVal", tonumber(ast[1])}
+   elseif typ == "String" then
+      return {T="MVal", ast[1]}
+   elseif typ == "Fn" then
+      local params, body = ast[1], ast[2]
+      return mlambda(imap(params, snameToString), ds(body))
+   elseif typ =="Call" then
+      local fn, args = ast[1], ast[2]
+      return mcall(ds(fn), imap(args, ds))
+   elseif typ =="Dot" then
+      local a, b = ast[1], ast[2]
+      return mprop(ds(a), snameToString(b))
+   elseif typ =="Index" then
+      local a, b = ast[1], ast[2]
+      return mbinop("[]", ds(a), ds(b))
+   elseif typ =="Binop" then
+      local op, a, b = ast[1], ast[2], ast[3]
+      return mbinop(op, ds(a), ds(b))
+   elseif typ == "Unop" then
+      local op, svalue = ast[1], ast[2]
+      return mprop(ds(svalue), op)
+   elseif typ == "IIf" then
+      local c, a, b = ast[1], ast[2], ast[3]
+      return branch(ds(c), ds(a), ds(b))
+   elseif typ == "Vector" then
+      local elems = ast[1]
+      return mcall(mname".vecNew", imap(elems, ds))
+   elseif typ == "Record" then
+      local rpairs = ast[1]
+      local keys = {}
+      local values = {}
+      for ii = 1, #rpairs, 2 do
+         keys[#keys+1] = {T="MVal", snameToString(rpairs[ii])}
+         values[#values+1] = ds(rpairs[ii+1])
+      end
+      local recCons = mcall(mname ".recDef", keys)
+      return mcall(recCons, values)
+   elseif typ == "Block" then
+      local lines = ast[1]
+      return desugarBlock(lines)
+   elseif typ == "Missing" then
+      return {T="MError", "MissingExpr", ast}
+   else
+      test.fail("Unknown AST: %s", astFmt(ast))
+   end
+end
+
+local function desugarStmt(ast, k)
+   local typ = ast.T
+   if typ == "S-If" then
+      local scond, sthen = ast[1], ast[2]
+      return mbranch(desugarExpr(scond), desugarExpr(sthen), k)
+   elseif typ == "S-Let" then
+      -- operators:  =  :=  +=  *= ...
+      local sname, op, svalue = ast[1], ast[2], ast[3]
+      local name, value = snameToString(sname), desugarExpr(svalue)
+      -- handle +=, etc.
+      local modop = op:match("^([^:=]+)")
+      if modop then
+         value = mbinop(modop, desugarExpr(sname), value)
+      end
+      local shadowMode = op == "=" and "=" or ":="
+      return mcall(mlambda({name}, k, shadowMode), {value})
+   elseif typ == "S-Loop" then
+      local block = ast[1]
+      local rep = {T="Name", pos=ast.pos, "repeat"}
+      return {T="MLoop", desugarBlock(append(block, {rep})), k}
+   elseif typ == "S-While" then
+      local cond = ast[1]
+      return mbranch(desugarExpr(cond), k, mname"break")
+   elseif typ == "S-LoopWhile" then
+      local cond, block = ast[1], ast[2]
+      return desugarStmt({T="S-Loop", append({{T="S-While", cond}}, block)}, k)
+   else
+      test.fail("Unknown statement: %s", astFmt(ast))
+   end
+end
+
+-- Translate AST block into Middle Language, starting at index `ii`
+--
+function desugarBlock(lines, ii)
+   ii = ii or 1
+   local k = lines[ii+1] and desugarBlock(lines, ii+1)
+   local line = lines[ii]
+
+   if string.match(line.T, "^S%-") then
+      return desugarStmt(line, k or {T="MError", "MissingFinalExpr", line})
+   elseif k then
+      -- silently ignore extraneous expression
+      return {T="MError", "Extraneous", line}
+   end
+   return desugarExpr(line)
+end
 
 ----------------------------------------------------------------
 -- Environments
@@ -51,7 +229,7 @@ local faultIf
 local valueFmt
 local nfnNames = {}
 
-local ilFormatters = {
+local ilFmt = sexprFormatter {
    IArg = function (e) return "$" .. e[1] end,
    IVal = function (e) return valueFmt(e[1]) end,
    INat = function (e, fmt)
@@ -68,10 +246,6 @@ local ilFormatters = {
       return ("(%s %s)"):format(name, argValues)
    end
 }
-
-local function ilFmt(node)
-   return sexprFmt(node, ilFormatters)
-end
 
 local function eval(expr, env)
    local typ = expr.T
@@ -302,10 +476,6 @@ behaviors.boolean = makeBehavior(boolUnops, boolBinops, boolMethods, "boolean")
 -- VStr  (happens to be Lua string)
 --------------------------------
 
-local function newVStr(str)
-   return tostring(str)
-end
-
 local strUnops = {
    len = function (v) return #v end,
 }
@@ -346,10 +516,6 @@ behaviors.string = makeBehavior(strUnops, strBinops, strMethods, "string")
 -- VNum (happens to be Lua number)
 --------------------------------
 
-local function newVNum(str)
-   return tonumber(str)
-end
-
 local numUnops = {
    ["-"] = function (a) return -a end,
 }
@@ -372,6 +538,16 @@ local numBinops = {
 }
 
 behaviors.number = makeBehavior(numUnops, numBinops, {}, "number")
+
+-- Construct a VNum or VStr
+--
+local function newValue(nativeValue)
+   if type(nativeValue) == "number" then
+      return nativeValue
+   else
+      return tostring(nativeValue)
+   end
+end
 
 --------------------------------
 -- VVec
@@ -423,9 +599,9 @@ end
 
 -- tests
 --
-local tv1 = natives.vvecNew(newVNum(9), newVNum(8))
+local tv1 = natives.vvecNew(newValue(9), newValue(8))
 test.eq(tv1, {T="VVec", 9, 8})
-test.eq(natives.vvecNth(tv1, newVNum(0)), newVNum(9))
+test.eq(natives.vvecNth(tv1, newValue(0)), newValue(9))
 
 --------------------------------
 -- VRec
@@ -468,186 +644,18 @@ for name, fn in pairs(natives) do
 end
 
 ----------------------------------------------------------------
--- desugarS: Surface Language to Middle Language
-----------------------------------------------------------------
---
--- This translation requires no knowledge of the enclosing scope, and could
--- be replaced by a set of constructors passed to the parser.
---
--- The middle language retains surface language semantics but uses a reduced
--- set of primitives.  Functions accept argument bundles, and values have
--- properties.
---
---     (MVal value)
---     (MName name)
---     (MFun params mexpr sOK)
---     (MCall fn args)
---     (MProp value name)
---     (MLoop body k)
---     (MError desc ast)
---
--- params: {string...}
--- name: string
---
--- There is no "native" construct, but constructed expressions may reference
--- the free variables ".vecNew" and ".recDef", with meanings to be supplied
--- by M->I desugaring.
-
-
-local function snameToString(ast)
-   assert(ast.T == "Name")
-   return ast[1]
-end
-
-local mlFormatters = {
-   MName = function (v) return v[1] end,
-}
-
-local function mlFmt(node)
-   return sexprFmt(node, mlFormatters)
-end
-
-local function mname(str)
-   return {T="MName", str}
-end
-
-local function mlambda(params, body, shadowMode)
-   return {T="MFun", params, body, shadowMode}
-end
-
-local function mcall(mfn, margs)
-   return {T="MCall", mfn, margs}
-end
-
-local function mprop(mvalue, name)
-   return {T="MProp", mvalue, name}
-end
-
-local function mlet(name, value, expr, shadowMode)
-   return mcall(mlambda({name}, expr, shadowMode), {value})
-end
-
-local function msend(value, name, args)
-   return mcall(mprop(value, name), args)
-end
-
-local function mbranch(mcond, mthen, melse)
-   return mcall(msend(mcond, "switch", {mlambda({}, mthen), mlambda({}, melse)}),
-               {})
-end
-
-local function mbinop(op, a, b)
-   return mcall(mprop(a, "{}"..op), {b})
-end
-
-local desugarBlock
-
--- Translate AST expression into Middle Language
---
-local function desugarExpr(ast)
-   local ds = desugarExpr
-   local typ = ast.T
-
-   if typ == "Name" then
-      return mname(ast[1])
-   elseif typ == "Number" then
-      return {T="MVal", newVNum(ast[1])}
-   elseif typ == "String" then
-      return {T="MVal", newVStr(ast[1])}
-   elseif typ == "Fn" then
-      local params, body = ast[1], ast[2]
-      return mlambda(imap(params, snameToString), ds(body))
-   elseif typ =="Call" then
-      local fn, args = ast[1], ast[2]
-      return mcall(ds(fn), imap(args, ds))
-   elseif typ =="Dot" then
-      local a, b = ast[1], ast[2]
-      return mprop(ds(a), snameToString(b))
-   elseif typ =="Index" then
-      local a, b = ast[1], ast[2]
-      return mbinop("[]", ds(a), ds(b))
-   elseif typ =="Binop" then
-      local op, a, b = ast[1], ast[2], ast[3]
-      return mbinop(op, ds(a), ds(b))
-   elseif typ == "Unop" then
-      local op, svalue = ast[1], ast[2]
-      return mprop(ds(svalue), op)
-   elseif typ == "IIf" then
-      local c, a, b = ast[1], ast[2], ast[3]
-      return branch(ds(c), ds(a), ds(b))
-   elseif typ == "Vector" then
-      local elems = ast[1]
-      return mcall(mname".vecNew", imap(elems, ds))
-   elseif typ == "Record" then
-      local rpairs = ast[1]
-      local keys = {}
-      local values = {}
-      for ii = 1, #rpairs, 2 do
-         keys[#keys+1] = {T="MVal", newVStr(snameToString(rpairs[ii]))}
-         values[#values+1] = ds(rpairs[ii+1])
-      end
-      local recCons = mcall(mname ".recDef", keys)
-      return mcall(recCons, values)
-   elseif typ == "Block" then
-      local lines = ast[1]
-      return desugarBlock(lines)
-   elseif typ == "Missing" then
-      return {T="MError", "MissingExpr", ast}
-   else
-      test.fail("Unknown AST: %s", astFmt(ast))
-   end
-end
-
-local function desugarStmt(ast, k)
-   local typ = ast.T
-   if typ == "S-If" then
-      local scond, sthen = ast[1], ast[2]
-      return mbranch(desugarExpr(scond), desugarExpr(sthen), k)
-   elseif typ == "S-Let" then
-      -- operators:  =  :=  +=  *= ...
-      local sname, op, svalue = ast[1], ast[2], ast[3]
-      local name, value = snameToString(sname), desugarExpr(svalue)
-      -- handle +=, etc.
-      local modop = op:match("^([^:=]+)")
-      if modop then
-         value = mbinop(modop, desugarExpr(sname), value)
-      end
-      local shadowMode = op == "=" and "=" or ":="
-      return mcall(mlambda({name}, k, shadowMode), {value})
-   elseif typ == "S-Loop" then
-      local block = ast[1]
-      local rep = {T="Name", pos=ast.pos, "repeat"}
-      return {T="MLoop", desugarBlock(append(block, {rep})), k}
-   elseif typ == "S-While" then
-      local cond = ast[1]
-      return mbranch(desugarExpr(cond), k, mname"break")
-   elseif typ == "S-LoopWhile" then
-      local cond, block = ast[1], ast[2]
-      return desugarStmt({T="S-Loop", append({{T="S-While", cond}}, block)}, k)
-   else
-      test.fail("Unknown statement: %s", astFmt(ast))
-   end
-end
-
--- Translate AST block into Middle Language, starting at index `ii`
---
-function desugarBlock(lines, ii)
-   ii = ii or 1
-   local k = lines[ii+1] and desugarBlock(lines, ii+1)
-   local line = lines[ii]
-
-   if string.match(line.T, "^S%-") then
-      return desugarStmt(line, k or {T="MError", "MissingFinalExpr", line})
-   elseif k then
-      -- silently ignore extraneous expression
-      return {T="MError", "Extraneous", line}
-   end
-   return desugarExpr(line)
-end
-
-----------------------------------------------------------------
 -- desugarM: Middle Language to Inner Language
 ----------------------------------------------------------------
+--
+-- Translation from ML to IL involves the following (among others):
+--
+--  * Named variable references are converted to de Bruijn indices. At this
+--    stage, undefined variable references and shadowing violations are
+--    detected.
+--
+--  * Multi-argument ML functions are described in terms of single-argument
+--    IL functions that accept an argument bundle (currently just a vector).
+--
 
 --------------------------------
 -- Scope object
@@ -771,10 +779,10 @@ local function desugarM(node, scope)
       end
       local index, offset = scopeFind(scope, name)
       faultIf(index == nil, "Undefined", node.ast, name)
-      return nat("vvecNth", {N("IArg", index), N("IVal", newVNum(offset))})
+      return nat("vvecNth", {N("IArg", index), N("IVal", newValue(offset))})
    elseif typ == "MVal" then
       local value = node[1]
-      return N("IVal", value)
+      return N("IVal", newValue(value))
    elseif typ == "MFun" then
       local params, body, shadowMode = node[1], node[2], node[3]
       -- check for un-sanctioned shadowing
@@ -954,8 +962,10 @@ x
 ]],
    '16')
 
+-- Examples
 
-local fib = [[
+local fibr = [[
+
 _fib = (_self, n) =>
     fib = n2 => _self(_self, n2)
     if n <= 1: 0
@@ -965,6 +975,22 @@ _fib = (_self, n) =>
 fib = n => _fib(_fib, n)
 
 fib(8)
+
 ]]
 
-et(fib, "13")
+et(fibr, "13")
+
+local fibloop = [==[
+
+fib = n =>
+    a = [0, 1]
+    loop while n > 1:
+        a := [a[1], a[0]+a[1]]
+        n := n-1
+    a[0]
+
+fib(8)
+
+]==]
+
+et(fibloop, "13")

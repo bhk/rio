@@ -37,8 +37,9 @@ local misc = require "misc"
 
 local C, Cc, Ct, NoCaptures, NS, P, R, S, V =
    peg.C, peg.Cc, peg.Ct, peg.NoCaptures, peg.NS, peg.P, peg.R, peg.S, peg.V
-local append, imap, move, override, sexprFmt, set =
-   misc.append, misc.imap, misc.move, misc.override, misc.sexprFmt, misc.set
+local append, imap, move, override, set, sexprFormatter =
+   misc.append, misc.imap, misc.move, misc.override, misc.set,
+   misc.sexprFormatter
 
 -- returns: match 0 or 1 occurrence of `p`
 local function opt(p)
@@ -451,27 +452,20 @@ end
 -- Create SEXPR summary of AST
 --------------------------------
 
-local astFormatters = {
+local astFmt = sexprFormatter {
    Name = function (v) return v[1] end,
    Number = function (v) return v[1] end,
 }
 
-local function astFmt(node)
-   return sexprFmt(node, astFormatters)
-end
-
-
 local function astFmtV(nodes)
    return table.concat(imap(nodes, astFmt), " ")
 end
-
 
 local exports = {
    parseModule = parseModule,
    astFmtV = astFmtV,
    astFmt = astFmt,
 }
-
 
 if test.skip then
    return exports
