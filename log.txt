@@ -59,7 +59,7 @@ Possibilities include:
 
   d) (`block:` | `then:` | ...) ==> block.  `block:` would introduce a block
      anywhere within an expression, including function bodies.  [Still a bit
-     inelegant to begin functions with `f = (x) => block:`.  Also, consider
+     inelegant to begin functions with `f = (x) -> block:`.  Also, consider
      the conflict with structure elements named "block" or "then".]
 
 Instead, we examine the indented line itself.  In Rio, it is easy to
@@ -146,8 +146,8 @@ should be given by its type.
 The inner language evaluator (`eval` in interp.lua) is summarized here in a
 hypothetical future Rio syntax:
 
-    eval = (expr, env) =>
-        ee = newExpr => eval(newExpr, env)
+    eval = (expr, env) ->
+        ee = newExpr -> eval(newExpr, env)
 
         match expr:
             IVal(value) -> value
@@ -177,8 +177,8 @@ calls its first argument, and the value `false` calls its second argument.
 Furthermore, in order to make the contract explicit and improve diagnostics,
 we place these functions on a *property* of the boolean values.  In Rio:
 
-   true.then_else = (then, else) => then()
-   false.then_else = (then, else) => else()
+   true.then_else = (then, else) -> then()
+   false.then_else = (then, else) -> else()
 
 Further, we can remove argument count validation, leaving that for the
 invoked function to perform.  In order to support that, we must provide the
@@ -218,13 +218,13 @@ Retaining the ability to pass multiple values to a *native* function
 
 That leaves us with:
 
-    eval = (expr, env) => match expr:
-        IVal(value) -> value
-        IArg(index) -> env[index]
-        IFun(body) -> VFun(env, body)
-        IApp(fn, arg) -> match eval(fn, env):
-            VFun(fenv, body) -> eval(body, fenv.push(eval(arg, env)))
-        INat(name, args) -> natives[name](args.map(a => eval(a, env)))
+    eval = (expr, env) -> match expr:
+        IVal(value) => value
+        IArg(index) => env[index]
+        IFun(body) => VFun(env, body)
+        IApp(fn, arg) => match eval(fn, env):
+            VFun(fenv, body) => eval(body, fenv.push(eval(arg, env)))
+        INat(name, args) => natives[name](args.map(a -> eval(a, env)))
 
 
 This comes closer to the ideals of elegance and timelessness that we have in
@@ -238,10 +238,10 @@ have the following IL definitions:
 
 The code to generate the IL for an `if` expression looks like this:
 
-    desugar = (ast, env) => match ast:
+    desugar = (ast, env) -> match ast:
         ...
         AST.If(cond, then, else) ->
-            te = [then, else].map(a => IFun(desugar(a, env.push([]))))
+            te = [then, else].map(a -> IFun(desugar(a, env.push([]))))
             IApp(INat("getProperty", [desugar(cond), "then_else"]),
                  INat("argsNew", te))
         ...
@@ -325,3 +325,20 @@ appearing in the unexpected contexts, but this leads to...
     and functional syntax.)
 
  2. Imperative `if` begs for a dangling `else: BLOCK` option.
+
+
+## `=>` --> `->`
+
+After trying to work with `=>` for some time as a function constructor, I'm
+switching back to `->`.  There was never a good reason for `=>` except for
+consistency with JavaScript, and it's unclear why they chose `=>` instead of
+the obvious `->`, unless they chose it to be consistent with CoffeeScript.
+(CoffeeScript has both `->` and `=>`, and the latter has semantics closer to
+what JavaScript decided upon.  Givn the original run-time cost of `=>`, it
+appears that CoffeeScript's creators preferred using `->`.)
+
+`->` is more consistent with mathematical terminology, especially when it
+appears in a type constructor.  (Just as with `[a]`, `a -> b` can have a
+different meaning when it appears in a type context.)
+
+Now, `=>` can appear in pattern matching expressions, a la Rust.

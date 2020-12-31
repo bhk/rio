@@ -325,7 +325,7 @@ function valueFmt(value)
       return "{" .. concat(o, ", ") .. "}"
    elseif value.T == "VFun" then
       local fenv, body = unpack(value)
-      return ("(...) => %s"):format(ilFmt(body))
+      return ("(...) -> %s"):format(ilFmt(body))
    elseif value.T == "VErr" then
       return "(VErr " .. astFmtV(value) .. ")"
    end
@@ -740,8 +740,8 @@ end
 
 -- Reduce an MLoop expression to other ML expressions
 --
---  (Loop BODY K) ==>
---     .post = (VARS) => K
+--  (Loop BODY K) =->
+--     .post = (VARS) -> K
 --     break ~~> .post(VARS)
 --     repeat ~~> .body(body, VARS)
 --     .body = (.body, VARS) -> BODY
@@ -911,13 +911,13 @@ et("{a:1}.a", "1")
 
 -- Fn
 
-et("x => x", "(...) => $0[0]")
+et("x -> x", "(...) -> $0[0]")
 
 -- Function calls
 
-et("(x => 1)(2)", "1")
-et("(x => x+1)(2)", "3")
-et("(x => x+1) $ 2", "3")
+et("(x -> 1)(2)", "1")
+et("(x -> x+1)(2)", "3")
+et("(x -> x+1) $ 2", "3")
 
 -- If
 
@@ -970,13 +970,13 @@ x
 
 local fibr = [[
 
-_fib = (_self, n) =>
-    fib = n2 => _self(_self, n2)
+_fib = (_self, n) ->
+    fib = n2 -> _self(_self, n2)
     if n <= 1: 0
     if n == 2: 1
     fib(n - 1) + fib(n - 2)
 
-fib = n => _fib(_fib, n)
+fib = n -> _fib(_fib, n)
 
 fib(8)
 
@@ -986,7 +986,7 @@ et(fibr, "13")
 
 local fibloop = [==[
 
-fib = n =>
+fib = n ->
     a = [0, 1]
     loop while n > 1:
         a := [a[1], a[0]+a[1]]

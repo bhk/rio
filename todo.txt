@@ -2,20 +2,19 @@ TODO
 
 * Unimplemented language features:
   - recursive definitions (forward declarations)
-  - short-circuiting `or` & `and`
   - `<!`
   - member assignment (x.a.b.c := 1)
-  - assert
+  - `assert`
   - type constructors
-  - `where`
   - `match`
+  - `where`
   - For
   - destructuring assignment with "else:" clause
   - Act
+  - short-circuiting `or` & `and`
   - Vector & record equality
   - String syntax: `\xXX` and `\u{X...}`
   - `'` suffixes in variable names (shadowing avoidance)
-  - Rest/spread in vector constructors/destructors
   - dictionaries/hashmaps
 
 * Going "full lambda": implementing Rio values as IFun

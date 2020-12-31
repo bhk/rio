@@ -379,7 +379,7 @@ local function addOperations(e)
    e = matchLTR(e, O("or"))
    e = e * (cp * T"?" * needExpr * (T":" + E"CloseIIf") * e)^0 / joinIIf
    e = matchRTL(e, O("$"))
-   e = (cp * params * T"=>")^0 * e / joinFn
+   e = (cp * params * T"->")^0 * e / joinFn
    return e
 end
 
@@ -674,12 +674,12 @@ testL("a or b ? f : g $ x", '(Binop "$" (IIf (Binop "or" a b) f g) x)')
 testL("a ? x : b ? y : z",
       '(IIf a x (IIf b y z))')
 
--- params => expr
+-- params -> expr
 
-testL("()    => 1", '(Fn [] 1)')
-testL("(a)   => 1", '(Fn [a] 1)')
-testL("(a,b) => 1", '(Fn [a b] 1)')
-testL("a     => 1", '(Fn [a] 1)')
+testL("()    -> 1", '(Fn [] 1)')
+testL("(a)   -> 1", '(Fn [a] 1)')
+testL("(a,b) -> 1", '(Fn [a b] 1)')
+testL("a     -> 1", '(Fn [a] 1)')
 
 --
 -- statements
@@ -708,7 +708,7 @@ testL("a + \n  x=1\n  x\n",
 
 local t1 = [[
 # C1
-f = (x) =>
+f = (x) ->
     if x < 1: 0
     x + 1
 

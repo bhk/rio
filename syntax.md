@@ -108,7 +108,7 @@ The notation used is from PEG[1], with some added conveniences:
 
     LetOp    <- "=" / ":=" / "+=" / "++=" / "*="
 
-    Expr     <- Params "=>" Expr
+    Expr     <- Params "->" Expr
               / Operations
 
     Params   <- Name

@@ -123,7 +123,7 @@ Here is a quick summary of Rio's "inline" syntax:
  - Variables: `x`, `foo_bar`, `FooBar`
  - Infix expressions:  `a + b * c`
  - Prefix operations:  `not a`,  `-x`
- - Function construction: `(x) => x * 2`
+ - Function construction: `(x) -> x * 2`
  - Function application: `f(x, y)`
  - Vector construction: `[x, y, z]`
  - Vector de-reference: `a[1]`
@@ -141,7 +141,7 @@ structured using [indentation](#2d-syntax).  Block-level syntax enables:
 
 For example:
 
-    f = (a, b) =>
+    f = (a, b) ->
         x = a + b
         if x < 1: 0
         loop while x < 10:
@@ -235,7 +235,7 @@ function invocation.
 Abstract data types are constructed by providing an implementation of
 `get_property` for that type.
 
-    gp = (self, name) => ...
+    gp = (self, name) -> ...
     new_type = derive(old_type, gp)
 
 
@@ -459,7 +459,7 @@ sub-expression `x*x` statically evaluates to `49` because the condition
 gives us knowledge of `x` in that branch.  Since both `49` and `2` are
 numbers, the result of the `if` expression is known to be a number.
 
-Function values: In the assignment `f = (x) => x + 1`, we have a precise
+Function values: In the assignment `f = x -> x + 1`, we have a precise
 value for `f` (a function).
 
 Function invocations: When statically evaluating a function call, if we know
@@ -559,7 +559,7 @@ heights, and more flexible rendering that are enabled by GUI environments.
 
 - Render certain ASCII sequences as special glyphs:
 
-   * `x => 2*x` shown as `x → 2*x`
+   * `x -> 2*x` shown as `x → 2*x`
    * `<=`, `>=`, and `!=` as `≤`, `≥`, and `≠`.
    * `x_0` and `x_1` as `x₀` and `x₁`.
 
@@ -1124,7 +1124,7 @@ Due to immutability, variables cannot be modified, but they can be shadowed.
 For example, in this code excerpt ...
 
     x = 1
-    f = (n) => n + x
+    f = n -> n + x
     x := 2
     ...
 
@@ -1210,7 +1210,7 @@ Within the loop body, the following are defined:
 
 Here is a simple example:
 
-    sum = a =>
+    sum = a ->
         n = 0
         total = 0
         loop while n < a.length:
@@ -1226,7 +1226,7 @@ Similarly, iterating over a collection can be done with a `for` statement:
 
 For example:
 
-    sum = a =>
+    sum = a ->
         total = 0
         for x in a:
             total += x
@@ -1243,8 +1243,8 @@ form...
 
 ... to this purely functional equivalent:
 
-    _post = (VARS...) => AFTER
-    _loop = (_loop, VARS...) => loopx[BODY]
+    _post = (VARS...) -> AFTER
+    _loop = (_loop, VARS...) -> loopx[BODY]
     _loop(_loop, VARS...)
 
 ... where `VARS...` is a sequence of variable names (those shadowed in the
@@ -1257,11 +1257,11 @@ the following textual substitutions:
 
 Translating the above example, we get:
 
-    sum = a =>
+    sum = a ->
         n = 0
         total = 0
-        _post = (n, total) => total
-        _loop = (_loop, n, total) =>
+        _post = (n, total) -> total
+        _loop = (_loop, n, total) ->
             if not (n < a.length):
                 _post(n, total)
             total = total + a[n]
@@ -1283,7 +1283,7 @@ implements an `and_then` property.  The rest of the block is packaged as a
 function, accepting PARAMS, that is passed to the action object.  The above
 code is syntactic sugar for something like the following:
 
-    ACTION.and_then(PARAMS => REST)
+    ACTION.and_then(PARAMS -> REST)
 
 A chain of such clauses will result in a nested series of functions.  For example:
 
@@ -1295,14 +1295,14 @@ A chain of such clauses will result in a nested series of functions.  For exampl
 ... is equivalent to:
 
     get("X").and_then(
-        x => get("Y").and_then(
-            y => get("Z").and_then(
-                z => REST)))
+        x -> get("Y").and_then(
+            y -> get("Z").and_then(
+                z -> REST)))
 
 This could be used to describe a chain of actions to be performed
 asynchronously:
 
-    connect = (auth) =>
+    connect = (auth) ->
         (hostname, port) <- parse_authority(auth)
         addr <- gethostbyname(hostname)
         s <- socket()
@@ -1322,7 +1322,7 @@ result in an action object.
 This composesly nicely with assignments, [update syntax](#update-syntax),
 and [looping syntax](#looping-syntax), as in this example:
 
-    fetch_list = list_url =>
+    fetch_list = list_url ->
         list_text <- do_http("GET", list_url, {})
         urls <- parse_lines(list_text)
         items = []
@@ -1339,7 +1339,7 @@ are to be handled:
 
 The above is syntactic sugar for:
 
-    EXPR.and_then_else(PARAMS => REST, () => FAILURE)
+    EXPR.and_then_else(PARAMS -> REST, () -> FAILURE)
 
 
 For example:
