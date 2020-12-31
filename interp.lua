@@ -111,6 +111,9 @@ local function desugarExpr(ast)
       return mbinop("[]", ds(a), ds(b))
    elseif typ =="Binop" then
       local op, a, b = ast[1], ast[2], ast[3]
+      if op == "$" then
+         return mcall(ds(a), {ds(b)})
+      end
       return mbinop(op, ds(a), ds(b))
    elseif typ == "Unop" then
       local op, svalue = ast[1], ast[2]
@@ -910,10 +913,11 @@ et("{a:1}.a", "1")
 
 et("x => x", "(...) => $0[0]")
 
--- Binop ()
+-- Function calls
 
 et("(x => 1)(2)", "1")
 et("(x => x+1)(2)", "3")
+et("(x => x+1) $ 2", "3")
 
 -- If
 
