@@ -169,16 +169,16 @@ local function desugarStmt(ast, k)
       return mbranch(desugarExpr(scond), desugarExpr(sthen), k)
    elseif typ == "S-Let" then
       -- operators:  =  :=  +=  *= ...
-      local sname, op, svalue = ast[1], ast[2], ast[3]
-      local sname, mvalue = peelTarget(sname, desugarExpr(svalue))
-      local name = snameToString(sname)
+      local target, op, svalue = ast[1], ast[2], ast[3]
+      local shadowMode = op == "=" and "=" or ":="
+      local mvalue = desugarExpr(svalue)
       -- handle +=, etc.
       local modop = op:match("^([^:=]+)")
       if modop then
-         mvalue = mbinop(modop, desugarExpr(sname), mvalue)
+         mvalue = mbinop(modop, desugarExpr(target), mvalue)
       end
-      local shadowMode = op == "=" and "=" or ":="
-      return mcall(mlambda({name}, k, shadowMode), {mvalue})
+      target, mvalue = peelTarget(target, mvalue)
+      return mcall(mlambda({snameToString(target)}, k, shadowMode), {mvalue})
    elseif typ == "S-Loop" then
       local block = ast[1]
       local rep = {T="Name", pos=ast.pos, "repeat"}
@@ -1001,6 +1001,7 @@ test.eq(val, msend(mname"x", "set",
                                    {mval"a", mval(9)})}))
 
 et("x = [1,2] | x[0] := 3 | x | ", "[3, 2]")
+et("x = [1,2] | x[0] += 3 | x | ", "[4, 2]")
 et("x = {a:[1]} | x.a[1] := 2 | x", "{a: [1, 2]}")
 
 -- Loop

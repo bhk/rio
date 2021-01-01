@@ -2,8 +2,6 @@ TODO
 
 * Unimplemented language features:
   - recursive definitions (forward declarations)
-  - `<!`
-  - member assignment (x.a.b.c := 1)
   - `assert`
   - type constructors
   - `match`
@@ -45,7 +43,7 @@ TODO
     - parse & walk AST
     - may leak memory (no "free")
     - minimal set of OS bindings
- * P2 interpreter/complier (written in Rio P1, supports P2 superset)
+ * P2 interpreter/compiler (written in Rio P1, supports P2 superset)
     - compiles to Wasm
     - non-leaking (refcounting)
     - obsoletes bootstrap
