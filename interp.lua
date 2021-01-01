@@ -577,6 +577,16 @@ local vecMethods = {
       return {T="VVec", unpack(self, start+1, limit)}
    end,
 
+   set = function (self, args)
+      local index, value = args[1], args[2]
+      faultIf(valueType(index) ~= "number", "NotNumber", nil, index)
+      -- enforce contiguity (growable, but one at a time)
+      faultIf(index < 0 or index > #self, "Bounds", nil, index)
+      local v = clone(self)
+      v[index+1] = value
+      return v
+   end,
+
    ["{}[]"] = function (self, args)
       local offset = args[1]
       faultIf(valueType(offset) ~= "number", "NotNumber", nil, offset)
@@ -904,6 +914,7 @@ et(' "abc"[1] ', '98')
 et("[7,8,9].len", "3")
 et("[7,8,9,0].slice(1,3)", "[8, 9]")
 et("[7,8,9,0].slice(1,1)", "[]")
+et("[7,8,9].set(1, 2)", "[7, 2, 9]")
 et("[7,8,9][1]", "8")
 
 -- ... Record
