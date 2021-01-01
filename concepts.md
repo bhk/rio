@@ -976,11 +976,12 @@ x/y)` to have `x/y` evaluated on-demand during the call to `f`.
 The `spawn` operator is semantically equivalent to `defer`, but it acts as a
 hint to speculatively begin evaluation of `EXPR` on another thread, in
 parallel with the evaluation of the remainder of the program.  When and if
-the value is needed, the current thread will wait on its completion, and
-faults that occur within the spawned thread will be observed at that point.
-If the value is never used, any results (or faults) will be discarded.
+the value is used, the thread using the value may have to wait on completion
+of the thread computing the value.  If an error has occurred during
+computation of the value, the errors will be observed when an attempt is
+made to use the resulting value.
 
-As with `defer`, faults or infinite loops in the expression will not be
+As with `defer`, errors or infinite loops in the expression will not be
 observed if the value is never used.
 
 
@@ -1152,25 +1153,26 @@ Shadowing requires `:=`, `+=`, etc..
 
 Due to [immutability](#immutability), we do not literally modify vectors or
 structures, but we can construct new values that include the "modification"
-we want.  Rio's update syntax allows such operations to be expressed easily:
+we want.
 
-    MEMBER_EXPR <! EXPR
+The `set` method "replaces" a member of a vector or dictionary.
 
+    x = [1,2,3]
+    y = s.set(1, 7)          # y = [1,7,3]
 
-MEMBER_EXPR must end in a property reference or a vector/dictionary item
-reference.  This syntax "peels" off the last de-reference and converts it to
-a `set_prop` or `set` call.
+The `setProp` method "replaces" a property in a value.
 
-Some examples:
+    x = {a:1, b:2, c:3}
+    y = x.setProp(b, 7)      #  y = {a: 1, b: 7, c: 3}
 
-    a[0] <! 1        # a.set(0, 1)
-    s.c <! 1         # s.set_prop("c", 1)
-    s.a.b.c <! 1     # s.a.b.set_prop("c", 1)
+Different values support `setProp` differently.  Records, in particular,
+support `setProp` for any of their named properties (those listed in the
+record constructor call).
 
-We combine this with [shadowing](#shadowing) and assignment syntax to allow the
-following (very procedural-looking) syntax:
+Rio's update syntax allows such operations to be expressed easily,
+by extending the notion of shadowing assignments.
 
-   MEMBER_EXPR := EXPR
+    MEMBER_EXPR := EXPR
 
 In this case, MEMBER_EXPR must consist of a variable name followed by one or
 more property/item references, and *all* of them are "peeled" off and
@@ -1180,14 +1182,13 @@ Similarly, other update assignment operators can be used:  `+=`, `-=`, etc.
 
 For example:
 
-    x.c := 1          <==>    x := (x.c <! 1)
-                      <==>    x := x.set_prop("c", 1)
+    x.c := 1        <==>  x := x.setProp("c", 1)
 
-    x.c += 1          <==>    x := (x.c <! (x.c + 1))
+    x.c += 1        <==>  x := x.setProp("c", x.c + 1)
 
-    x.a.b := 1        <==>    x := (x.a <! (x.a.b <! 1))
+    x.a.b := 1      <==>  x := x.setProp("a", x.a.setProp("b", 1))
 
-    x.a[5].b := 1     <==>    x := (x.a <! (x.a[5] <! (x.a[5].b <! 1)))
+    x[2][5].b := 1  <==>  x := x.set(2, x[2].set(5, x[2][5].setProp("b", 1)))
 
 
 ## Looping Syntax
