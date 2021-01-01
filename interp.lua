@@ -50,6 +50,10 @@ local function snameToString(ast)
    return ast[1]
 end
 
+local function mval(val)
+   return {T="MVal", val}
+end
+
 local function mname(str)
    return {T="MName", str}
 end
@@ -94,9 +98,9 @@ local function desugarExpr(ast)
    if typ == "Name" then
       return mname(ast[1])
    elseif typ == "Number" then
-      return {T="MVal", tonumber(ast[1])}
+      return mval(tonumber(ast[1]))
    elseif typ == "String" then
-      return {T="MVal", ast[1]}
+      return mval(ast[1])
    elseif typ == "Fn" then
       local params, body = ast[1], ast[2]
       return mlambda(imap(params, snameToString), ds(body))
@@ -129,7 +133,7 @@ local function desugarExpr(ast)
       local keys = {}
       local values = {}
       for ii = 1, #rpairs, 2 do
-         keys[#keys+1] = {T="MVal", snameToString(rpairs[ii])}
+         keys[#keys+1] = mval(snameToString(rpairs[ii]))
          values[#values+1] = ds(rpairs[ii+1])
       end
       local recCons = mcall(mname ".recDef", keys)
@@ -144,6 +148,20 @@ local function desugarExpr(ast)
    end
 end
 
+local function peelTarget(ast, mvalue)
+   local ds = desugarExpr
+   if ast.T == "Name" then
+      return ast, mvalue
+   elseif ast.T == "Index" then
+      local tgt, idx = ast[1], ast[2]
+      return peelTarget(tgt, msend(ds(tgt), "set", {ds(idx), mvalue}))
+   elseif ast.T == "Dot" then
+      local tgt, sname = ast[1], ast[2]
+      local mname = mval(snameToString(sname))
+      return peelTarget(tgt, msend(ds(tgt), "setProp", {mname, mvalue}))
+   end
+end
+
 local function desugarStmt(ast, k)
    local typ = ast.T
    if typ == "S-If" then
@@ -152,14 +170,15 @@ local function desugarStmt(ast, k)
    elseif typ == "S-Let" then
       -- operators:  =  :=  +=  *= ...
       local sname, op, svalue = ast[1], ast[2], ast[3]
-      local name, value = snameToString(sname), desugarExpr(svalue)
+      local sname, mvalue = peelTarget(sname, desugarExpr(svalue))
+      local name = snameToString(sname)
       -- handle +=, etc.
       local modop = op:match("^([^:=]+)")
       if modop then
-         value = mbinop(modop, desugarExpr(sname), value)
+         mvalue = mbinop(modop, desugarExpr(sname), mvalue)
       end
       local shadowMode = op == "=" and "=" or ":="
-      return mcall(mlambda({name}, k, shadowMode), {value})
+      return mcall(mlambda({name}, k, shadowMode), {mvalue})
    elseif typ == "S-Loop" then
       local block = ast[1]
       local rep = {T="Name", pos=ast.pos, "repeat"}
@@ -622,6 +641,14 @@ test.eq(natives.vvecNth(tv1, newValue(0)), newValue(9))
 
 local vrecEmpty = {T="VRec"}
 
+local function recFindPair(rec, name)
+   for ndx, pair in ipairs(rec) do
+      if pair[1] == name then
+         return ndx
+      end
+   end
+end
+
 local recBinops = {
 }
 
@@ -629,17 +656,17 @@ local recMethods = {
    setProp = function (self, args)
       local name, value = args[1], args[2]
       faultIf(valueType(name) ~= "string", "NotString", nil, name)
-      return clone(self, {[#self+1] = {name, value}})
+      local ndx = recFindPair(self, name)
+      return clone(self, {[ndx or #self+1] = {name, value}})
    end,
 }
 
 local recBase = makeBehavior({}, recBinops, recMethods, "VRec")
 
 behaviors.VRec = function (value, name)
-   for _, pair in ipairs(value) do
-      if pair[1] == name then
-         return pair[2]
-      end
+   local ndx = recFindPair(value, name)
+   if ndx then
+      return value[ndx][2]
    end
    return recBase(value, name)
 end
@@ -838,7 +865,7 @@ local function desugarM(node, scope)
       local desc, ast = node[1], node[2]
       faultIf(true, "Error: " .. desc, ast, nil)
    else
-      test.fail("unknown M-record: %s", recFmt(node))
+      test.fail("unknown M-record: %s", mlFmt(node))
    end
 end
 
@@ -849,6 +876,12 @@ end
 ----------------------------------------------------------------
 -- Tests
 ----------------------------------------------------------------
+
+local function fmtLet(name, value, expr, shadowMode)
+   shadowMode = shadowMode and ' "' .. shadowMode .. '"' or ""
+   return ('(MCall (MFun ["%s"] %s%s) [%s])'):format(
+      name, expr, shadowMode, value)
+end
 
 local function evalAST(ast)
    local manifest = {
@@ -875,6 +908,7 @@ local function trapEval(fn, ...)
 end
 
 local function et(source, evalue, eoob)
+   local source = source:gsub(" | ", "\n")
    local ast, oob = syntax.parseModule(source)
    test.eqAt(2, eoob or "", astFmtV(oob or {}))
    test.eqAt(2, evalue, valueFmt(trapEval(evalAST, ast)))
@@ -932,7 +966,7 @@ et("[7,8,9][1]", "8")
 
 -- ... Record
 et("{a:1}.a", "1")
-et('{a:1}.setProp("b",2)', "{a: 1, b: 2}")
+et('{a:1}.setProp("b",2).setProp("a",3)', "{a: 3, b: 2}")
 
 -- Fn
 
@@ -946,16 +980,28 @@ et("(x -> x+1) $ 2", "3")
 
 -- If
 
-et("if 1 < 2: 1\n0\n", "1")
-et("if 1 < 0: 1\n0\n", "0")
+et("if 1 < 2: 1 | 0", "1")
+et("if 1 < 0: 1 | 0", "0")
 
 -- Let
 
-et("x = 1\nx + 2\n", "3")
-et("x = 1\nx := 2\nx + 2\n", "4")
-et("x = 1\nx += 2\nx + 2\n", "5")
-et("x = 1\nx = 2\nx\n", '(VErr "Shadow" [] "x")')
-et("x := 1\nx\n", '(VErr "Undefined" [] "x")')
+et("x = 1 | x + 2 | ", "3")
+et("x = 1 | x := 2 | x + 2 | ", "4")
+et("x = 1 | x += 2 | x + 2 | ", "5")
+et("x = 1 | x = 2 | x | ", '(VErr "Shadow" [] "x")')
+et("x := 1 | x | ", '(VErr "Undefined" [] "x")')
+
+local var, val = peelTarget(
+   {T="Dot", {T="Index", {T="Name", "x"}, {T="Number", "1"}}, {T="Name","a"}},
+   mval(9))
+test.eq(var, {T="Name", "x"})
+test.eq(val, msend(mname"x", "set",
+                   {mval(1), msend(msend(mname"x", "{}[]", {mval(1)}),
+                                   "setProp",
+                                   {mval"a", mval(9)})}))
+
+et("x = [1,2] | x[0] := 3 | x | ", "[3, 2]")
+et("x = {a:[1]} | x.a[1] := 2 | x", "{a: [1, 2]}")
 
 -- Loop
 
@@ -971,10 +1017,6 @@ test.eq(findLets({T="MCall",
                   {T="MFun", {"x", "y"}, {T="MVal", nil}, true},
                   {{T="MFun", {"z"}, {T="MVal", nil}, true}}}),
         {"x", "y", "z"})
-
-local function fmtLet(name, value, expr)
-   return ('(MCall (MFun ["%s"] %s) [%s])'):format(name, expr, value)
-end
 
 test.eq(mlFmt(reduceMLoop({T="MName", "break"}, {T="MName", "x"}, {"x"})),
         fmtLet(".post",
