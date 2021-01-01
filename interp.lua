@@ -622,13 +622,26 @@ test.eq(natives.vvecNth(tv1, newValue(0)), newValue(9))
 
 local vrecEmpty = {T="VRec"}
 
+local recBinops = {
+}
+
+local recMethods = {
+   setProp = function (self, args)
+      local name, value = args[1], args[2]
+      faultIf(valueType(name) ~= "string", "NotString", nil, name)
+      return clone(self, {[#self+1] = {name, value}})
+   end,
+}
+
+local recBase = makeBehavior({}, recBinops, recMethods, "VRec")
+
 behaviors.VRec = function (value, name)
    for _, pair in ipairs(value) do
       if pair[1] == name then
          return pair[2]
       end
    end
-   return baseBehavior(value, name)
+   return recBase(value, name)
 end
 
 function natives.vrecNew(names, values)
@@ -919,6 +932,7 @@ et("[7,8,9][1]", "8")
 
 -- ... Record
 et("{a:1}.a", "1")
+et('{a:1}.setProp("b",2)', "{a: 1, b: 2}")
 
 -- Fn
 
