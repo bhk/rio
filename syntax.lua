@@ -397,18 +397,20 @@ local Tif, Tfor, Twhile = T"if", T"for", T"while"
 
 local needBlock = Ct(nlBlock) * ss + N("MissingBlock", P(0))
 
+local letTarget = matchSuf(varNode, dotSuffix + memberSuffix)
+
 local statement =
    N("S-For", Tfor * varNode * T"in" * expr * T":" * expr)
    + N("S-If", Tif * expr * T":" * expr)
    + N("S-LoopWhile", T"loop" * Twhile * expr * T":" * needBlock)
    + N("S-Loop", T"loop" * T":" * needBlock)
    + N("S-While", Twhile * needExpr)
-   + N("S-Let", varNode * letOp * needExpr)
+   + N("S-Let", letTarget * letOp * needExpr)
    + N("S-Act", params * T"<-" * needExpr)
 
 
 local atBlock = O("for", "if", "loop", "while")
-   + name * letOp
+   + letTarget * letOp
    + params * T"<-"
 
 
@@ -686,6 +688,8 @@ testL("a     -> 1", '(Fn [a] 1)')
 --
 
 testL("x = 1", '(S-Let x "=" 1)')
+testL("x[1] := 1", '(S-Let (Index x 1) ":=" 1)')
+testL("x.a := 1", '(S-Let (Dot x a) ":=" 1)')
 testL("x := 1", '(S-Let x ":=" 1)')
 testL("x <- a", '(S-Act [x] a)')
 testL("if a: x", '(S-If a x)')
