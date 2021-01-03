@@ -189,6 +189,9 @@ local function desugarStmt(ast, k)
    elseif typ == "S-LoopWhile" then
       local cond, block = ast[1], ast[2]
       return desugarStmt({T="S-Loop", append({{T="S-While", cond}}, block)}, k)
+   elseif typ == "S-Assert" then
+      local cond = ast[1]
+      return mbranch(desugarExpr(cond), k, mcall(mname".stop", {}))
    else
       test.fail("Unknown statement: %s", astFmt(ast))
    end
@@ -692,6 +695,10 @@ end
 -- Store names of native functions for debugging
 --------------------------------
 
+function natives.stop()
+   faultIf(true, "Stop")
+end
+
 for name, fn in pairs(natives) do
    nfnNames[fn] = name
 end
@@ -746,6 +753,7 @@ local builtins = {
    [".recDef"] = {T="VFun", emptyEnv, {T="INat",
                                        assert(natives.recDef),
                                        {{T="IArg", 0}}}},
+   [".stop"] = {T="VFun", emptyEnv, {T="INat", assert(natives.stop), {}}},
 }
 
 local function mnameToString(ast)
@@ -982,6 +990,11 @@ et("(x -> x+1) $ 2", "3")
 
 et("if 1 < 2: 1 | 0", "1")
 et("if 1 < 0: 1 | 0", "0")
+
+-- Assert
+
+et("assert 2<3 | 1", "1")
+et("assert 2>3 | 1", '(VErr "Stop" [])')
 
 -- Let
 

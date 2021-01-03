@@ -194,28 +194,29 @@ local ss = (S" "^1 + nlWhite + comment + controlChar)^0
 local name = C(nameInitial * nameChar^0) * ss
 
 
--- returns: match a token
-local function T(str, extra)
-   local kind =  nameChar.match(str) and nameChar
-      or opChar.match(str) and opChar
-
-   local tail = extra and extra * ss or ss
-   tail = kind and (-kind * tail) or tail
-
-   return P(str) * tail
-end
-
-
--- returns: match and capture any of a set of tokens
-local function O(...)
+-- returns: match and optionally capture any of a set of tokens
+local function matchTokens(tokens, isCapture)
    local matchAny = nil
-   for n, str in ipairs({...}) do
-      local pat = T(str, Cc(str))
+   for n, str in ipairs(tokens) do
+      -- see what kind of token this is
+      local kind = nameChar.match(str) and nameChar
+         or opChar.match(str) and opChar
+      local after = kind and (-kind * ss) or ss
+      local pat = P(str) * (isCapture and Cc(str) * after or after)
       matchAny = matchAny and (matchAny + pat) or pat
    end
    return matchAny
 end
 
+-- returns: match a token
+local function T(...)
+   return matchTokens({...}, false)
+end
+
+-- returns: match and capture a token (used for Operators)
+local function O(...)
+   return matchTokens({...}, true)
+end
 
 -- Numeric literals
 
@@ -244,8 +245,8 @@ local qstring = P"\"" * qchar^0 / concat * (P"\"" + E"StringEnd") * ss
 
 
 -- match words not to be confused with variable names
-local keywords = (P"and" + "or" + "not"
-                  + "if" + "loop" + "while" + "for") * -nameChar
+local stmtKeywords = T("if", "loop", "while", "for", "assert")
+local keywords = T("and", "or", "not") + stmtKeywords
 
 
 -- returns: match comma-delimited sequence of zero-or-more `p`
@@ -407,9 +408,10 @@ local statement =
    + N("S-While", Twhile * needExpr)
    + N("S-Let", letTarget * letOp * needExpr)
    + N("S-Act", params * T"<-" * needExpr)
+   + N("S-Assert", T"assert" * needExpr)
 
 
-local atBlock = O("for", "if", "loop", "while")
+local atBlock = stmtKeywords
    + letTarget * letOp
    + params * T"<-"
 
@@ -698,6 +700,8 @@ testL("loop:\n  if a: x\n  b\n", '(S-Loop [(S-If a x) b])')
 testL("while c:", '(S-While c)')
 testL("loop while C:\n  x := 1\n", '(S-LoopWhile C [(S-Let x ":=" 1)])')
 testL("for x in E: B", '(S-For x E B)')
+testL("assert C", '(S-Assert C)')
+
 
 -- extraneous characters
 

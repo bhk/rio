@@ -2,7 +2,6 @@ TODO
 
 * Unimplemented language features:
   - recursive definitions (forward declarations)
-  - `assert`
   - type constructors
   - `match`
   - `where`
@@ -41,12 +40,14 @@ TODO
  * "P1" (Phase 1) language definition
  * P1 "bootstrap" interpreter (Lua)
     - parse & walk AST
-    - may leak memory (no "free")
     - minimal set of OS bindings
  * P2 interpreter/compiler (written in Rio P1, supports P2 superset)
     - compiles to Wasm
-    - non-leaking (refcounting)
     - obsoletes bootstrap
+    - may leak memory: okay for self-hosting, target programs
+      are faster than when interpreted by P1.
+ * P3 interpreter/compiler (built using P2)
+    - more than self-hosting: non-leaking, clean semantics
  * Choose native VM: Wasmtime, Wasmer, ?
  * OS (WASI?) bindings
  * Web Server
