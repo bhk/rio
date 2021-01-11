@@ -28,12 +28,19 @@ extends to include all subsequent contiguous physical lines that are
 indented more than that.
 
 Additional blocks begin where a line is encountered that (a) is indented
-more than its parent block and (b) contains a statement (discussed below).
-The indentation of that line defines the indentation of a new, nested block
-that includes all subsequent, contiguous lines that are indented that much
-or more.  Physical lines that are more indented than the first line of a
+more than its parent block and (b) contains block-level syntax.  The
+indentation of that line defines the indentation of a new, nested block that
+includes all subsequent, contiguous lines that are indented that much or
+more.  Physical lines that are more indented than the first line of a
 logical line but are not part of a nested block are called continuation
 lines.
+
+*Block-level syntax* includes statements and match cases, as described
+below.  In practice, distinguishing such a line from a valid continuation
+line is relatively simple because it begins with one of a small number of
+keywords or it contains the initial portion of one of the following
+"binding" forms: `Pattern => Expr`, `Params <- Expr`, `Var = Expr` and other
+assignment variants (`:=', `+=`, ...).
 
 The logical structure of a Rio module, therefore, is a block.  A block is a
 sequence of logical lines.  A logical line is a sequence of physical lines
@@ -42,11 +49,11 @@ and/or blocks.
 
 ## Inline Syntax
 
-A logical line is a sequence of text and/or blocks.  The line boundaries
-between physical lines are treated as whitespace and have no other
-significance.
+A logical line is a sequence of physical lines (text) and/or blocks.  The
+line boundaries between physical lines are treated as whitespace and have no
+other significance.
 
-Logical lines may contain statements or inline expressions.
+Logical lines may contain statements, match cases, or inline expressions.
 
 A *statement* is not a complete expression, but is the initial portion of an
 expression.  It must be combined with an expression (usually given by the
@@ -56,9 +63,10 @@ lines that follow in its block) to make a new expression.
       true             #   statement continuation    >  expression
     REST               # remainder of block         /
 
-Statements begin with one of a small number of keywords (`if`, `loop`,
-etc.), except for assignment statements, which are easily identified by
-their assignment operators.
+A *match case* describes a case in a `match` statement: `Pattern => Expr`.
+Some examples:
+
+    ["Point", x, y] => sqrt(x*x + y*y)
 
 An *inline expression* (ILE) is a complete expression on its own.  Every
 block ends in a logical line that consists of an ILE.  ILEs use a fairly
@@ -101,10 +109,13 @@ The notation used is from PEG[1], with some added conveniences:
 
     Statement <- Name LetOp Expr
                 / Params "<-" Expr
+                / Pattern "=>" Expr
                 / "if" Expr ":" Expr
                 / "loop" ":" Block
                 / "loop while" Expr ":" Block
+                / "while" Expr
                 / "for" Name "in" Expr ":" Block
+                / "assert" Expr
 
     LetOp    <- "=" / ":=" / "+=" / "++=" / "*="
 
@@ -121,6 +132,7 @@ The notation used is from PEG[1], with some added conveniences:
               / Record           # {a: 1, b: 2}
               / "(" Expr ")"     # (1 + 2)
               / Block            # [from 2D syntax]
+              / "match" Expr ":" Block
 
     Vector   <- "[" Expr,* "]"
 
@@ -136,6 +148,11 @@ The notation used is from PEG[1], with some added conveniences:
 
     String   <- ["] StringCh* ["] Spacing
     StringCh <- !["\\] . / '\\' [\\"nrt]
+
+    Pattern  <- Variable
+              / Number
+              / String
+              / "[" Pattern,* "]"
 
 ----
 

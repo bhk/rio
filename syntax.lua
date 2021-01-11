@@ -19,16 +19,18 @@
 --   (Dot a name)
 --   (Index a b)
 --   (IIf a b c)
+--   (Match value cases)
 --   (Block block)
 --
 -- Statement:
 --   (S-Let name op value)
+--   (S-Act params act)
+--   (S-Case pattern body)
 --   (S-If cond then)
 --   (S-Loop block)
 --   (S-For name seq body)
 --   (S-LoopWhile cond body)
 --   (S-While cond)
---   (S-Act params act)
 --
 
 local test = require "test"
@@ -246,7 +248,7 @@ local qstring = P"\"" * qchar^0 / concat * (P"\"" + E"StringEnd") * ss
 
 -- match words not to be confused with variable names
 local stmtKeywords = T("if", "loop", "while", "for", "assert")
-local keywords = T("and", "or", "not") + stmtKeywords
+local keywords = T("and", "or", "not", "match") + stmtKeywords
 
 
 -- returns: match comma-delimited sequence of zero-or-more `p`
@@ -257,7 +259,7 @@ end
 
 local nameNode = N("Name", name)
 
-local varNode = nameNode - keywords
+local variable = nameNode - keywords
 
 local expr = V"Expr"
 local needExpr = expr + N("Missing", P(0))
@@ -269,14 +271,17 @@ local record = T"{" * cseq(recordNV) * (T"}" + E"CloseCurly")
 
 local grouping = T"(" * needExpr * (T")" + E"CloseParen")
 
+local needBlock = Ct(nlBlock) * ss + N("MissingBlock", P(0))
+
 local atom =
    N("Number", number)
    + N("String", qstring)
-   + varNode
+   + variable
    + N("Vector", vector)
    + N("Record", record)
    + grouping
    + N("Block", Ct(nlBlock) * ss)
+   + N("Match", T"match" * needExpr * T":" * needBlock)
 
 
 local function binop(op, pos, a, b)
@@ -367,7 +372,7 @@ local callSuffix = T"(" * Cc"Call" * cseq(expr) * (T")" + E"CloseParen")
 local memberSuffix = T"[" * Cc"Index" * needExpr * (T"]" + E"CloseSquare")
 local dotSuffix = T"." * Cc"Dot" * (nameNode + N("Missing", P(0)) * E"DotName")
 
-local params = T"(" * cseq(varNode) * T")" + Ct(varNode)
+local params = T"(" * cseq(variable) * T")" + Ct(variable)
 
 local function addOperations(e)
    e = matchSuf(e, dotSuffix + callSuffix + memberSuffix)
@@ -396,25 +401,29 @@ local letOp = O("=", ":=", "+=", "++=", "*=")
 -- work around lua-mode.el indentation bug...
 local Tif, Tfor, Twhile = T"if", T"for", T"while"
 
-local needBlock = Ct(nlBlock) * ss + N("MissingBlock", P(0))
+local letTarget = matchSuf(variable, dotSuffix + memberSuffix)
 
-local letTarget = matchSuf(varNode, dotSuffix + memberSuffix)
+local pattern =
+   variable
+   + N("Number", number)
+   + N("String", qstring)
+   + N("VecPattern", T"[" * cseq(V"Pattern") * T"]")
 
 local statement =
-   N("S-For", Tfor * varNode * T"in" * expr * T":" * expr)
-   + N("S-If", Tif * expr * T":" * expr)
-   + N("S-LoopWhile", T"loop" * Twhile * expr * T":" * needBlock)
-   + N("S-Loop", T"loop" * T":" * needBlock)
-   + N("S-While", Twhile * needExpr)
-   + N("S-Let", letTarget * letOp * needExpr)
+   N("S-Let", letTarget * letOp * needExpr)
    + N("S-Act", params * T"<-" * needExpr)
+   + N("S-Case", pattern * T"=>" * needExpr)
+   + N("S-If", Tif * expr * T":" * expr)
+   + N("S-Loop", T"loop" * T":" * needBlock)
+   + N("S-LoopWhile", T"loop" * Twhile * expr * T":" * needBlock)
+   + N("S-While", Twhile * needExpr)
+   + N("S-For", Tfor * variable * T"in" * expr * T":" * expr)
    + N("S-Assert", T"assert" * needExpr)
-
 
 local atBlock = stmtKeywords
    + letTarget * letOp
    + params * T"<-"
-
+   + pattern * T"=>"
 
 -- consume everything to the end of the line
 local discardEOL = E"Garbage" * (NonNL^1 + nlWhite + nlBlock)^0
@@ -424,9 +433,7 @@ local logLine =
        + (ss * ile + N("BadILE", P(0))))
    * (#nlEOL + discardEOL)
 
-
 local rioModule = N("Block", Ct(p2dModule))
-
 
 local rioG = {
    "Module",
@@ -434,10 +441,10 @@ local rioG = {
    Comment = comment,
    AtBlock = atBlock,
    LogLine = logLine,
+   Pattern = pattern,
    Expr = ile,
    Statement = statement,
 }
-
 
 local rioPat = P(rioG)
 
@@ -588,7 +595,7 @@ testG([["abc]], qstring, {"abc"}, '(Error "StringEnd")')
 local function testL(subj, esexpr, eoob)
    local g = override({}, rioG, {"LogLine"})
    local pos, state, captures = P(g).match(subj, 1, p2dInitialState)
-   test.eqAt(2, esexpr, astFmtV(captures))
+   test.eqAt(2, astFmtV(captures), esexpr)
    if eoob then
       test.eqAt(2, eoob, astFmtV(state.oob))
    end
@@ -641,7 +648,7 @@ testL("((a)) ", "a")
 
 testL("1.23", "1.23")
 testL("(12)", "12")
-
+testL("match X:\n  x => e\n", '(Match X [(S-Case x e)])')
 
 -- suffix operators
 
@@ -694,6 +701,7 @@ testL("x[1] := 1", '(S-Let (Index x 1) ":=" 1)')
 testL("x.a := 1", '(S-Let (Dot x a) ":=" 1)')
 testL("x := 1", '(S-Let x ":=" 1)')
 testL("x <- a", '(S-Act [x] a)')
+testL("x => e:", '(S-Case x e)')
 testL("if a: x", '(S-If a x)')
 testL("loop:", '(S-Loop (MissingBlock))')
 testL("loop:\n  if a: x\n  b\n", '(S-Loop [(S-If a x) b])')
@@ -701,7 +709,6 @@ testL("while c:", '(S-While c)')
 testL("loop while C:\n  x := 1\n", '(S-LoopWhile C [(S-Let x ":=" 1)])')
 testL("for x in E: B", '(S-For x E B)')
 testL("assert C", '(S-Assert C)')
-
 
 -- extraneous characters
 
