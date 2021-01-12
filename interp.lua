@@ -58,6 +58,10 @@ local function mname(str)
    return {T="MName", str}
 end
 
+local function merror(code, ast)
+   return {T="MError", code, ast}
+end
+
 local function mlambda(params, body, shadowMode)
    return {T="MFun", params, body, shadowMode}
 end
@@ -78,8 +82,9 @@ local function msend(value, name, args)
    return mcall(mprop(value, name), args)
 end
 
-local function mbranch(mcond, mthen, melse)
-   return mcall(msend(mcond, "switch", {mlambda({}, mthen), mlambda({}, melse)}),
+local function mif(mcond, mthen, melse)
+   return mcall(msend(mcond, "switch", {mlambda({}, mthen),
+                                        mlambda({}, melse)}),
                {})
 end
 
@@ -87,7 +92,12 @@ local function mbinop(op, a, b)
    return mcall(mprop(a, "{}"..op), {b})
 end
 
+local function mindex(vec, index)
+   return mbinop("[]", vec, index)
+end
+
 local desugarBlock
+local desugarCase
 
 -- Translate AST expression into Middle Language
 --
@@ -112,7 +122,7 @@ local function desugarExpr(ast)
       return mprop(ds(a), snameToString(b))
    elseif typ =="Index" then
       local a, b = ast[1], ast[2]
-      return mbinop("[]", ds(a), ds(b))
+      return mindex(ds(a), ds(b))
    elseif typ =="Binop" then
       local op, a, b = ast[1], ast[2], ast[3]
       if op == "$" then
@@ -138,13 +148,49 @@ local function desugarExpr(ast)
       end
       local recCons = mcall(mname ".recDef", keys)
       return mcall(recCons, values)
+   elseif typ == "Match" then
+      local value, cases = ast[1], ast[2]
+      local melse = merror("CaseNotHandled", ast)
+      for n = #cases, 1, -1 do
+         local case = cases[n]
+         if case.T ~= "S-Case" then
+            return merror("ExpectedCase", case)
+         end
+         local pattern, body = case[1], case[2]
+         local mbody = desugarExpr(body)
+         melse = desugarCase(mname"$value", pattern, mbody, melse)
+      end
+      return mlet("$value", ds(value), melse)
    elseif typ == "Block" then
       local lines = ast[1]
       return desugarBlock(lines)
    elseif typ == "Missing" then
-      return {T="MError", "MissingExpr", ast}
+      return merror("MissingExpr", ast)
    else
       test.fail("Unknown AST: %s", astFmt(ast))
+   end
+end
+
+function desugarCase(mvalue, pattern, mthen, melse)
+   local typ = pattern.T
+   if typ == "Name" then
+      local name = pattern[1]
+      return mlet(name, mvalue, mthen, "=")
+   elseif typ == "Number" or typ == "String" then
+      return mif(mbinop("==", desugarExpr(pattern), mvalue), mthen, melse)
+   elseif typ == "VecPattern" then
+      local elems = pattern[1]
+      local mfthen = mlambda({}, mthen, nil)
+      for n = #elems, 1, -1 do
+         mfthen = desugarCase(mindex(mvalue, mval(n-1)),
+                              elems[n],
+                              mfthen,
+                              mname"$felse")
+      end
+      local mlenEQ = mbinop("==", mval(#elems), mprop(mvalue, "len"))
+      return mcall(mlet("$felse", mlambda({}, melse, nil),
+                        mif(mlenEQ, mfthen, mname"$felse")),
+                   {})
    end
 end
 
@@ -166,7 +212,7 @@ local function desugarStmt(ast, k)
    local typ = ast.T
    if typ == "S-If" then
       local scond, sthen = ast[1], ast[2]
-      return mbranch(desugarExpr(scond), desugarExpr(sthen), k)
+      return mif(desugarExpr(scond), desugarExpr(sthen), k)
    elseif typ == "S-Let" then
       -- operators:  =  :=  +=  *= ...
       local target, op, svalue = ast[1], ast[2], ast[3]
@@ -178,20 +224,20 @@ local function desugarStmt(ast, k)
          mvalue = mbinop(modop, desugarExpr(target), mvalue)
       end
       target, mvalue = peelTarget(target, mvalue)
-      return mcall(mlambda({snameToString(target)}, k, shadowMode), {mvalue})
+      return mlet(snameToString(target), mvalue, k, shadowMode)
    elseif typ == "S-Loop" then
       local block = ast[1]
       local rep = {T="Name", pos=ast.pos, "repeat"}
       return {T="MLoop", desugarBlock(append(block, {rep})), k}
    elseif typ == "S-While" then
       local cond = ast[1]
-      return mbranch(desugarExpr(cond), k, mname"break")
+      return mif(desugarExpr(cond), k, mname"break")
    elseif typ == "S-LoopWhile" then
       local cond, block = ast[1], ast[2]
       return desugarStmt({T="S-Loop", append({{T="S-While", cond}}, block)}, k)
    elseif typ == "S-Assert" then
       local cond = ast[1]
-      return mbranch(desugarExpr(cond), k, mcall(mname".stop", {}))
+      return mif(desugarExpr(cond), k, mcall(mname".stop", {}))
    else
       test.fail("Unknown statement: %s", astFmt(ast))
    end
@@ -205,10 +251,10 @@ function desugarBlock(lines, ii)
    local line = lines[ii]
 
    if string.match(line.T, "^S%-") then
-      return desugarStmt(line, k or {T="MError", "MissingFinalExpr", line})
+      return desugarStmt(line, k or merror("MissingFinalExpr", line))
    elseif k then
       -- silently ignore extraneous expression
-      return {T="MError", "Extraneous", line}
+      return merror("Extraneous", line)
    end
    return desugarExpr(line)
 end
@@ -1046,6 +1092,28 @@ loop while x < 10:
 x
 ]],
    '16')
+
+-- Match
+
+et([[
+match 1:
+   2 => 3
+   x => x
+]], '1')
+
+et([[
+match 2:
+   2 => 3
+   x => x
+]], '3')
+
+et([[
+match [1,2]:
+     [] => 0
+     [2, x] => 1
+     [1, x] => x
+     _ => 9
+]], '2')
 
 -- Examples
 

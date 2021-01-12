@@ -3,7 +3,6 @@ TODO
 * Unimplemented language features:
   - recursive definitions (forward declarations)
   - type constructors
-  - `match`
   - `where`
   - For
   - destructuring assignment with "else:" clause
