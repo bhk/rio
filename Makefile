@@ -1,9 +1,6 @@
-
+export NODE_PATH = .
+run: ;	node interp.js
 
 export RUN_TESTS=1
-
-
-
-run:
-	lua interp.lua
+runlua: ; lua interp.lua
 
