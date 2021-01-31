@@ -30,91 +30,6 @@ syntax.  And with an implementation that heavily leverages inlining and
 partial evaluation.
 
 
-## Rio Internals
-
-The Rio "surface language" is converted to the [Inner
-Language](#inner-language) (IL) by a process called
-[desugaring](#desugaring).
-
-Features are built on the IL foundation in the following ways:
-
- 1. Transforming Rio syntax to the internal IL structure ("de-sugaring").
- 2. Defining native functions that construct and operate on values.
- 3. Supplying bindings for the intial lexical environment (the environment
-    within which each Rio module is evaluated).
-
-
-## Desugaring
-
-A single AST node can expand to many IL expression nodes.  Some of the
-concepts in the surface language do not correspond *exactly* to the similar
-concepts in the IL, and some degree of expansion occurs (a single AST
-expression can result in many IL expressions).
-
-Here are the main aspects in which the AST and the IL differ:
-
- * IL functions take a single argument, but surface language functions may
-   accept zero or more arguments.  Each Rio function desugars to one IL
-   function, but the IL function accepts a single vector as an argument.
-
- * Operations on values are translated to work in terms of [methods and
-   properties](#methods-and-properties).  In the surface language,
-   everything is an object. In the IL, everything is a function.
-
- * Variable assignments are trnaslated to function definitions and
-   application.
-
- * Names are used to refer to parameters and values in the surface language.
-   In the IL, all parameter references use a [de Bruijn index](
-   https://en.wikipedia.org/wiki/De_Bruijn_index).  Desugaring keeps track
-   of names that are in scope, so it can detect references to undefined
-   variables and shadowing of variables.
-
- * Some syntactic constructs require more involved transormations specific
-   to that construct.  For example, the [imperative
-   syntax](#imperative-syntax) features.
-
-
-## Inner Language
-
-The inner language (IL) is a minimal, pure functional language, similar to
-the lambda calculus with a strict evaluation strategy.  All Rio programs are
-translated to this internal representation before being evaluated.
-
-Evaluation of a IL expression takes place within the context of an
-"environment" that keeps track of arguments that were passed to functions.
-As currently formulated, the IL has five types of expressions:
-
- * Function construction.  Like `lambda` in Lisp, a function construction
-   expression evaluates to a function value.  It consists of a snapshot of
-   the environment at the time of construction and a function "body"
-   sub-expression.
-
- * Function application.  This type of expression includes a sub-expression
-   for the function and its argument.  Each function accepts one argument.
-   The function and its argument are first evaluated, and then the function
-   is "called" with the argument value.
-
- * Native function call.  This calls a function implemented by the
-   interpreter or runtime environment.
-
- * Parameter references.  This expression includes an integral position: 0
-   for the agument to the current function, 1 for the argument passed to the
-   parent (the function that constructed the current function), and so on.
-
- * Constants.  A constant expression evaluates to a specific Rio value.
-
-Variable bindings and data structures are [immutable](#immutability).
-
-Variable visibility adheres strictly to lexical scoping.  There are no
-global or dynamic variables.
-
-The IL is dynamically typed.  Parameters may take on any value.  In fact,
-the IL has no knowledge even of dynamic types, except for functions and
-booleans.  Other values can be differentiated only by their behavior, and
-their behavior is only observable via native functions.
-
-
 ## Syntax Introduction
 
 Here is a quick summary of Rio's "inline" syntax:
@@ -138,6 +53,7 @@ structured using [indentation](#2d-syntax).  Block-level syntax enables:
  - Assignment expressions
  - Conditional expressions
  - Imperative expressions
+ - Match expressions
 
 For example:
 
@@ -154,6 +70,7 @@ Other syntax topics:
  * [Vertical syntax](#vertical-syntax) describes the philosophy behind
    assignments and conditionals.
  * [Imperative Syntax](#imperative-syntax)
+ * [Pattern matching)(#pattern-matching)
 
 
 ## Imperative Syntax
@@ -199,6 +116,41 @@ For example, the following Lisp code:
         x = EXPR
         x * x
     B
+
+
+## Pattern Matching
+
+A `match` expression selects between multiple alternatives, potentially
+binding names to values.
+
+    match Value:
+       Pattern => Expr
+       Pattern => Expr
+
+A `Pattern` can be one of the following:
+
+ - Name: A name matches any value.  When the corresponding `Expr` is
+   evaluated, the value is bound to the variable of that name.
+
+ - Constant: A literal number or stirng will match an equivalent value.
+
+ - `[Pattern, ...]`: A sequence of zero or more comma-delimited patterns
+   enclosed in `[` and `]` will match a vector value if it has the same
+   length as the pattern expression and if each pattern matches the
+   corresponding element in the vector.
+
+The value of the `match` expression is the value of the expression
+corresponding to the first matching pattern. If none of the patterns match,
+an error occurs.
+
+In the following example, the fourth pattern is the first to match, and the
+resulting value is 6.
+
+    match [1,2,3]:
+        [a, b, c, d] => 1
+        [a, b] => 2
+        [2, b,c] => 3
+        [1, b, c] => b * c
 
 
 ## Methods and Properties
