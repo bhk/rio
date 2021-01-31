@@ -10,38 +10,38 @@ let N = (typ, ...elems) => {
 };
 
 //==============================================================
-// desugar: Surface Language to Middle Language
+// desugar: Surface Language to Core Language
 //==============================================================
 //
 // This translation requires no knowledge of the enclosing scope.  Instead
-// of translating an AST tree to an ML tree, we could construct the ML tree
+// of translating an AST tree to an CL tree, we could construct the CL tree
 // directly during parsing.  That would be more performant and simplify this
 // code slightly, but it would complicate initialization/construction of the
 // parser.
 //
-// The middle language retains surface language semantics but uses a reduced
+// The core language retains surface language semantics but uses a reduced
 // set of primitives.  Functions accept argument bundles, and values have
 // properties.
 //
-//     (MVal nativevalue)
-//     (MName name)
-//     (MFun params mexpr sOK)
-//     (MCall fn args)
-//     (MProp value name)
-//     (MLoop body k)
-//     (MError desc ast)
+//     (CVal nativevalue)
+//     (CName name)
+//     (CFun params mexpr sOK)
+//     (CCall fn args)
+//     (CProp value name)
+//     (CLoop body k)
+//     (CError desc ast)
 //
 // params: {string...}
 // name: string
 // nativevalue: string | number
 //
-// There is no notion of "native" functions in ML, but constructed
+// There is no notion of "native" functions in CL, but constructed
 // expressions reference the following free variables:
 //     .vecNew : values -> vector
 //     .recDef : names -> values -> record
 
-let mlFmt = sexprFormatter({
-    MName: v => v[0],
+let clFmt = sexprFormatter({
+    CName: v => v[0],
 });
 
 function snameToString(ast) {
@@ -49,162 +49,162 @@ function snameToString(ast) {
     return ast[0];
 }
 
-function mval(val) {
-    return N("MVal", val);
+function cval(val) {
+    return N("CVal", val);
 }
 
-function mname(str) {
-    return N("MName", str);
+function cname(str) {
+    return N("CName", str);
 }
 
-function merror(code, ast) {
-    return N("MError", code, ast);
+function cerror(code, ast) {
+    return N("CError", code, ast);
 }
 
-function mlambda(params, body, shadowMode) {
-    return N("MFun", params, body, shadowMode);
+function clambda(params, body, shadowMode) {
+    return N("CFun", params, body, shadowMode);
 }
 
-function mcall(mfn, margs) {
-    return N("MCall", mfn, margs);
+function ccall(mfn, margs) {
+    return N("CCall", mfn, margs);
 }
 
-function mprop(mvalue, name) {
-    return N("MProp", mvalue, name);
+function cprop(cvalue, name) {
+    return N("CProp", cvalue, name);
 }
 
-function mlet(name, value, expr, shadowMode) {
-    return mcall(mlambda([name], expr, shadowMode), [value]);
+function clet(name, value, expr, shadowMode) {
+    return ccall(clambda([name], expr, shadowMode), [value]);
 }
 
-function msend(value, name, args) {
-    return mcall(mprop(value, name), args);
+function csend(value, name, args) {
+    return ccall(cprop(value, name), args);
 }
 
-function mif(mcond, mthen, melse) {
-    return mcall(msend(mcond, "switch", [mlambda([], mthen),
-                                         mlambda([], melse)]),
+function cif(mcond, mthen, melse) {
+    return ccall(csend(mcond, "switch", [clambda([], mthen),
+                                         clambda([], melse)]),
                  []);
 }
 
-function mbinop(op, a, b) {
-    return mcall(mprop(a, "{}" + op), [b]);
+function cbinop(op, a, b) {
+    return ccall(cprop(a, "{}" + op), [b]);
 }
 
-function mindex(vec, index) {
-    return mbinop("[]", vec, index);
+function cindex(vec, index) {
+    return cbinop("[]", vec, index);
 }
 
-// Translate AST expression into Middle Language
+// Translate AST expression into Core Language
 //
 function desugarExpr(ast) {
     let ds = desugarExpr;
     let typ = ast.T;
 
     if (typ == "Name") {
-        return mname(ast[0]);
+        return cname(ast[0]);
     } else if (typ == "Number") {
-        return mval(Number(ast[0]));
+        return cval(Number(ast[0]));
     } else if (typ == "String") {
-        return mval(ast[0])
+        return cval(ast[0])
     } else if (typ == "Fn") {
         let [params, body] = ast;
-        return mlambda(params.map(snameToString), ds(body));
+        return clambda(params.map(snameToString), ds(body));
     } else if (typ =="Call") {
         let [fn, args] = ast;
-        return mcall(ds(fn), args.map(ds));
+        return ccall(ds(fn), args.map(ds));
     } else if (typ =="Dot") {
         let [a, b] = ast;
-        return mprop(ds(a), snameToString(b));
+        return cprop(ds(a), snameToString(b));
     } else if (typ =="Index") {
         let [a, b] = ast;
-        return mindex(ds(a), ds(b));
+        return cindex(ds(a), ds(b));
     } else if (typ =="Binop") {
         let [op, a, b] = ast;
         if (op == "$") {
-            return mcall(ds(a), [ds(b)]);
+            return ccall(ds(a), [ds(b)]);
         }
-        return mbinop(op, ds(a), ds(b));
+        return cbinop(op, ds(a), ds(b));
     } else if (typ == "Unop") {
         let [op, svalue] = ast;
-        return mprop(ds(svalue), op);
+        return cprop(ds(svalue), op);
     } else if (typ == "IIf") {
         let [c, a, b] = ast;
         return branch(ds(c), ds(a), ds(b));
     } else if (typ == "Vector") {
         let [elems] = ast;
-        return mcall(mname(".vecNew"), elems.map(ds));
+        return ccall(cname(".vecNew"), elems.map(ds));
     } else if (typ == "Record") {
         let [rpairs] = ast;
         let keys = [];
         let values = [];
         for (let ii = 0; ii < rpairs.length; ii += 2) {
-            keys.push( mval(snameToString(rpairs[ii])) );
+            keys.push( cval(snameToString(rpairs[ii])) );
             values.push( ds(rpairs[ii+1]) );
         }
-        let recCons = mcall(mname(".recDef"), keys);
-        return mcall(recCons, values);
+        let recCons = ccall(cname(".recDef"), keys);
+        return ccall(recCons, values);
     } else if (typ == "Match") {
         let [value, cases] = ast;
-        let melse = merror("CaseNotHandled", ast);
+        let celse = cerror("CaseNotHandled", ast);
         for (let c of cases.slice().reverse()) {
             if (c.T !== "S-Case") {
-                return merror("ExpectedCase", c);
+                return cerror("ExpectedCase", c);
             }
             let [pattern, body] = c;
-            let mbody = desugarExpr(body);
-            melse = desugarCase(mname("$value"), pattern, mbody, melse);
+            let cbody = desugarExpr(body);
+            celse = desugarCase(cname("$value"), pattern, cbody, celse);
         }
-        return mlet("$value", ds(value), melse);
+        return clet("$value", ds(value), celse);
     } else if (typ == "Block") {
         let [lines] = ast;
         return desugarBlock(lines, 0);
     } else if (typ == "Missing") {
-        return merror("MissingExpr", ast);
+        return cerror("MissingExpr", ast);
     } else {
         test.fail("Unknown AST: %s", astFmt(ast));
     }
 }
 
-function desugarCase(mvalue, pattern, mthen, melse) {
+function desugarCase(cvalue, pattern, mthen, celse) {
     let typ = pattern.T;
     if (typ == "Name") {
         let [name] = pattern;
-        return mlet(name, mvalue, mthen, "=");
+        return clet(name, cvalue, mthen, "=");
     } else if (typ == "Number" || typ == "String") {
-        return mif(mbinop("==", desugarExpr(pattern), mvalue), mthen, melse);
+        return cif(cbinop("==", desugarExpr(pattern), cvalue), mthen, celse);
     } else if (typ == "VecPattern") {
         let [elems] = pattern;
-        let mfthen = mlambda([], mthen, null);
+        let mfthen = clambda([], mthen, null);
         for (let [index, elem] of elems.entries()) {
-            mfthen = desugarCase(mindex(mvalue, mval(index)),
+            mfthen = desugarCase(cindex(cvalue, cval(index)),
                                  elem,
                                  mfthen,
-                                 mname("$felse"));
+                                 cname("$felse"));
         }
-        let mlenEQ = mbinop("==", mval(elems.length), mprop(mvalue, "len"));
-        return mcall(mlet("$felse", mlambda([], melse, null),
-                          mif(mlenEQ, mfthen, mname("$felse"))),
+        let clenEQ = cbinop("==", cval(elems.length), cprop(cvalue, "len"));
+        return ccall(clet("$felse", clambda([], celse, null),
+                          cif(clenEQ, mfthen, cname("$felse"))),
                      []);
     }
 }
 
 // Remove layers of `Dot` and `Index` operators from `target` until just a
-// name remains; update `mvalue` correspondingly.
+// name remains; update `cvalue` correspondingly.
 //
-// Return: [target: AST, value: MLRecord]
+// Return: [target: AST, value: CLRecord]
 //
-function peelTarget(target, mvalue) {
+function peelTarget(target, cvalue) {
     let ds = desugarExpr;
     if (target.T == "Name") {
-        return [target, mvalue];
+        return [target, cvalue];
     } else if (target.T == "Index") {
         let [tgt, idx] = target;
-        return peelTarget(tgt, msend(ds(tgt), "set", [ds(idx), mvalue]));
+        return peelTarget(tgt, csend(ds(tgt), "set", [ds(idx), cvalue]));
     } else if (target.T == "Dot") {
         let [tgt, sname] = target;
-        let mname = mval(snameToString(sname));
-        return peelTarget(tgt, msend(ds(tgt), "setProp", [mname, mvalue]));
+        let cname = cval(snameToString(sname));
+        return peelTarget(tgt, csend(ds(tgt), "setProp", [cname, cvalue]));
     }
 }
 
@@ -212,48 +212,48 @@ function desugarStmt(ast, k) {
     let typ = ast.T;
     if (typ == "S-If") {
         let [scond, sthen] = ast;
-        return mif(desugarExpr(scond), desugarExpr(sthen), k);
+        return cif(desugarExpr(scond), desugarExpr(sthen), k);
     } else if (typ == "S-Let") {
         // operators:  =  :=  +=  *= ...
         let [target, op, svalue] = ast;
         let shadowMode = op == "=" ? "=" : ":=";
-        let mvalue = desugarExpr(svalue);
+        let cvalue = desugarExpr(svalue);
         // handle +=, etc.
         let modop = op.match(/^[^:=]+/);
         if (modop != null) {
-            mvalue = mbinop(modop[0], desugarExpr(target), mvalue);
+            cvalue = cbinop(modop[0], desugarExpr(target), cvalue);
         }
-        [target, mvalue] = peelTarget(target, mvalue);
-        return mlet(snameToString(target), mvalue, k, shadowMode);
+        [target, cvalue] = peelTarget(target, cvalue);
+        return clet(snameToString(target), cvalue, k, shadowMode);
     } else if (typ == "S-Loop") {
         let [block] = ast;
         let rep = N("Name", "repeat");
-        return N("MLoop", desugarBlock(append(block, [rep]), 0), k);
+        return N("CLoop", desugarBlock(append(block, [rep]), 0), k);
     } else if (typ == "S-While") {
         let [cond] = ast;
-        return mif(desugarExpr(cond), k, mname("break"));
+        return cif(desugarExpr(cond), k, cname("break"));
     } else if (typ == "S-LoopWhile") {
         let [cond, block] = ast;
         return desugarStmt(N("S-Loop", append([N("S-While", cond)], block)), k);
     } else if (typ == "S-Assert") {
         let [cond] = ast;
-        return mif(desugarExpr(cond), k, mcall(mname(".stop"), []));
+        return cif(desugarExpr(cond), k, ccall(cname(".stop"), []));
     } else {
         test.fail("Unknown statement: %s", astFmt(ast));
     }
 }
 
-// Translate AST block into Middle Language, starting at index `ii`
+// Translate AST block into Core Language, starting at index `ii`
 //
 function desugarBlock(lines, ii) {
     let k = lines[ii+1] && desugarBlock(lines, ii+1);
     let line = lines[ii];
 
     if (line.T.match(/^S\-/)) {
-        return desugarStmt(line, k || merror("MissingFinalExpr", line));
+        return desugarStmt(line, k || cerror("MissingFinalExpr", line));
     } else if (k != undefined) {
         // silently ignore extraneous expression
-        return merror("Extraneous", line);
+        return cerror("Extraneous", line);
     }
     return desugarExpr(line);
 }
@@ -268,40 +268,40 @@ let parseToAST = (src) => parseModule(src)[0];
 
 let L = (ary) => [...ary, ''].join('\n');
 
-// Construct a let expression as serialized by mlFmt().
+// Construct a let expression as serialized by clFmt().
 let fmtLet = (name, value, expr, shadowMode) => {
     let mode = shadowMode ? ' "' + shadowMode + '"' : "";
-    return `(MCall (MFun ["${name}"] ${expr}${mode}) [${value}])`;
+    return `(CCall (CFun ["${name}"] ${expr}${mode}) [${value}])`;
 };
 
-test.eq(mlFmt(desugarExpr(parseToAST("x"))), 'x');
-test.eq(mlFmt(desugarExpr(parseToAST("x + 1\n"))),
-        '(MCall (MProp x "{}+") [(MVal 1)])');
+test.eq(clFmt(desugarExpr(parseToAST("x"))), 'x');
+test.eq(clFmt(desugarExpr(parseToAST("x + 1\n"))),
+        '(CCall (CProp x "{}+") [(CVal 1)])');
 
 // peelTarget
 
 let nameX = N("Name", "x");
-let [nm, val] = peelTarget(nameX, mval(1));
+let [nm, val] = peelTarget(nameX, cval(1));
 test.eq(nameX, nm);
-test.eq(mval(1), val);
+test.eq(cval(1), val);
 
 [nm, val] = peelTarget(
     N("Dot", N("Index", nameX, N("Number", "1")), N("Name","a")),
-    mval(9));
+    cval(9));
 test.eq(nameX, nm);
-test.eq(msend(mname("x"), "set",
-              [mval(1), msend(msend(mname("x"), "{}[]", [mval(1)]),
+test.eq(csend(cname("x"), "set",
+              [cval(1), csend(csend(cname("x"), "{}[]", [cval(1)]),
                               "setProp",
-                              [mval("a"), mval(9)])]),
+                              [cval("a"), cval(9)])]),
         val);
 
 // Assignment
 
-test.eq(fmtLet('x', '(MVal 1)', 'x', '='),
-        mlFmt(mlet('x', mval(1), mname('x'), '=')));
+test.eq(fmtLet('x', '(CVal 1)', 'x', '='),
+        clFmt(clet('x', cval(1), cname('x'), '=')));
 
-test.eq(fmtLet('x', '(MVal 1)', '(MCall (MProp x \"{}+\") [(MVal 2)])', '='),
-        mlFmt(desugarExpr(parseToAST("x = 1\nx + 2\n"))));
+test.eq(fmtLet('x', '(CVal 1)', '(CCall (CProp x \"{}+\") [(CVal 2)])', '='),
+        clFmt(desugarExpr(parseToAST("x = 1\nx + 2\n"))));
 
 // Loop
 
@@ -311,13 +311,13 @@ let loop0 = L([
     'x',
 ]);
 
-test.eq('(MLoop (MCall (MFun ["x"] repeat ":=") [(MVal 1)]) x)',
-        mlFmt(desugarExpr(parseToAST(loop0))));
+test.eq('(CLoop (CCall (CFun ["x"] repeat ":=") [(CVal 1)]) x)',
+        clFmt(desugarExpr(parseToAST(loop0))));
 
 test.eq(["x", "y", "z"],
-        findLets(N("MCall",
-                   N("MFun", ["x", "y"], N("MVal", null), true),
-                   [N("MFun", ["z"], N("MVal", null), true)])));
+        findLets(N("CCall",
+                   N("CFun", ["x", "y"], N("CVal", null), true),
+                   [N("CFun", ["z"], N("CVal", null), true)])));
 
 
 //==============================================================
@@ -810,16 +810,16 @@ for (let [name, fn] of Object.entries(natives)) {
 }
 
 //==============================================================
-// desugarM: Middle Language to Inner Language
+// desugarC: Core Language to Inner Language
 //==============================================================
 //
-// Translation from ML to IL involves the following (among others):
+// Translation from CL to IL involves the following (among others):
 //
 //  * Named variable references are converted to de Bruijn indices. At this
 //    stage, undefined variable references and shadowing violations are
 //    detected.
 //
-//  * Multi-argument ML functions are described in terms of single-argument
+//  * Multi-argument CL functions are described in terms of single-argument
 //    IL functions that accept an argument bundle (currently just a vector).
 //
 
@@ -862,8 +862,8 @@ let builtins = {
     ".stop": N("VFun", emptyEnv, N("INat", natives.stop, [])),
 }
 
-function mnameToString(ast) {
-    test.assert(ast.T == "MName(");
+function cnameToString(ast) {
+    test.assert(ast.T == "CName(");
     return ast[0];
 }
 
@@ -873,17 +873,17 @@ function findLets(node) {
     let typ = node.T;
     let vars = [];
     let subexprs = [];
-    if (typ == "MFun") {
+    if (typ == "CFun") {
         let [params, body] = node;
         vars = params;
         subexprs = [body];
-    } else if (typ == "MCall") {
+    } else if (typ == "CCall") {
         let [fn, args] = node;
         subexprs = append([fn], args);
-    } else if (typ == "MProp") {
+    } else if (typ == "CProp") {
         let [value, name] = node;
         subexprs = [value];
-    } else if (typ == "MLoop") {
+    } else if (typ == "CLoop") {
         let [body, k] = node;
         subexprs = [body, k];
     }
@@ -894,15 +894,15 @@ function findLets(node) {
     return vars;
 }
 
-function mbreak(loopVars) {
-    return mcall(mname(".post"), loopVars.map(mname));
+function cbreak(loopVars) {
+    return ccall(cname(".post"), loopVars.map(cname));
 }
 
-function mrepeat(loopVars) {
-    return mcall(mname(".body"), append([".body"], loopVars).map(mname));
+function crepeat(loopVars) {
+    return ccall(cname(".body"), append([".body"], loopVars).map(cname));
 }
 
-// Reduce an MLoop expression to other ML expressions
+// Reduce an CLoop expression to other CL expressions
 //
 //  (Loop BODY K) =->
 //     .post = (VARS) -> K
@@ -911,14 +911,14 @@ function mrepeat(loopVars) {
 //     .body = (.body, VARS) -> BODY
 //     repeat
 //
-function reduceMLoop(body, k, vars) {
-    return mlet(".post", N("MFun", vars, k),
-                mlet(".body", N("MFun", append([".body"], vars), body),
-                     mrepeat(vars)));
+function reduceCLoop(body, k, vars) {
+    return clet(".post", N("CFun", vars, k),
+                clet(".body", N("CFun", append([".body"], vars), body),
+                     crepeat(vars)));
 }
 
-function desugarM(node, scope) {
-    let ds = (a) => desugarM(a, scope);
+function desugarC(node, scope) {
+    let ds = (a) => desugarC(a, scope);
     let N = (typ, ...args) => Object.assign(args, {T: typ, ast: node});
     let isDefined = (name) => scopeFind(scope, name) != null;
 
@@ -929,7 +929,7 @@ function desugarM(node, scope) {
 
     let typ = node.T;
 
-    if (typ == "MName") {
+    if (typ == "CName") {
         let [name] = node;
         if (builtins[name]) {
             return N("IVal", builtins[name]);
@@ -941,10 +941,10 @@ function desugarM(node, scope) {
         faultIf(r == null, "Undefined", node.ast, name);
         let [index, offset] = r;
         return nat("vvecNth", N("IArg", index), N("IVal", newValue(offset)));
-    } else if (typ == "MVal") {
+    } else if (typ == "CVal") {
         let [value] = node;
         return N("IVal", newValue(value));
-    } else if (typ == "MFun") {
+    } else if (typ == "CFun") {
         let [params, body, shadowMode] = node;
         // check for un-sanctioned shadowing
         for (let name of params) {
@@ -954,31 +954,31 @@ function desugarM(node, scope) {
                 faultIf(!isDefined(name), "Undefined", node.ast, name);
             }
         }
-        return N("IFun", desugarM(body, scopeExtend(scope, params)));
-    } else if (typ == "MCall") {
+        return N("IFun", desugarC(body, scopeExtend(scope, params)));
+    } else if (typ == "CCall") {
         let [fn, args] = node;
         return N("IApp", ds(fn), nat("vvecNew", ...args.map(ds)));
-    } else if (typ == "MProp") {
+    } else if (typ == "CProp") {
         let [value, name] = node;
         return nat("getProp", ds(value), N("IVal", name));
-    } else if (typ == "MLoop") {
+    } else if (typ == "CLoop") {
         let [body, k] = node;
         let vars = findLets(body).filter(isDefined);
         let macros = {
-            "break": mbreak(vars),
-            "repeat": mrepeat(vars),
+            "break": cbreak(vars),
+            "repeat": crepeat(vars),
         };
-        return desugarM(reduceMLoop(body, k, vars), set(scope, "macros", macros));
-    } else if (typ == "MError") {
+        return desugarC(reduceCLoop(body, k, vars), set(scope, "macros", macros));
+    } else if (typ == "CError") {
         let [desc, ast] = node;
         faultIf(true, "Error: " + desc, ast, null);
     } else {
-        test.fail("unknown M-record: %s", mlFmt(node));
+        test.fail("unknown M-record: %s", clFmt(node));
     }
 }
 
 function desugar(ast, scope) {
-    return desugarM(desugarExpr(ast), scope);
+    return desugarC(desugarExpr(ast), scope);
 }
 
 function makeManifest(vars) {
@@ -1125,12 +1125,12 @@ et("x = {a:[1]} | x.a[1] := 2 | x", "{a: [1, 2]}");
 
 // Loop
 
-test.eq(mlFmt(reduceMLoop(N("MName", "break"), N("MName", "x"), ["x"])),
+test.eq(clFmt(reduceCLoop(N("CName", "break"), N("CName", "x"), ["x"])),
         fmtLet(".post",
-               '(MFun ["x"] x)',
+               '(CFun ["x"] x)',
                fmtLet(".body",
-                      '(MFun [".body" "x"] break)',
-                      '(MCall .body [.body x])')));
+                      '(CFun [".body" "x"] break)',
+                      '(CCall .body [.body x])')));
 
 et(L([ 'x = 1',
        'loop while x < 10:',
