@@ -37,7 +37,7 @@ TODO
 ---- Long-term
 
  * "P1" (Phase 1) language definition
- * P1 "bootstrap" interpreter (Lua)
+ * P1 "bootstrap" interpreter (JavaScript)
     - parse & walk AST
     - minimal set of OS bindings
  * P2 interpreter/compiler (written in Rio P1, supports P2 superset)
