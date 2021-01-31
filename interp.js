@@ -88,7 +88,7 @@ function cif(mcond, mthen, melse) {
 }
 
 function cbinop(op, a, b) {
-    return ccall(cprop(a, "{}" + op), [b]);
+    return ccall(cprop(a, "@" + op), [b]);
 }
 
 function cindex(vec, index) {
@@ -276,7 +276,7 @@ let fmtLet = (name, value, expr, shadowMode) => {
 
 test.eq(clFmt(desugarExpr(parseToAST("x"))), 'x');
 test.eq(clFmt(desugarExpr(parseToAST("x + 1\n"))),
-        '(CCall (CProp x "{}+") [(CVal 1)])');
+        '(CCall (CProp x "@+") [(CVal 1)])');
 
 // peelTarget
 
@@ -290,7 +290,7 @@ test.eq(cval(1), val);
     cval(9));
 test.eq(nameX, nm);
 test.eq(csend(cname("x"), "set",
-              [cval(1), csend(csend(cname("x"), "{}[]", [cval(1)]),
+              [cval(1), csend(csend(cname("x"), "@[]", [cval(1)]),
                               "setProp",
                               [cval("a"), cval(9)])]),
         val);
@@ -300,7 +300,7 @@ test.eq(csend(cname("x"), "set",
 test.eq(fmtLet('x', '(CVal 1)', 'x', '='),
         clFmt(clet('x', cval(1), cname('x'), '=')));
 
-test.eq(fmtLet('x', '(CVal 1)', '(CCall (CProp x \"{}+\") [(CVal 2)])', '='),
+test.eq(fmtLet('x', '(CVal 1)', '(CCall (CProp x \"@+\") [(CVal 2)])', '='),
         clFmt(desugarExpr(parseToAST("x = 1\nx + 2\n"))));
 
 // Loop
@@ -577,10 +577,10 @@ let boolUnops = {
 };
 
 let boolBinops = {
-    "{}or": (a, b) => a || b,
-    "{}and": (a, b) => a && b,
-    "{}==": (a, b) => a == b,
-    "{}!=": (a, b) => a !== b,
+    "@or": (a, b) => a || b,
+    "@and": (a, b) => a && b,
+    "@==": (a, b) => a == b,
+    "@!=": (a, b) => a !== b,
 };
 
 let boolMethods = {
@@ -602,14 +602,14 @@ let strUnops = {
 
 // "Operators" operate on two values of the same type
 let strBinops = {
-    "{}<": (a, b) => a < b,
-    "{}==": (a, b) => a == b,
-    "{}!=": (a, b) => a !== b,
-    "{}<=": (a, b) => a <= b,
-    "{}<": (a, b) => a < b,
-    "{}>=": (a, b) => a >= b,
-    "{}>": (a, b) => a > b,
-    "{}++": (a, b) => a + b,
+    "@<": (a, b) => a < b,
+    "@==": (a, b) => a == b,
+    "@!=": (a, b) => a !== b,
+    "@<=": (a, b) => a <= b,
+    "@<": (a, b) => a < b,
+    "@>=": (a, b) => a >= b,
+    "@>": (a, b) => a > b,
+    "@++": (a, b) => a + b,
 };
 
 let strMethods = {
@@ -622,7 +622,7 @@ let strMethods = {
         return self.slice(start, limit);
     },
 
-    "{}[]": (self, args) => {
+    "@[]": (self, args) => {
         let [offset] = args;
         faultIf(valueType(offset) !== "number", "NotNumber", null, offset);
         faultIf(offset < 0 || offset >= self.length, "Bounds", null, offset);
@@ -641,20 +641,20 @@ let numUnops = {
 };
 
 let numBinops = {
-    "{}^": (a, b) => a ^ b,
-    "{}*": (a, b) => a * b,
-    "{}/": (a, b) => a / b,
-    "{}//": (a, b) => Math.floor(a / b),
-    "{}%": (a, b) => a % b,
-    "{}+": (a, b) => a + b,
-    "{}-": (a, b) => a - b,
-    "{}<": (a, b) => a < b,
-    "{}==": (a, b) => a == b,
-    "{}!=": (a, b) => a !== b,
-    "{}<=": (a, b) => a <= b,
-    "{}<": (a, b) => a < b,
-    "{}>=": (a, b) => a >= b,
-    "{}>": (a, b) => a > b,
+    "@^": (a, b) => a ^ b,
+    "@*": (a, b) => a * b,
+    "@/": (a, b) => a / b,
+    "@//": (a, b) => Math.floor(a / b),
+    "@%": (a, b) => a % b,
+    "@+": (a, b) => a + b,
+    "@-": (a, b) => a - b,
+    "@<": (a, b) => a < b,
+    "@==": (a, b) => a == b,
+    "@!=": (a, b) => a !== b,
+    "@<=": (a, b) => a <= b,
+    "@<": (a, b) => a < b,
+    "@>=": (a, b) => a >= b,
+    "@>": (a, b) => a > b,
 };
 
 behaviors.number = makeBehavior(numUnops, numBinops, {}, "number");
@@ -678,7 +678,7 @@ let vecUnops = {
 };
 
 let vecBinops = {
-    "{}++": (a, b) => {
+    "@++": (a, b) => {
         let o = clone(a);
         return move(b, 1, b.length, o.length+1, o);
     },
@@ -702,7 +702,7 @@ let vecMethods = {
         return set(self, index, value);
     },
 
-    "{}[]": (self, args) => {
+    "@[]": (self, args) => {
         let [offset] = args;
         faultIf(valueType(offset) !== "number", "NotNumber", null, offset);
         faultIf(offset < 0 || offset >= self.length, "Bounds", null, offset);
@@ -716,7 +716,7 @@ natives.vvecNew = (...args) => {
     return N("VVec", ...args);
 };
 
-// Note different calling convention than `{}[]`.
+// Note different calling convention than `@[]`.
 //
 natives.vvecNth = (self, n) => {
     faultIf(valueType(self) !== "VVec", "NotVVec", null, self);
