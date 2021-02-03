@@ -54,12 +54,14 @@ function map(obj, fn) {
 //  * Other values: use test.serialize.
 //
 let sexprFormatter = formatters => {
+    formatters = formatters ?? Object.create(null);
+
     let format = node => {
-        if (typeof node !== "object") {
+        if (typeof (node ?? undefined) !== "object") {
             return test.serialize(node);
         }
 
-        let f = formatters && formatters[node.T || "[]"]
+        let f = formatters[node.T || "[]"]
         if (f) {
             return f(node, format);
         }

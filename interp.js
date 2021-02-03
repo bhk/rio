@@ -25,7 +25,7 @@ let N = (typ, ...elems) => {
 //
 //     (CVal nativevalue)
 //     (CName name)
-//     (CFun params mexpr sOK)
+//     (CFun params mexpr aliasOK)
 //     (CCall fn args)
 //     (CProp value name)
 //     (CLoop body k)
@@ -34,6 +34,7 @@ let N = (typ, ...elems) => {
 // params: {string...}
 // name: string
 // nativevalue: string | number
+// aliasOK: string | false
 //
 // There is no notion of "native" functions in CL, but constructed
 // expressions reference the following free variables:
@@ -175,7 +176,7 @@ function desugarCase(cvalue, pattern, mthen, celse) {
         return cif(cbinop("==", desugarExpr(pattern), cvalue), mthen, celse);
     } else if (typ == "VecPattern") {
         let [elems] = pattern;
-        let mfthen = clambda([], mthen, null);
+        let mfthen = clambda([], mthen, false);
         for (let [index, elem] of elems.entries()) {
             mfthen = desugarCase(cindex(cvalue, cval(index)),
                                  elem,
@@ -183,7 +184,7 @@ function desugarCase(cvalue, pattern, mthen, celse) {
                                  cname("$felse"));
         }
         let clenEQ = cbinop("==", cval(elems.length), cprop(cvalue, "len"));
-        return ccall(clet("$felse", clambda([], celse, null),
+        return ccall(clet("$felse", clambda([], celse, false),
                           cif(clenEQ, mfthen, cname("$felse"))),
                      []);
     }
@@ -220,7 +221,7 @@ function desugarStmt(ast, k) {
         let cvalue = desugarExpr(svalue);
         // handle +=, etc.
         let modop = op.match(/^[^:=]+/);
-        if (modop != null) {
+        if (modop !== null) {
             cvalue = cbinop(modop[0], desugarExpr(target), cvalue);
         }
         [target, cvalue] = peelTarget(target, cvalue);
@@ -316,8 +317,8 @@ test.eq('(CLoop (CCall (CFun ["x"] repeat ":=") [(CVal 1)]) x)',
 
 test.eq(["x", "y", "z"],
         findLets(N("CCall",
-                   N("CFun", ["x", "y"], N("CVal", null), true),
-                   [N("CFun", ["z"], N("CVal", null), true)])));
+                   N("CFun", ["x", "y"], N("CVal", 1), true),
+                   [N("CFun", ["z"], N("CVal", 1), true)])));
 
 
 //==============================================================
@@ -389,7 +390,7 @@ function eval(expr, env) {
     } else if (typ == "IArg") {
         let [index] = expr;
         let value = envArg(env, index);
-        test.assert(value !== null);
+        test.assert(value !== undefined);
         return value;
     } else if (typ == "IFun") {
         let [body] = expr;
@@ -397,7 +398,7 @@ function eval(expr, env) {
     } else if (typ == "IApp") {
         let [fn, arg] = expr;
         let fnValue = ee(fn);
-        faultIf(valueType(fnValue) !== "VFun", "NotFn", expr.ast, fnValue);
+        assertType(fnValue, "VFun", expr.ast, fnValue);
         let [fenv, body] = fnValue;
         return eval(body, envBind(fenv, ee(arg)));
     } else if (typ == "INat") {
@@ -424,7 +425,7 @@ function eval(expr, env) {
 //
 // name: string
 // code: string
-// where: ASTNode or null
+// where: ASTNode | null
 // what: Value
 // all others: Value
 //
@@ -456,9 +457,11 @@ function valueFmt(value) {
 }
 
 function valueType(value) {
-    return typeof value == 'object'
-        ? value.T
-        : typeof value;
+    return (typeof value == 'string' ? 'VStr' :
+            typeof value == 'number' ? 'VNum' :
+            typeof value == 'boolean' ? 'VBool' :
+            typeof (value ?? undefined) == 'object' ? value.T :
+            test.fail('BadValue:' + (value === null ? 'null' : typeof(value))));
 }
 
 // `natives` contains functions that are called via CNat and used
@@ -479,19 +482,31 @@ natives.getProp = (value, name) => {
 // faultIf() is called from native functions in the context of an
 // evaluation.
 //
-function faultIf(cond, typ, where, what) {
+//   what = offending value
+//   where = AST node at which the error occurred
+//
+// TODO: Resolve confusion of use cases.  At run time we can identify a
+// (Rio) value and not an AST node (e.g. in a native function).  At
+// translation time (e.g. in desugarC) we can identify an AST node and some
+// other (non-Rio) value.
+//
+function faultIf(cond, typ, what, where) {
     if (cond) {
         let err = new Error("Fault: " + typ);
-        err.fault = N("VErr", typ, where || {}, what);
+        err.fault = N("VErr", typ, what ?? null, where ?? null);
         throw err;
     }
 }
 
-function baseBehavior(value, name) {
-    faultIf(true, "UnknownProperty:" + name, null, value);
+function assertType(value, type, where) {
+    faultIf(valueType(value) !== type, "Expected_" + type, value, where);
 }
 
-// Wrap a Lua function operating on two values with a function suitable as a
+function baseBehavior(value, name) {
+    faultIf(true, "UnknownProperty:" + name, value);
+}
+
+// Wrap a function operating on two values with a function suitable as a
 // native function for use with makeMethodProp.
 //
 function wrapBinop(typeName) {
@@ -500,8 +515,7 @@ function wrapBinop(typeName) {
             // The surface language calling convention, used to call the
             // method, puts its argument in a vector (arg bundle).
             let [b] = args;
-            test.assert(b !== null);  // should not happen
-            faultIf(valueType(b) !== typeName, "Not" + typeName, null, b);
+            assertType(b, typeName);
             return fn(a, b);
         }
     }
@@ -569,7 +583,7 @@ behaviors.VFun = (value, name) => {
 };
 
 //==============================
-// VBool (happens to be Lua boolean)
+// VBool (happens to be a native boolean)
 //==============================
 
 let boolUnops = {
@@ -585,15 +599,15 @@ let boolBinops = {
 
 let boolMethods = {
     "switch": (self, args) => {
-        faultIf(args.length !== 2, "SwitchArity", null, args[3])
+        faultIf(args.length !== 2, "SwitchArity", args[3])
         return self ? args[0] : args[1];
     },
 };
 
-behaviors.boolean = makeBehavior(boolUnops, boolBinops, boolMethods, "boolean");
+behaviors.VBool = makeBehavior(boolUnops, boolBinops, boolMethods, "VBool");
 
 //==============================
-// VStr  (happens to be Lua string)
+// VStr  (happens to be a native string)
 //==============================
 
 let strUnops = {
@@ -615,25 +629,25 @@ let strBinops = {
 let strMethods = {
     slice: (self, args) => {
         let [start, limit] = args;
-        faultIf(valueType(start) !== "number", "NotNumber", null, start);
-        faultIf(valueType(limit) !== "number", "NotNumber", null, limit);
-        faultIf(start < 0 || start >= self.length, "Bounds", null, start);
-        faultIf(limit < start || limit >= self.length, "Bounds", null, start);
+        assertType(start, "VNum");
+        assertType(limit, "VNum");
+        faultIf(start < 0 || start >= self.length, "Bounds", start);
+        faultIf(limit < start || limit >= self.length, "Bounds", start);
         return self.slice(start, limit);
     },
 
     "@[]": (self, args) => {
         let [offset] = args;
-        faultIf(valueType(offset) !== "number", "NotNumber", null, offset);
-        faultIf(offset < 0 || offset >= self.length, "Bounds", null, offset);
+        assertType(offset, "VNum");
+        faultIf(offset < 0 || offset >= self.length, "Bounds", offset);
         return self.charCodeAt(offset);
     },
 };
 
-behaviors.string = makeBehavior(strUnops, strBinops, strMethods, "string");
+behaviors.VStr = makeBehavior(strUnops, strBinops, strMethods, "VStr");
 
 //==============================
-// VNum (happens to be Lua number)
+// VNum (happens to be a native number)
 //==============================
 
 let numUnops = {
@@ -657,7 +671,7 @@ let numBinops = {
     "@>": (a, b) => a > b,
 };
 
-behaviors.number = makeBehavior(numUnops, numBinops, {}, "number");
+behaviors.VNum = makeBehavior(numUnops, numBinops, {}, "VNum");
 
 // Construct a VNum or VStr
 //
@@ -687,25 +701,25 @@ let vecBinops = {
 let vecMethods = {
     slice: (self, args) => {
         let [start, limit] = args;
-        faultIf(valueType(start) !== "number", "NotNumber", null, start);
-        faultIf(valueType(limit) !== "number", "NotNumber", null, limit);
-        faultIf(start < 0 || start >= self.length, "Bounds", null, start);
-        faultIf(limit < start || limit >= self.length, "Bounds", null, start);
+        assertType(start, "VNum");
+        assertType(limit, "VNum");
+        faultIf(start < 0 || start >= self.length, "Bounds", start);
+        faultIf(limit < start || limit >= self.length, "Bounds", start);
         return N("VVec", ...self.slice(start, limit));
     },
 
     set: (self, args) => {
         let [index, value] = args;
-        faultIf(valueType(index) !== "number", "NotNumber", null, index);
+        assertType(index, "VNum");
         // enforce contiguity (growable, but one at a time)
-        faultIf(index < 0 || index > self.length, "Bounds", null, index);
+        faultIf(index < 0 || index > self.length, "Bounds", index);
         return set(self, index, value);
     },
 
     "@[]": (self, args) => {
         let [offset] = args;
-        faultIf(valueType(offset) !== "number", "NotNumber", null, offset);
-        faultIf(offset < 0 || offset >= self.length, "Bounds", null, offset);
+        assertType(offset, "VNum");
+        faultIf(offset < 0 || offset >= self.length, "Bounds", offset);
         return self[offset];
     },
 };
@@ -719,9 +733,9 @@ natives.vvecNew = (...args) => {
 // Note different calling convention than `@[]`.
 //
 natives.vvecNth = (self, n) => {
-    faultIf(valueType(self) !== "VVec", "NotVVec", null, self);
-    faultIf(valueType(n) !== "number", "NotNumber", null, n);
-    faultIf(n < 0 || n >= self.length, "Bounds", null, self);
+    assertType(self, "VVec");
+    assertType(n, "VNum");
+    faultIf(n < 0 || n >= self.length, "Bounds", self);
     return self[n];
 }
 
@@ -751,9 +765,8 @@ let recBinops = {
 let recMethods = {
     setProp: (self, args) => {
         let [name, value] = args;
-        faultIf(valueType(name) !== "string", "NotString", null, name);
-        let ndx = recFindPair(self, name);
-        ndx = (ndx == null ? self.length : ndx);
+        assertType(name, "VStr");
+        let ndx = recFindPair(self, name) ?? self.length;
         return set(self, ndx, [name, value]);
     },
 };
@@ -762,7 +775,7 @@ let recBase = makeBehavior({}, recBinops, recMethods, "VRec");
 
 behaviors.VRec = function (value, name) {
     let ndx = recFindPair(value, name);
-    return ndx == null
+    return ndx === undefined
         ? recBase(value, name)
         : value[ndx][1];
 };
@@ -920,7 +933,7 @@ function reduceCLoop(body, k, vars) {
 function desugarC(node, scope) {
     let ds = (a) => desugarC(a, scope);
     let N = (typ, ...args) => Object.assign(args, {T: typ, ast: node});
-    let isDefined = (name) => scopeFind(scope, name) != null;
+    let isDefined = (name) => scopeFind(scope, name) !== undefined;
 
     function nat(name, ...args) {
         test.assert(natives[name]);
@@ -938,7 +951,7 @@ function desugarC(node, scope) {
             return ds(scope.macros[name]);
         }
         let r = scopeFind(scope, name);
-        faultIf(r == null, "Undefined", node.ast, name);
+        faultIf(r === undefined, "Undefined", name, node.ast);
         let [index, offset] = r;
         return nat("vvecNth", N("IArg", index), N("IVal", newValue(offset)));
     } else if (typ == "CVal") {
@@ -949,9 +962,9 @@ function desugarC(node, scope) {
         // check for un-sanctioned shadowing
         for (let name of params) {
             if (shadowMode == "=") {
-                faultIf(isDefined(name), "Shadow", node.ast, name);
+                faultIf(isDefined(name), "Shadow", name, node.ast);
             } else if (shadowMode == ":=") {
-                faultIf(!isDefined(name), "Undefined", node.ast, name);
+                faultIf(!isDefined(name), "Undefined", name, node.ast);
             }
         }
         return N("IFun", desugarC(body, scopeExtend(scope, params)));
@@ -971,7 +984,7 @@ function desugarC(node, scope) {
         return desugarC(reduceCLoop(body, k, vars), set(scope, "macros", macros));
     } else if (typ == "CError") {
         let [desc, ast] = node;
-        faultIf(true, "Error: " + desc, ast, null);
+        faultIf(true, "Error: " + desc, null, ast);
     } else {
         test.fail("unknown M-record: %s", clFmt(node));
     }
@@ -1021,7 +1034,9 @@ function trapEval(fn, ...args) {
         value = fn(...args);
     } catch (err) {
         if (err.fault) {
-            //test.printf("err:\n%s", err.stack);
+            // This represents an error in the Rio program, not an error in
+            // the interpreter.
+            // test.printf("Fault:\n%s\n", err.stack);
             return err.fault;
         }
         throw err;
@@ -1047,7 +1062,7 @@ et(".5", "0.5", '(Error "NumDigitBefore")');
 
 // eval error
 
-et("x", '(VErr "Undefined" [] "x")');
+et("x", '(VErr "Undefined" "x" null)');
 
 // literals and constructors
 
@@ -1109,15 +1124,15 @@ et("if 1 < 0: 1 | 0", "0");
 // Assert
 
 et("assert 2<3 | 1", "1");
-et("assert 2>3 | 1", '(VErr "Stop" [] undefined)');
+et("assert 2>3 | 1", '(VErr "Stop" null null)');
 
 // Let
 
 et("x = 1 | x + 2", "3");
 et("x = 1 | x := 2 | x + 2 | ", "4");
 et("x = 1 | x += 2 | x + 2 | ", "5");
-et("x = 1 | x = 2 | x | ", '(VErr "Shadow" [] "x")');
-et("x := 1 | x | ", '(VErr "Undefined" [] "x")');
+et("x = 1 | x = 2 | x | ", '(VErr "Shadow" "x" null)');
+et("x := 1 | x | ", '(VErr "Undefined" "x" null)');
 
 et("x = [1,2] | x[0] := 3 | x | ", "[3, 2]");
 et("x = [1,2] | x[0] += 3 | x | ", "[4, 2]");

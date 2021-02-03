@@ -506,7 +506,7 @@ function testG(subj, pattern, ecaptures, eoob, epos) {
     if (eoob != undefined) {
         test.eqAt(2, eoob, state ? astFmtV(state.oob) : "");
     }
-    if (epos != null) {
+    if (epos !== undefined) {
         test.eqAt(2, epos, pos);
     }
 }
@@ -583,7 +583,7 @@ testG('"abc', qstring, ["abc"], '(Error "StringEnd")');
 function testPat(pattern, subj, esexpr, eoob, level) {
     level = (level || 1) + 1;
     let r = pattern.match(subj, 0, p2dInitialState, rioG);
-    let [pos, state, captures] = r || [-1, null, "--failed--"];
+    let [pos, state, captures] = r ?? [-1, {}, "--failed--"];
     test.eqAt(level, esexpr, astFmtV(captures));
     test.eqAt(level, eoob || '', astFmtV(state.oob));
 }
