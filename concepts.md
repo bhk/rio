@@ -191,7 +191,7 @@ Abstract data types are constructed by providing an implementation of
     new_type = derive(old_type, gp)
 
 
-## "Compile-time"
+## "Compile Time"
 
 Compilation is an overloaded term, referring to a number of separate issues
 that go together in traditional languages, but not necessarily in Rio:
@@ -237,8 +237,9 @@ functions and variables defined at the top level than for variables defined
 within a function body.  In Rust, this means that the programmer cannot rely
 on type inference for globals, and must explicitly declare types.
 
-In Lua, JavaScript, and Python, top-level code is function body code.
-Compilation is just an optimization that does not complicate the language.
+In Lua, JavaScript, and Python, top-level code is not special, it is the
+same as function body code.  Compilation is just an optimization that does
+not complicate the language.
 
 The motivations for assigning a different meaning to top-level code stem
 from the model for compilation and linking used by those language
@@ -1264,7 +1265,7 @@ asynchronously:
 
 
 At each `<-` clause, execution of the "rest" of the block is at the
-discrtion of the action object.  This allows each action object to handle
+discretion of the action object.  This allows each action object to handle
 failures by short-circuiting the rest of the chain.  This can be used as a
 generic error-handling mechanism.  In the example above, we presume the
 action objects short-circuit and return a Failure() value that itself is a
@@ -1467,10 +1468,10 @@ language is effectively unstable.  C programs that compile today might not
 compile tomorrow.  The reason is that C is not inherently safe, but still
 some unsafe usage can be identified by the compiler and reported as a
 "warning".  In fact they go further and report warnings based on
-circumstantial evidence when there many not be an actual bug.  The compiler
+circumstantial evidence when there may not be an actual bug.  The compiler
 can never detect all unsafe usage, but it can get "better" at it over time,
 so more warnings show up with newer compiler versions.  Due to the
-catatrophic consequences of unsafety, any responsible developer treats
+catastrophic consequences of unsafety, any responsible developer treats
 warnings as errors, so when new warnings show up they break the project.
 The set of things forbidden by warnings constitute a de facto language
 definition ... a language that is unspecified, constantly changing, and that
@@ -1579,10 +1580,11 @@ like a signpost that allows the parser to synchronize itself with the
 syntactic structure after an error.  The signpost indicates whether some
 syntax was missing or some extraneous text was encountered.
 
-That leaves us with the downsides: extra syntax for the user to maintain (in
-addition to indentation), and visual clutter.  Delimiters are clutter
-because the user already has seen the 2D structure before their brain gets
-around to locating and matching up keywords or symbols like braces.
+That leaves us with the downsides of delimiters: extra syntax for the user
+to maintain (in addition to indentation), and visual clutter.  Delimiters
+are clutter because the user already has seen the 2D structure before their
+brain gets around to locating and matching up keywords or symbols like
+braces.
 
 
 ### Continuation Lines
@@ -1627,7 +1629,7 @@ Also, any mal-formedness *within* the string will be detected by the `RE`
 constructor at compile-time (in the live environment, *immediately*, as it
 is typed).
 
-Types derived from [`String`}(#string) can also benefit, without being
+Types derived from [`String`](#string) can also benefit, without being
 hard-coded into the language with their own syntax (as in Python).
 
     text = Utf8("abcdef")
