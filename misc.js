@@ -44,6 +44,15 @@ function map(obj, fn) {
     return o;
 }
 
+// Convert array of lines (if needed) to string
+//
+let L = (ary) => (ary instanceof Array ? [...ary, ''].join('\n') : ary);
+
+// Construct a sexpr node
+let N = (typ, ...elems) => {
+    elems.T = typ;
+    return elems;
+};
 
 // Serialize a JavaScript value using an S-expression-like syntax.
 //
@@ -87,12 +96,13 @@ let sexprFormatter = formatters => {
     return format;
 }
 
-
 exports.override = override;
 exports.clone = clone;
 exports.set = set;
 exports.append = append;
 exports.map = map;
+exports.L = L;
+exports.N = N;
 exports.sexprFormatter = sexprFormatter;
 
 let o = {a: 1};

@@ -1,409 +1,78 @@
-// Rio interpreter
-
 let test = require("test");
-let {append, clone, override, map, set, sexprFormatter} = require("misc");
+let {clone, override, map, set, L, N} = require("misc");
 let {astFmt, astFmtV, parseModule} = require("syntax");
-
-let N = (typ, ...elems) => {
-    elems.T = typ;
-    return elems;
-};
+let {Env, ilFmt} = require("desugar");
 
 //==============================================================
-// desugar: Surface Language to Core Language
-//==============================================================
-//
-// This translation requires no knowledge of the enclosing scope.  Instead
-// of translating an AST tree to an CL tree, we could construct the CL tree
-// directly during parsing.  That would be more performant and simplify this
-// code slightly, but it would complicate initialization/construction of the
-// parser.
-//
-// The core language retains surface language semantics but uses a reduced
-// set of primitives.  Functions accept argument bundles, and values have
-// properties.
-//
-//     (CVal nativevalue)
-//     (CName name)
-//     (CFun params mexpr aliasOK)
-//     (CCall fn args)
-//     (CProp value name)
-//     (CLoop body k)
-//     (CError desc ast)
-//
-// params: {string...}
-// name: string
-// nativevalue: string | number
-// aliasOK: string | false
-//
-// There is no notion of "native" functions in CL, but constructed
-// expressions reference the following free variables:
-//     .vecNew : values -> vector
-//     .recDef : names -> values -> record
-
-let clFmt = sexprFormatter({
-    CName: v => v[0],
-});
-
-function snameToString(ast) {
-    test.assert(ast.T == "Name");
-    return ast[0];
-}
-
-function cval(val) {
-    return N("CVal", val);
-}
-
-function cname(str) {
-    return N("CName", str);
-}
-
-function cerror(code, ast) {
-    return N("CError", code, ast);
-}
-
-function clambda(params, body, shadowMode) {
-    return N("CFun", params, body, shadowMode);
-}
-
-function ccall(mfn, margs) {
-    return N("CCall", mfn, margs);
-}
-
-function cprop(cvalue, name) {
-    return N("CProp", cvalue, name);
-}
-
-function clet(name, value, expr, shadowMode) {
-    return ccall(clambda([name], expr, shadowMode), [value]);
-}
-
-function csend(value, name, args) {
-    return ccall(cprop(value, name), args);
-}
-
-function cif(mcond, mthen, melse) {
-    return ccall(csend(mcond, "switch", [clambda([], mthen),
-                                         clambda([], melse)]),
-                 []);
-}
-
-function cbinop(op, a, b) {
-    return ccall(cprop(a, "@" + op), [b]);
-}
-
-function cindex(vec, index) {
-    return cbinop("[]", vec, index);
-}
-
-// Translate AST expression into Core Language
-//
-function desugarExpr(ast) {
-    let ds = desugarExpr;
-    let typ = ast.T;
-
-    if (typ == "Name") {
-        return cname(ast[0]);
-    } else if (typ == "Number") {
-        return cval(Number(ast[0]));
-    } else if (typ == "String") {
-        return cval(ast[0])
-    } else if (typ == "Fn") {
-        let [params, body] = ast;
-        return clambda(params.map(snameToString), ds(body));
-    } else if (typ =="Call") {
-        let [fn, args] = ast;
-        return ccall(ds(fn), args.map(ds));
-    } else if (typ =="Dot") {
-        let [a, b] = ast;
-        return cprop(ds(a), snameToString(b));
-    } else if (typ =="Index") {
-        let [a, b] = ast;
-        return cindex(ds(a), ds(b));
-    } else if (typ =="Binop") {
-        let [op, a, b] = ast;
-        if (op == "$") {
-            return ccall(ds(a), [ds(b)]);
-        }
-        return cbinop(op, ds(a), ds(b));
-    } else if (typ == "Unop") {
-        let [op, svalue] = ast;
-        return cprop(ds(svalue), op);
-    } else if (typ == "IIf") {
-        let [c, a, b] = ast;
-        return branch(ds(c), ds(a), ds(b));
-    } else if (typ == "Vector") {
-        let [elems] = ast;
-        return ccall(cname(".vecNew"), elems.map(ds));
-    } else if (typ == "Record") {
-        let [rpairs] = ast;
-        let keys = [];
-        let values = [];
-        for (let ii = 0; ii < rpairs.length; ii += 2) {
-            keys.push( cval(snameToString(rpairs[ii])) );
-            values.push( ds(rpairs[ii+1]) );
-        }
-        let recCons = ccall(cname(".recDef"), keys);
-        return ccall(recCons, values);
-    } else if (typ == "Match") {
-        let [value, cases] = ast;
-        let celse = cerror("CaseNotHandled", ast);
-        for (let c of cases.slice().reverse()) {
-            if (c.T !== "S-Case") {
-                return cerror("ExpectedCase", c);
-            }
-            let [pattern, body] = c;
-            let cbody = desugarExpr(body);
-            celse = desugarCase(cname("$value"), pattern, cbody, celse);
-        }
-        return clet("$value", ds(value), celse);
-    } else if (typ == "Block") {
-        let [lines] = ast;
-        return desugarBlock(lines, 0);
-    } else if (typ == "Missing") {
-        return cerror("MissingExpr", ast);
-    } else {
-        test.fail("Unknown AST: %s", astFmt(ast));
-    }
-}
-
-function desugarCase(cvalue, pattern, mthen, celse) {
-    let typ = pattern.T;
-    if (typ == "Name") {
-        let [name] = pattern;
-        return clet(name, cvalue, mthen, "=");
-    } else if (typ == "Number" || typ == "String") {
-        return cif(cbinop("==", desugarExpr(pattern), cvalue), mthen, celse);
-    } else if (typ == "VecPattern") {
-        let [elems] = pattern;
-        let mfthen = clambda([], mthen, false);
-        for (let [index, elem] of elems.entries()) {
-            mfthen = desugarCase(cindex(cvalue, cval(index)),
-                                 elem,
-                                 mfthen,
-                                 cname("$felse"));
-        }
-        let clenEQ = cbinop("==", cval(elems.length), cprop(cvalue, "len"));
-        return ccall(clet("$felse", clambda([], celse, false),
-                          cif(clenEQ, mfthen, cname("$felse"))),
-                     []);
-    }
-}
-
-// Remove layers of `Dot` and `Index` operators from `target` until just a
-// name remains; update `cvalue` correspondingly.
-//
-// Return: [target: AST, value: CLRecord]
-//
-function peelTarget(target, cvalue) {
-    let ds = desugarExpr;
-    if (target.T == "Name") {
-        return [target, cvalue];
-    } else if (target.T == "Index") {
-        let [tgt, idx] = target;
-        return peelTarget(tgt, csend(ds(tgt), "set", [ds(idx), cvalue]));
-    } else if (target.T == "Dot") {
-        let [tgt, sname] = target;
-        let cname = cval(snameToString(sname));
-        return peelTarget(tgt, csend(ds(tgt), "setProp", [cname, cvalue]));
-    }
-}
-
-function desugarStmt(ast, k) {
-    let typ = ast.T;
-    if (typ == "S-If") {
-        let [scond, sthen] = ast;
-        return cif(desugarExpr(scond), desugarExpr(sthen), k);
-    } else if (typ == "S-Let") {
-        // operators:  =  :=  +=  *= ...
-        let [target, op, svalue] = ast;
-        let shadowMode = op == "=" ? "=" : ":=";
-        let cvalue = desugarExpr(svalue);
-        // handle +=, etc.
-        let modop = op.match(/^[^:=]+/);
-        if (modop !== null) {
-            cvalue = cbinop(modop[0], desugarExpr(target), cvalue);
-        }
-        [target, cvalue] = peelTarget(target, cvalue);
-        return clet(snameToString(target), cvalue, k, shadowMode);
-    } else if (typ == "S-Loop") {
-        let [block] = ast;
-        let rep = N("Name", "repeat");
-        return N("CLoop", desugarBlock(append(block, [rep]), 0), k);
-    } else if (typ == "S-While") {
-        let [cond] = ast;
-        return cif(desugarExpr(cond), k, cname("break"));
-    } else if (typ == "S-LoopWhile") {
-        let [cond, block] = ast;
-        return desugarStmt(N("S-Loop", append([N("S-While", cond)], block)), k);
-    } else if (typ == "S-Assert") {
-        let [cond] = ast;
-        return cif(desugarExpr(cond), k, ccall(cname(".stop"), []));
-    } else {
-        test.fail("Unknown statement: %s", astFmt(ast));
-    }
-}
-
-// Translate AST block into Core Language, starting at index `ii`
-//
-function desugarBlock(lines, ii) {
-    let k = lines[ii+1] && desugarBlock(lines, ii+1);
-    let line = lines[ii];
-
-    if (line.T.match(/^S\-/)) {
-        return desugarStmt(line, k || cerror("MissingFinalExpr", line));
-    } else if (k != undefined) {
-        // silently ignore extraneous expression
-        return cerror("Extraneous", line);
-    }
-    return desugarExpr(line);
-}
-
-
-//--------------------------------
-// Tests
-//--------------------------------
-
-
-let parseToAST = (src) => parseModule(src)[0];
-
-let L = (ary) => [...ary, ''].join('\n');
-
-// Construct a let expression as serialized by clFmt().
-let fmtLet = (name, value, expr, shadowMode) => {
-    let mode = shadowMode ? ' "' + shadowMode + '"' : "";
-    return `(CCall (CFun ["${name}"] ${expr}${mode}) [${value}])`;
-};
-
-test.eq(clFmt(desugarExpr(parseToAST("x"))), 'x');
-test.eq(clFmt(desugarExpr(parseToAST("x + 1\n"))),
-        '(CCall (CProp x "@+") [(CVal 1)])');
-
-// peelTarget
-
-let nameX = N("Name", "x");
-let [nm, val] = peelTarget(nameX, cval(1));
-test.eq(nameX, nm);
-test.eq(cval(1), val);
-
-[nm, val] = peelTarget(
-    N("Dot", N("Index", nameX, N("Number", "1")), N("Name","a")),
-    cval(9));
-test.eq(nameX, nm);
-test.eq(csend(cname("x"), "set",
-              [cval(1), csend(csend(cname("x"), "@[]", [cval(1)]),
-                              "setProp",
-                              [cval("a"), cval(9)])]),
-        val);
-
-// Assignment
-
-test.eq(fmtLet('x', '(CVal 1)', 'x', '='),
-        clFmt(clet('x', cval(1), cname('x'), '=')));
-
-test.eq(fmtLet('x', '(CVal 1)', '(CCall (CProp x \"@+\") [(CVal 2)])', '='),
-        clFmt(desugarExpr(parseToAST("x = 1\nx + 2\n"))));
-
-// Loop
-
-let loop0 = L([
-    'loop:',
-    '  x := 1',
-    'x',
-]);
-
-test.eq('(CLoop (CCall (CFun ["x"] repeat ":=") [(CVal 1)]) x)',
-        clFmt(desugarExpr(parseToAST(loop0))));
-
-test.eq(["x", "y", "z"],
-        findLets(N("CCall",
-                   N("CFun", ["x", "y"], N("CVal", 1), true),
-                   [N("CFun", ["z"], N("CVal", 1), true)])));
-
-
-//==============================================================
-// Environments
+// Contexts
 //==============================================================
 
-// An environment, as used in `eval`, is simply a stack of values.  The last
+// A context, as used in `eval`, is simply a stack of values.  The last
 // element is the argument passed to the current function. The previous
 // element is the argument passed to the parent function (when it
 // constructed the current function).  And so on...
 
-let emptyEnv = [];
+let emptyCxt = [];
 
-function envBind(env, arg) {
-    return [arg, ...env];
+function cxtBind(cxt, arg) {
+    return [arg, ...cxt];
 }
 
-function envArg(env, index) {
-    return env[index];
+function cxtArg(cxt, index) {
+    return cxt[index];
 }
 
-//==============================================================
-// Inner Language
-//==============================================================
-
-// Inner Language nodes (IExpr's)
-//   (IVal value)           // constant/literal value
-//   (IArg index)           // argument reference
-//   (IFun body)            // function construction (lambda)
-//   (IApp fn arg)          // function application
-//   (INat nfn args)        // native function call
+// Construct env & cxt from a set of manifest variables
 //
-// value : VNode
-// index : (native) number
-// nfn : (native) function
-// all others : IExpr || [IExpr]
+function makeManifest(vars) {
+    let names = Object.keys(vars).sort();
+    let values = names.map(k => vars[k]);
+    let env = new Env(names);
+    let cxt = cxtBind(emptyCxt, values);
+    return [env, cxt];
+}
 
-let nfnNames = Object.create(null);
+{
+    let te = new Env(['a']);
+    test.eq('1', ilFmt(te.desugar(N("Number", "1"))));
+    test.eq('$0:0', ilFmt(te.desugar(N("Name", "a"))));
+}
 
-let ilFmt = sexprFormatter({
-    // $0 = argument to this function; $1 = argument to parent, ...
-    IArg: (e) => "$" + e[0],
-    // number, string
-    IVal: (e) => valueFmt(e[0]),
-    // Value[Value]     = vector index
-    // @[Value]         = vector constructoio
-    // (NativeFunc ...) = generic native function
-    INat: (e, fmt) => {
-        let [nfn, args] = e;
-        let name = nfnNames[nfn];
-        if (name == "vvecNth") {
-            test.assert(args.length === 2);
-            return fmt(args[0]) + '[' + fmt(args[1]) + ']';
-        }
-        let argValues = args.map(fmt).join(" ");
-        if (name == "vvecNew") {
-            return "@[" + argValues + "]";
-        }
-        return '(' + name + ' ' + argValues + ')';
-    }
-});
+//==============================================================
+// eval
+//==============================================================
 
-function eval(expr, env) {
+let VFun = (env, body) => N("VFun", env, body);
+let VNat = (fn) => N("VNat", fn);
+
+function eval(expr, cxt, ctors) {
     let typ = expr.T;
-    let ee = e => eval(e, env);
+    let ee = e => eval(e, cxt, ctors);
 
     if (typ == "IVal") {
-        return expr[0];
+        let [ty, arg] = expr;
+        return ctors(ty, arg);
     } else if (typ == "IArg") {
-        let [index] = expr;
-        let value = envArg(env, index);
-        test.assert(value !== undefined);
-        return value;
+        let [ups, pos] = expr;
+        let frame = cxtArg(cxt, ups);
+        test.assert(frame !== undefined && frame[pos] !== undefined);
+        return frame[pos];
     } else if (typ == "IFun") {
         let [body] = expr;
-        return N("VFun", env, body);
+        return VFun(cxt, body);
     } else if (typ == "IApp") {
-        let [fn, arg] = expr;
-        let fnValue = ee(fn);
-        assertType(fnValue, "VFun", expr.ast, fnValue);
-        let [fenv, body] = fnValue;
-        return eval(body, envBind(fenv, ee(arg)));
-    } else if (typ == "INat") {
-        let [nfn, args] = expr;
-        return nfn(...args.map(ee));
+        let [fn, args] = expr;
+        let fnResult = ee(fn);
+        let argResults = args.map(ee);
+        if (fnResult.T == "VFun") {
+            let [fcxt, body] = fnResult;
+            return eval(body, cxtBind(fcxt, argResults), ctors);
+        } else if (fnResult.T == "VNat") {
+            let [fnNative] = fnResult;
+            return fnNative(...argResults);
+        } else {
+            throw new Error("Fault: call non-function");
+        }
     } else {
         test.fail("Unsupported: %q", expr);
     }
@@ -420,7 +89,7 @@ function eval(expr, env) {
 //    VStr = <string>             String
 //    (VVec value...)             Vector
 //    (VRec {name, value}...)     Record
-//    (VFun env params body)      Function
+//    (VFun cxt params body)      Function
 //    (VErr code where what)
 //
 // name: string
@@ -449,7 +118,7 @@ function valueFmt(value) {
         let fmtPair = ([key, value]) => key + ": " + valueFmt(value);
         return '{' + value.map(fmtPair).join(', ') + '}';
     } else if (value.T == "VFun") {
-        let [fenv, body] = value;
+        let [fcxt, body] = value;
         return '(...) -> ' + ilFmt(body);
     } else if (value.T == "VErr") {
         return "(VErr " + astFmtV(value) + ")";
@@ -464,17 +133,12 @@ function valueType(value) {
             test.fail('BadValue:' + (value === null ? 'null' : typeof(value))));
 }
 
-// `natives` contains functions that are called via CNat and used
-// directly by `desugar`.
-//
-let natives = Object.create(null);
-
 // A type's "behavior" is a function that obtains properties of its values:
 //   (value, propertyName) -> propertyValue
 //
 let behaviors = Object.create(null);
 
-natives.getProp = (value, name) => {
+let getProp = (value, name) => {
     let gp = behaviors[valueType(value)];
     return gp(value, name);
 };
@@ -521,13 +185,15 @@ function wrapBinop(typeName) {
     }
 }
 
+// Construct a binary operator property: a function that takes one argument
+// and calls `nativeMethod` with (self, arg).
+//
 // nativeMethod: (self, args) -> value
 // result: (value) -> VFun that calls `nativeMethod` with `value` and its arg
 //
 function makeMethodProp(nativeMethod) {
-    let body = N("INat", nativeMethod, [N("IArg", 1), N("IArg", 0)]);
     return function (value) {
-        return N("VFun", envBind(emptyEnv, value), body);
+        return VNat( (...args) => nativeMethod(value, args));
     }
 }
 
@@ -563,11 +229,6 @@ function behaviorFn(propCtors, base) {
 function makeBehavior(unops, binops, methods, typeName, base) {
     let nativeMethods = map(binops, wrapBinop(typeName));
     override(nativeMethods, methods);
-
-    // record names of native functions for debugging
-    for (let [name, nativeMethod] of Object.entries(nativeMethods)) {
-        nfnNames[nativeMethod] = typeName + name;
-    }
 
     let propCtors = map(nativeMethods, makeMethodProp);
     override(propCtors, unops);
@@ -726,13 +387,13 @@ let vecMethods = {
 
 behaviors.VVec = makeBehavior(vecUnops, vecBinops, vecMethods, "VVec");
 
-natives.vvecNew = (...args) => {
+let vvecNew = (...args) => {
     return N("VVec", ...args);
 };
 
 // Note different calling convention than `@[]`.
 //
-natives.vvecNth = (self, n) => {
+let vvecNth = (self, n) => {
     assertType(self, "VVec");
     assertType(n, "VNum");
     faultIf(n < 0 || n >= self.length, "Bounds", self);
@@ -741,9 +402,9 @@ natives.vvecNth = (self, n) => {
 
 // tests
 //
-let tv1 = natives.vvecNew(newValue(9), newValue(8));
+let tv1 = vvecNew(newValue(9), newValue(8));
 test.eq(tv1, N("VVec", 9, 8));
-test.eq(natives.vvecNth(tv1, newValue(0)), newValue(9));
+test.eq(vvecNth(tv1, newValue(0)), newValue(9));
 
 //==============================
 // VRec
@@ -780,7 +441,7 @@ behaviors.VRec = function (value, name) {
         : value[ndx][1];
 };
 
-natives.vrecNew = (names, values) => {
+let vrecNew = (...names) => (...values) => {
     let v = set([], "T", "VRec");
     for (let ii of names.keys()) {
         v[ii] = [names[ii], values[ii]];
@@ -788,20 +449,14 @@ natives.vrecNew = (names, values) => {
     return v;
 };
 
-// recDef: names -> values -> record
-natives.recDef = (names) => {
-    return N('VFun',
-             emptyEnv,
-             N("INat", natives.vrecNew, [N("IVal", names), N("IArg", 0)]));
-};
-
+// vrecDef: names -> values -> record
+let vrecDef = (...names) => VNat(vrecNew(...names));
 
 //----------------
 // tests
 //----------------
 
-let rval = natives.vrecNew( natives.vvecNew("a", "b"),
-                            natives.vvecNew(1, 2) );
+let rval = vrecNew("a", "b")(1, 2);
 test.eq(0, recFindPair(rval, "a"))
 test.eq(1, recFindPair(rval, "b"))
 test.eq(undefined, recFindPair(rval, "x"))
@@ -809,224 +464,50 @@ test.eq(behaviors.VRec(rval, "b"), 2);
 let rv2 = recMethods.setProp(rval, ["b", 7]);
 test.eq(behaviors.VRec(rv2, "b"), 7);
 
-
 //==============================
 // Store names of native functions for debugging
 //==============================
 
-natives.stop = () => {
+let stop = () => {
     faultIf(true, "Stop");
 }
 
-for (let [name, fn] of Object.entries(natives)) {
-    nfnNames[fn] = name;
-}
-
-//==============================================================
-// desugarC: Core Language to Inner Language
-//==============================================================
-//
-// Translation from CL to IL involves the following (among others):
-//
-//  * Named variable references are converted to de Bruijn indices. At this
-//    stage, undefined variable references and shadowing violations are
-//    detected.
-//
-//  * Multi-argument CL functions are described in terms of single-argument
-//    IL functions that accept an argument bundle (currently just a vector).
-//
-
-//==============================
-// Scope object
-//==============================
-
-let emptyScope = {
-    depth: 0,
-    macros: {},
+let builtins = {
+    "vecNew": VNat(vvecNew),
+    "recDef": VNat(vrecDef),
+    "stop": VNat(stop),
+    "getProp": VNat(getProp),
 };
 
-function scopeExtend(scope, names) {
-    let depth = scope.depth + 1;
-    let s = clone(scope);
-    s.depth = depth;
-    for (let [ii, name] of names.entries()) {
-        s[name] = {depth: depth, offset: ii};
-    }
-    return s;
-}
-
-function scopeFind(scope, name) {
-    let defn = scope[name];
-    if (defn) {
-        return [scope.depth - defn.depth, defn.offset];
-    }
-}
-
-//==============================
-// DesugarM
-//==============================
-
-// assert(natives.recDef);
-// assert(natives.stop);
-let builtins = {
-   // Just return the arg bundle (currently the same as a vector)
-    ".vecNew": N("VFun", emptyEnv, N("IArg", 0)),
-    ".recDef": N("VFun", emptyEnv, N("INat", natives.recDef, [N("IArg", 0)])),
-    ".stop": N("VFun", emptyEnv, N("INat", natives.stop, [])),
-}
-
-function cnameToString(ast) {
-    test.assert(ast.T == "CName(");
-    return ast[0];
-}
-
-// Return array of variable names assigned within `node`
-//
-function findLets(node) {
-    let typ = node.T;
-    let vars = [];
-    let subexprs = [];
-    if (typ == "CFun") {
-        let [params, body] = node;
-        vars = params;
-        subexprs = [body];
-    } else if (typ == "CCall") {
-        let [fn, args] = node;
-        subexprs = append([fn], args);
-    } else if (typ == "CProp") {
-        let [value, name] = node;
-        subexprs = [value];
-    } else if (typ == "CLoop") {
-        let [body, k] = node;
-        subexprs = [body, k];
-    }
-
-    for (let e of subexprs) {
-        vars = append(vars, findLets(e));
-    }
-    return vars;
-}
-
-function cbreak(loopVars) {
-    return ccall(cname(".post"), loopVars.map(cname));
-}
-
-function crepeat(loopVars) {
-    return ccall(cname(".body"), append([".body"], loopVars).map(cname));
-}
-
-// Reduce an CLoop expression to other CL expressions
-//
-//  (Loop BODY K) =->
-//     .post = (VARS) -> K
-//     break ~~> .post(VARS)
-//     repeat ~~> .body(body, VARS)
-//     .body = (.body, VARS) -> BODY
-//     repeat
-//
-function reduceCLoop(body, k, vars) {
-    return clet(".post", N("CFun", vars, k),
-                clet(".body", N("CFun", append([".body"], vars), body),
-                     crepeat(vars)));
-}
-
-function desugarC(node, scope) {
-    let ds = (a) => desugarC(a, scope);
-    let N = (typ, ...args) => Object.assign(args, {T: typ, ast: node});
-    let isDefined = (name) => scopeFind(scope, name) !== undefined;
-
-    function nat(name, ...args) {
-        test.assert(natives[name]);
-        return N("INat", natives[name], args)
-    }
-
-    let typ = node.T;
-
-    if (typ == "CName") {
-        let [name] = node;
-        if (builtins[name]) {
-            return N("IVal", builtins[name]);
-        }
-        if (scope.macros[name]) {
-            return ds(scope.macros[name]);
-        }
-        let r = scopeFind(scope, name);
-        faultIf(r === undefined, "Undefined", name, node.ast);
-        let [index, offset] = r;
-        return nat("vvecNth", N("IArg", index), N("IVal", newValue(offset)));
-    } else if (typ == "CVal") {
-        let [value] = node;
-        return N("IVal", newValue(value));
-    } else if (typ == "CFun") {
-        let [params, body, shadowMode] = node;
-        // check for un-sanctioned shadowing
-        for (let name of params) {
-            if (shadowMode == "=") {
-                faultIf(isDefined(name), "Shadow", name, node.ast);
-            } else if (shadowMode == ":=") {
-                faultIf(!isDefined(name), "Undefined", name, node.ast);
-            }
-        }
-        return N("IFun", desugarC(body, scopeExtend(scope, params)));
-    } else if (typ == "CCall") {
-        let [fn, args] = node;
-        return N("IApp", ds(fn), nat("vvecNew", ...args.map(ds)));
-    } else if (typ == "CProp") {
-        let [value, name] = node;
-        return nat("getProp", ds(value), N("IVal", name));
-    } else if (typ == "CLoop") {
-        let [body, k] = node;
-        let vars = findLets(body).filter(isDefined);
-        let macros = {
-            "break": cbreak(vars),
-            "repeat": crepeat(vars),
-        };
-        return desugarC(reduceCLoop(body, k, vars), set(scope, "macros", macros));
-    } else if (typ == "CError") {
-        let [desc, ast] = node;
-        faultIf(true, "Error: " + desc, null, ast);
+let builtinCtors = (type, arg) => {
+    if (type == "Lib") {
+        test.assert(builtins[arg]);
+        return builtins[arg];
+    } else if (type == "String") {
+        return String(arg);
+    } else if (type == "Number") {
+        // use native type for numbers
+        return Number(arg);
     } else {
-        test.fail("unknown M-record: %s", clFmt(node));
+        // TODO: return "Error" value, or stop?
     }
-}
-
-function desugar(ast, scope) {
-    return desugarC(desugarExpr(ast), scope);
-}
-
-function makeManifest(vars) {
-    let names = Object.keys(vars).sort();
-    let values = names.map(k => vars[k]);
-    let scope = scopeExtend(emptyScope, names);
-    let env = envBind(emptyEnv, natives.vvecNew(...values));;
-    return [scope, env];
-}
+};
 
 let manifestVars = {
     "true": true,
     "false": false,
 };
 
-let [manifestScope, manifestEnv] = makeManifest(manifestVars);
+let [manifestEnv, manifestCxt] = makeManifest(manifestVars);
 
 function evalAST(ast) {
-    // create `scope` and `env` for manifest
-    return eval(desugar(ast, manifestScope), manifestEnv);
+    // create `env` and `cxt` for manifest
+    return eval(manifestEnv.desugar(ast), manifestCxt, builtinCtors);
 }
 
 //==============================================================
 // Tests
 //==============================================================
-
-// Scope structure
-
-let testScope = scopeExtend(scopeExtend(emptyScope, ['a', 'b']), ['x', 'y']);
-test.eq([1,0], scopeFind(testScope, 'a'));
-test.eq([0,1], scopeFind(testScope, 'y'));
-
-test.eq('1', ilFmt(desugar(N("Number", "1"))));
-test.eq('$0[0]', ilFmt(desugar(N("Name", "a"), makeManifest({a: 1})[0])));
-
 
 function trapEval(fn, ...args) {
     let value;
@@ -1045,7 +526,7 @@ function trapEval(fn, ...args) {
 }
 
 function et(source, evalue, eoob) {
-    source = source.replace(/ \| /g, "\n");
+    source = L(source).replace(/ \| /g, "\n");
     let [ast, oob] = parseModule(source);
     test.eqAt(2, "OOB: " + (eoob || ""), "OOB: " + astFmtV(oob || []));
     let val = trapEval(evalAST, ast);
@@ -1062,7 +543,8 @@ et(".5", "0.5", '(Error "NumDigitBefore")');
 
 // eval error
 
-et("x", '(VErr "Undefined" "x" null)');
+// TODO: error --> IErr --> VErr
+// et("x", '(VErr "Undefined" "x" null)');
 
 // literals and constructors
 
@@ -1073,7 +555,7 @@ et("{a: 1, b: 2}", "{a: 1, b: 2}");
 
 // Fn
 
-et("x -> x", "(...) -> $0[0]");
+et("x -> x", '(...) -> $0:0');
 
 // Function calls
 
@@ -1131,8 +613,9 @@ et("assert 2>3 | 1", '(VErr "Stop" null null)');
 et("x = 1 | x + 2", "3");
 et("x = 1 | x := 2 | x + 2 | ", "4");
 et("x = 1 | x += 2 | x + 2 | ", "5");
-et("x = 1 | x = 2 | x | ", '(VErr "Shadow" "x" null)');
-et("x := 1 | x | ", '(VErr "Undefined" "x" null)');
+// TODO: eliminate catch
+//et("x = 1 | x = 2 | x | ", '(VErr "Shadow" "x" null)');
+//et("x := 1 | x | ", '(VErr "Undefined" "x" null)');
 
 et("x = [1,2] | x[0] := 3 | x | ", "[3, 2]");
 et("x = [1,2] | x[0] += 3 | x | ", "[4, 2]");
@@ -1140,45 +623,37 @@ et("x = {a:[1]} | x.a[1] := 2 | x", "{a: [1, 2]}");
 
 // Loop
 
-test.eq(clFmt(reduceCLoop(N("CName", "break"), N("CName", "x"), ["x"])),
-        fmtLet(".post",
-               '(CFun ["x"] x)',
-               fmtLet(".body",
-                      '(CFun [".body" "x"] break)',
-                      '(CCall .body [.body x])')));
-
-et(L([ 'x = 1',
-       'loop while x < 10:',
-       '  x *= 2',
-       'x',
-     ]),
+et([ 'x = 1',
+     'loop while x < 10:',
+     '  x *= 2',
+     'x',
+    ],
    '16');
 
 // Match
 
-et(L([
+et([
     'match 1:',
     '   2 => 3',
     '   x => x',
-]), '1');
+], '1');
 
-et(L([
+et([
     'match 2:',
     '   2 => 3',
     '   x => x',
-]), '3');
+], '3');
 
-et(L([
+et([
     'match [1,2]:',
-    '     [] => 0',
     '     [2, x] => 1',
     '     [1, x] => x',
     '     _ => 9',
-]), '2');
+], '2');
 
 // Examples
 
-let fibr = L([
+let fibr = [
     '',
     '_fib = (_self, n) ->',
     '    fib = n2 -> _self(_self, n2)',
@@ -1190,11 +665,11 @@ let fibr = L([
     '',
     'fib(8)',
     '',
-]);
+];
 
 et(fibr, "13")
 
-let fibloop = L([
+let fibloop = [
     '',
     'fib = n ->',
     '    a = [0, 1]',
@@ -1205,6 +680,6 @@ let fibloop = L([
     '',
     'fib(8)',
     '',
-]);
+];
 
 et(fibloop, "13");
