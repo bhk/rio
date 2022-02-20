@@ -44,14 +44,22 @@ function map(obj, fn) {
     return o;
 }
 
-// Serialize a Lua "record" value in an S-expression-like syntax.
+
+// Serialize a JavaScript value using an S-expression-like syntax.
 //
-//  * Tables where t.T == nil: Serialize t[1...] as a vector.
-//        [1, 2, 3]           -->   "[1 2 3]"
-//  * Tables where t.T ~= nil: Serialize as a list whose first element
-//    is a symbol given by t.T, and subsequent elements are t[1...].
-//        {T="Foo", 1, 2}     //>  "(Foo 1 2)"
-//  * Other values: use test.serialize.
+// * Primitive types are serialized as JavaScript source.
+// * A "record" (an object whose T property is a string) is
+//   serialized as "(T ELEMS...)" where ELEMS are the array
+//   values starting at index 0, delimited by a space character.
+//     For example:  {T:"Foo", "0":2, "1":3}  -->  (Foo 2 3)
+// * Other objects are serialized as `[ELEMS...]`
+//     For example:  [1,2,3]  -->  [1 2 3]
+//
+// `formatters` allows the client to customize the appearance of records
+// based on their T value, by setting formatters[T] to a function:
+//     (value, fmt) -> string
+// It should return the serialization of value.  Its second argument is
+// a function (of the same type) that serializes values.
 //
 let sexprFormatter = formatters => {
     formatters = formatters ?? Object.create(null);
@@ -61,18 +69,19 @@ let sexprFormatter = formatters => {
             return test.serialize(node);
         }
 
-        let f = formatters[node.T || "[]"]
-        if (f) {
-            return f(node, format);
+        let t = typeof node.T == "string" ? node.T : false;
+        if (t && t in formatters) {
+            return formatters[t](node, format);
         }
 
+        // serialize array members
         let elems = [];
         for (let ii = 0; node[ii] !== undefined; ++ii) {
             elems.push(format(node[ii]));
         }
         let text = elems.join(' ');
-        return (node.T
-                ? "(" + node.T + (text === "" ? "" : " " + text) + ")"
+
+        return (t ? "(" + t + (text === "" ? "" : " " + text) + ")"
                 : "[" + text + "]");
     }
     return format;
