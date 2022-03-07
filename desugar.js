@@ -1,6 +1,6 @@
 // desugar: Convert AST to IL
 
-import test from "./test.js";
+import * as test from "./test.js";
 import {L, N, sexprFormatter} from "./misc.js";
 import {astFmt, parseModule} from "./syntax.js";
 

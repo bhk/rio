@@ -33,7 +33,7 @@
 //   (S-While cond)
 //
 
-import test from "./test.js";
+import * as test from "./test.js";
 import {append, override, set, sexprFormatter} from "./misc.js";
 import {P, S, NS, R, V, and, or, CC, cpos, fail, NoCaptures} from "./peg.js";
 

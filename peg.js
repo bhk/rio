@@ -74,7 +74,7 @@
 // discarded, and state is not threaded between them.
 //
 
-import test from "./test.js";
+import * as test from "./test.js";
 import {append} from "./misc.js";
 
 let NoCaptures = [];

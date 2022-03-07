@@ -1,7 +1,7 @@
 // Misc. utility functions
 //
 
-import test from "./test.js";
+import * as test from "./test.js";
 
 // MODIFIES `a`
 //

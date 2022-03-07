@@ -1,72 +1,61 @@
-import test from "./test.js";
+import {eq, eqAt, serialize, assert, fail} from "./test.js";
 import {clone, override, map, set, L, N} from "./misc.js";
 import {astFmt, astFmtV, parseModule} from "./syntax.js";
 import {Env, ilFmt} from "./desugar.js";
 
 //==============================================================
-// Contexts
+// Stacks
 //==============================================================
 
-// A context, as used in `eval`, is simply a stack of values.  The last
-// element is the argument passed to the current function. The previous
-// element is the argument passed to the parent function (when it
-// constructed the current function).  And so on...
+// evalIL() uses immutable stacks. stackPush() returns a new stack.
+// In stackGet(), index 0 is the most-recently pushed value.
 
-let emptyCxt = [];
+let emptyStack = [];
 
-function cxtBind(cxt, arg) {
-    return [arg, ...cxt];
-}
+let stackPush = (stack, arg) => [arg, ...stack];
 
-function cxtArg(cxt, index) {
-    return cxt[index];
-}
+let stackGet = (stack, index) => stack[index];
 
-// Construct env & cxt from a set of manifest variables
-//
-function makeManifest(vars) {
+// Construct env & matching stack from a set of manifest variables
+let makeManifest = (vars) => {
     let names = Object.keys(vars).sort();
     let values = names.map(k => vars[k]);
     let env = new Env(names);
-    let cxt = cxtBind(emptyCxt, values);
-    return [env, cxt];
-}
-
-{
-    let te = new Env(['a']);
-    test.eq('1', ilFmt(te.desugar(N("Number", "1"))));
-    test.eq('$0:0', ilFmt(te.desugar(N("Name", "a"))));
-}
+    let stack = stackPush(emptyStack, values);
+    return [env, stack];
+};
 
 //==============================================================
 // eval
 //==============================================================
 
+// Construct an IL function value
 let VFun = (env, body) => N("VFun", env, body);
+
+// Construct a native function value
 let VNat = (fn) => N("VNat", fn);
 
-function evalIL(expr, cxt, ctors) {
-    let typ = expr.T;
-    let ee = e => evalIL(e, cxt, ctors);
+let evalIL = (node, stack, ctors) => {
+    let ee = e => evalIL(e, stack, ctors);
 
-    if (typ == "IVal") {
-        let [ty, arg] = expr;
+    if (node.T == "IVal") {
+        let [ty, arg] = node;
         return ctors(ty, arg);
-    } else if (typ == "IArg") {
-        let [ups, pos] = expr;
-        let frame = cxtArg(cxt, ups);
-        test.assert(frame !== undefined && frame[pos] !== undefined);
+    } else if (node.T == "IArg") {
+        let [ups, pos] = node;
+        let frame = stackGet(stack, ups);
+        assert(frame !== undefined && frame[pos] !== undefined);
         return frame[pos];
-    } else if (typ == "IFun") {
-        let [body] = expr;
-        return VFun(cxt, body);
-    } else if (typ == "IApp") {
-        let [fn, args] = expr;
+    } else if (node.T == "IFun") {
+        let [body] = node;
+        return VFun(stack, body);
+    } else if (node.T == "IApp") {
+        let [fn, args] = node;
         let fnResult = ee(fn);
         let argResults = args.map(ee);
         if (fnResult.T == "VFun") {
-            let [fcxt, body] = fnResult;
-            return evalIL(body, cxtBind(fcxt, argResults), ctors);
+            let [fstack, body] = fnResult;
+            return evalIL(body, stackPush(fstack, argResults), ctors);
         } else if (fnResult.T == "VNat") {
             let [fnNative] = fnResult;
             return fnNative(...argResults);
@@ -74,9 +63,9 @@ function evalIL(expr, cxt, ctors) {
             throw new Error("Fault: call non-function");
         }
     } else {
-        test.fail("Unsupported: %q", expr);
+        fail("Unsupported: %q", node);
     }
-}
+};
 
 //==============================================================
 // Built-In Types
@@ -89,7 +78,7 @@ function evalIL(expr, cxt, ctors) {
 //    VStr = <string>             String
 //    (VVec value...)             Vector
 //    (VRec {name, value}...)     Record
-//    (VFun cxt params body)      Function
+//    (VFun stack params body)    Function
 //    (VErr code where what)
 //
 // name: string
@@ -107,7 +96,7 @@ function evalIL(expr, cxt, ctors) {
 //
 function valueFmt(value) {
     if (typeof value == "string") {
-        return test.serialize(value);
+        return serialize(value);
     } else if (!(value instanceof Array)) {
         return String(value);
     }
@@ -118,7 +107,7 @@ function valueFmt(value) {
         let fmtPair = ([key, value]) => key + ": " + valueFmt(value);
         return '{' + value.map(fmtPair).join(', ') + '}';
     } else if (value.T == "VFun") {
-        let [fcxt, body] = value;
+        let [fstack, body] = value;
         return '(...) -> ' + ilFmt(body);
     } else if (value.T == "VErr") {
         return "(VErr " + astFmtV(value) + ")";
@@ -130,7 +119,7 @@ function valueType(value) {
             typeof value == 'number' ? 'VNum' :
             typeof value == 'boolean' ? 'VBool' :
             typeof (value ?? undefined) == 'object' ? value.T :
-            test.fail('BadValue:' + (value === null ? 'null' : typeof(value))));
+            fail('BadValue:' + (value === null ? 'null' : typeof(value))));
 }
 
 // A type's "behavior" is a function that obtains properties of its values:
@@ -403,8 +392,8 @@ let vvecNth = (self, n) => {
 // tests
 //
 let tv1 = vvecNew(newValue(9), newValue(8));
-test.eq(tv1, N("VVec", 9, 8));
-test.eq(vvecNth(tv1, newValue(0)), newValue(9));
+eq(tv1, N("VVec", 9, 8));
+eq(vvecNth(tv1, newValue(0)), newValue(9));
 
 //==============================
 // VRec
@@ -457,12 +446,12 @@ let vrecDef = (...names) => VNat(vrecNew(...names));
 //----------------
 
 let rval = vrecNew("a", "b")(1, 2);
-test.eq(0, recFindPair(rval, "a"))
-test.eq(1, recFindPair(rval, "b"))
-test.eq(undefined, recFindPair(rval, "x"))
-test.eq(behaviors.VRec(rval, "b"), 2);
+eq(0, recFindPair(rval, "a"))
+eq(1, recFindPair(rval, "b"))
+eq(undefined, recFindPair(rval, "x"))
+eq(behaviors.VRec(rval, "b"), 2);
 let rv2 = recMethods.setProp(rval, ["b", 7]);
-test.eq(behaviors.VRec(rv2, "b"), 7);
+eq(behaviors.VRec(rv2, "b"), 7);
 
 //==============================
 // Store names of native functions for debugging
@@ -481,7 +470,7 @@ let builtins = {
 
 let builtinCtors = (type, arg) => {
     if (type == "Lib") {
-        test.assert(builtins[arg]);
+        assert(builtins[arg]);
         return builtins[arg];
     } else if (type == "String") {
         return String(arg);
@@ -498,11 +487,11 @@ let manifestVars = {
     "false": false,
 };
 
-let [manifestEnv, manifestCxt] = makeManifest(manifestVars);
+let [manifestEnv, manifestStack] = makeManifest(manifestVars);
 
 function evalAST(ast) {
-    // create `env` and `cxt` for manifest
-    return evalIL(manifestEnv.desugar(ast), manifestCxt, builtinCtors);
+    // create `env` and `stack` for manifest
+    return evalIL(manifestEnv.desugar(ast), manifestStack, builtinCtors);
 }
 
 //==============================================================
@@ -517,7 +506,7 @@ function trapEval(fn, ...args) {
         if (err.fault) {
             // This represents an error in the Rio program, not an error in
             // the interpreter.
-            // test.printf("Fault:\n%s\n", err.stack);
+            // printf("Fault:\n%s\n", err.stack);
             return err.fault;
         }
         throw err;
@@ -528,9 +517,9 @@ function trapEval(fn, ...args) {
 function et(source, evalue, eoob) {
     source = L(source).replace(/ \| /g, "\n");
     let [ast, oob] = parseModule(source);
-    test.eqAt(2, "OOB: " + (eoob || ""), "OOB: " + astFmtV(oob || []));
+    eqAt(2, "OOB: " + (eoob || ""), "OOB: " + astFmtV(oob || []));
     let val = trapEval(evalAST, ast);
-    test.eqAt(2, evalue, valueFmt(val));
+    eqAt(2, evalue, valueFmt(val));
 }
 
 // manifest variables

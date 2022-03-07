@@ -254,6 +254,6 @@ eq("a: 1, 2", sprintf("a: %a", [1,2]));
 eq("{a:1,b:2}", sprintf("%q", {a:1,b:2}));
 
 
-export default {
+export {
     serialize, sprintf, printf, isEQ, eq, eqAt, failAt, fail, assert
 };
