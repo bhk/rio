@@ -1,0 +1,7 @@
+{
+    "type": "module",
+    "name": "rio",
+    "browser": {
+        "./test.js": "./no-test.js"
+    }
+}

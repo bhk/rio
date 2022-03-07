@@ -33,11 +33,9 @@
 //   (S-While cond)
 //
 
-"use strict";
-
-let test = require("test")
-let {append, move, override, set, sexprFormatter} = require("misc");
-let {P, S, NS, R, V, and, or, CC, cpos, fail, NoCaptures} = require("peg");
+import test from "./test.js";
+import {append, override, set, sexprFormatter} from "./misc.js";
+import {P, S, NS, R, V, and, or, CC, cpos, fail, NoCaptures} from "./peg.js";
 
 // returns: match 0 or 1 occurrence of `p`
 function opt(p) {
@@ -464,11 +462,7 @@ function astFmtV(nodes) {
     }
 }
 
-
-exports.parseModule = parseModule;
-exports.astFmtV = astFmtV;
-exports.astFmt = astFmt;
-
+export {parseModule, astFmtV, astFmt};
 
 //==============================================================
 // Tests

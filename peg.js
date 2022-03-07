@@ -74,14 +74,10 @@
 // discarded, and state is not threaded between them.
 //
 
-"use strict";
-
-let test = require("test");
-let misc = require("misc");
+import test from "./test.js";
+import {append} from "./misc.js";
 
 let NoCaptures = [];
-
-let append = misc.append;
 
 function matcherOfString(str) {
     let strlen = str.length;
@@ -325,20 +321,7 @@ function V(name) {
     });
 }
 
-
-exports.P = P;
-exports.S = S;
-exports.NS = NS;
-exports.R = R;
-exports.V = V;
-exports.and = and;
-exports.or = or;
-exports.CC = CC;
-exports.cpos = cpos;
-exports.empty = empty;
-exports.fail = fail;
-exports.NoCaptures = NoCaptures;
-
+export {P, S, NS, R, V, and, or, CC, cpos, empty, fail, NoCaptures};
 
 ////////////////////////////////////////////////////////////////
 // tests

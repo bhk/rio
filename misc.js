@@ -1,7 +1,7 @@
 // Misc. utility functions
 //
 
-let test = require("test.js");
+import test from "./test.js";
 
 // MODIFIES `a`
 //
@@ -96,14 +96,7 @@ let sexprFormatter = formatters => {
     return format;
 }
 
-exports.override = override;
-exports.clone = clone;
-exports.set = set;
-exports.append = append;
-exports.map = map;
-exports.L = L;
-exports.N = N;
-exports.sexprFormatter = sexprFormatter;
+export {override, clone, set, append, map, L, N, sexprFormatter};
 
 let o = {a: 1};
 test.eq(set(o, "a", 2), {a: 2});
@@ -115,10 +108,10 @@ let oc = clone(o);
 test.eq(o, oc);
 test.eq(false, o === oc);
 
-test.eq([5,4,3,2,1], exports.append([5,4], [3,2,1]));
-test.eq([1,2], exports.append([1,2], []));
-test.eq([3,4], exports.append([], [3,4]));
-test.eq([1,2], exports.append([1], [2]));
+test.eq([5,4,3,2,1], append([5,4], [3,2,1]));
+test.eq([1,2], append([1,2], []));
+test.eq([3,4], append([], [3,4]));
+test.eq([1,2], append([1], [2]));
 
 let f = sexprFormatter(null);
 test.eq(f(["Foo", ["abc", 2, {T: "Bar"}]]),

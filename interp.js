@@ -1,7 +1,7 @@
-let test = require("test");
-let {clone, override, map, set, L, N} = require("misc");
-let {astFmt, astFmtV, parseModule} = require("syntax");
-let {Env, ilFmt} = require("desugar");
+import test from "./test.js";
+import {clone, override, map, set, L, N} from "./misc.js";
+import {astFmt, astFmtV, parseModule} from "./syntax.js";
+import {Env, ilFmt} from "./desugar.js";
 
 //==============================================================
 // Contexts
@@ -45,9 +45,9 @@ function makeManifest(vars) {
 let VFun = (env, body) => N("VFun", env, body);
 let VNat = (fn) => N("VNat", fn);
 
-function eval(expr, cxt, ctors) {
+function evalIL(expr, cxt, ctors) {
     let typ = expr.T;
-    let ee = e => eval(e, cxt, ctors);
+    let ee = e => evalIL(e, cxt, ctors);
 
     if (typ == "IVal") {
         let [ty, arg] = expr;
@@ -66,7 +66,7 @@ function eval(expr, cxt, ctors) {
         let argResults = args.map(ee);
         if (fnResult.T == "VFun") {
             let [fcxt, body] = fnResult;
-            return eval(body, cxtBind(fcxt, argResults), ctors);
+            return evalIL(body, cxtBind(fcxt, argResults), ctors);
         } else if (fnResult.T == "VNat") {
             let [fnNative] = fnResult;
             return fnNative(...argResults);
@@ -502,7 +502,7 @@ let [manifestEnv, manifestCxt] = makeManifest(manifestVars);
 
 function evalAST(ast) {
     // create `env` and `cxt` for manifest
-    return eval(manifestEnv.desugar(ast), manifestCxt, builtinCtors);
+    return evalIL(manifestEnv.desugar(ast), manifestCxt, builtinCtors);
 }
 
 //==============================================================

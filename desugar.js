@@ -1,8 +1,8 @@
 // desugar: Convert AST to IL
 
-let test = require("test");
-let {L, N, sexprFormatter} = require("misc");
-let {astFmt, parseModule} = require("syntax");
+import test from "./test.js";
+import {L, N, sexprFormatter} from "./misc.js";
+import {astFmt, parseModule} from "./syntax.js";
 
 let assert = test.assert;
 
@@ -587,5 +587,4 @@ ilEQ([ 'assert x', '1' ],
 // exports
 //==============================================================
 
-exports.ilFmt = ilFmt;
-exports.Env = Env;
+export {ilFmt, Env};
