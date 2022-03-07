@@ -250,8 +250,11 @@ let dsBlock = (lines, loopVars, env) => {
             value = astBinop(op, target, value);
         }
         [target, value] = unwrapTarget(target, value);
-        if (aop == "=" && env.find(astName_string(target))) {
-            return IErr("aliasing");
+        let isBound = env.find(astName_string(target));
+        if (aop == "=" && isBound) {
+            return IErr("Shadow:" + astName_string(target));
+        } else if (aop != "=" && !isBound) {
+            return IErr("Undefined:" + astName_string(target));
         }
         return dsLet(target, value, k, env);
     } else if (T == "S-Loop") {
@@ -283,6 +286,7 @@ let dsBlock = (lines, loopVars, env) => {
 
 // Desugar an AST expression
 let desugar = (ast, env) => {
+    if (!env) todo();
     let recur = expr => desugar(expr, env);
     let T = ast.T;
     //test.printf("AST: %s\n", astFmt(ast));
@@ -302,7 +306,11 @@ let desugar = (ast, env) => {
         } else if (name == ".stop") {
             return $lib("stop");
         }
-        let [ups, pos] = env.find(name);
+        let rec = env.find(name);
+        if (!rec) {
+            return IErr("Undefined:" + name);
+        }
+        let [ups, pos] = rec;
         return IArg(ups, pos);
     } else if (T == "Fn") {
         let [params, body] = ast;
@@ -367,7 +375,7 @@ let desugar = (ast, env) => {
 
 let parseToAST = (src) => parseModule(src)[0];
 
-let astEQ = (a, b) => test.eq(astFmt(a), astFmt(b));
+let astEQ = (a, b) => test.eqAt(2, astFmt(a), astFmt(b));
 
 let testEnv = new Env(['a', 'b']).extend(['x', 'y']);
 test.eq([1,0], testEnv.find('a'));
@@ -381,7 +389,7 @@ let serializeIL = input =>
     ilFmt(input.T ? input :                         // IL
           desugar(parseToAST(L(input)), testEnv));  // source
 
-let ilEQ = (a, b) => test.eq(serializeIL(a), serializeIL(b));
+let ilEQ = (a, b) => test.eqAt(2, serializeIL(a), serializeIL(b));
 
 let $1 = $num(1);
 let $2 = $num(2);

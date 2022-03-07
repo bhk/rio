@@ -1,7 +1,10 @@
-import {eq, eqAt, serialize, assert, fail} from "./test.js";
+import {eq, eqAt, serialize, assert, fail, printf} from "./test.js";
 import {clone, override, map, set, L, N} from "./misc.js";
 import {astFmt, astFmtV, parseModule} from "./syntax.js";
 import {Env, ilFmt} from "./desugar.js";
+
+let log = false;
+let logf = (...args) => { if (log) printf(...args); }
 
 //==============================================================
 // Stacks
@@ -35,35 +38,156 @@ let VFun = (env, body) => N("VFun", env, body);
 // Construct a native function value
 let VNat = (fn) => N("VNat", fn);
 
+// Construct an error value
+let VErr = (desc, what) => N("VErr", desc, what);
+
+let verrIf = (cond, desc, what) =>
+    cond && VErr(desc, what);
+
+let vassertType = (type, what) =>
+    (valueType(what) !== type) && VErr("Expected " + type, what);
+
 let evalIL = (node, stack, ctors) => {
     let ee = e => evalIL(e, stack, ctors);
+    let value;
 
     if (node.T == "IVal") {
         let [ty, arg] = node;
-        return ctors(ty, arg);
+        value = ctors(ty, arg);
     } else if (node.T == "IArg") {
         let [ups, pos] = node;
         let frame = stackGet(stack, ups);
         assert(frame !== undefined && frame[pos] !== undefined);
-        return frame[pos];
+        value = frame[pos];
     } else if (node.T == "IFun") {
         let [body] = node;
-        return VFun(stack, body);
+        value = VFun(stack, body);
     } else if (node.T == "IApp") {
         let [fn, args] = node;
         let fnResult = ee(fn);
         let argResults = args.map(ee);
         if (fnResult.T == "VFun") {
             let [fstack, body] = fnResult;
-            return evalIL(body, stackPush(fstack, argResults), ctors);
+            value = evalIL(body, stackPush(fstack, argResults), ctors);
         } else if (fnResult.T == "VNat") {
             let [fnNative] = fnResult;
-            return fnNative(...argResults);
+            value = fnNative(...argResults);
         } else {
-            throw new Error("Fault: call non-function");
+            value = VErr("NotAFunction", fnResult);
         }
+    } else if (node.T == "IErr") {
+        let [desc] = node;
+        value = VErr(desc, null);
     } else {
         fail("Unsupported: %q", node);
+    }
+    if (value.T == "VErr") {
+        let err = new Error(value);
+        err.value = value;
+        throw err;
+    }
+    return value;
+};
+
+let trapEval = (node, stack, ctors) => {
+    let value;
+    try {
+        value = evalIL(node, stack, ctors);
+    } catch (err) {
+        if (err.value) {
+            // This represents an error in the Rio program, not an error in
+            // the interpreter.
+            return err.value;
+        } else {
+            throw err;
+        }
+    };
+    return value;
+};
+
+// Eval
+//
+// tasks[] is an array of IL records or internal tasks (_call or _ret).
+// values[] is an array of result values.
+//
+// The last element in tasks[] is the next todo entry to be processed when
+// step() is called.  Processing an IL record pushes its result onto
+// values[].  Processing an internal task performs intermediate steps
+// required for processing an IApp.
+//
+class Eval {
+    constructor(node, stack, ctors) {
+        this.ctors = ctors;
+        this.values = [];
+        this.tasks = [node];
+        this.stack = stack;
+    }
+
+    // Add a value to the end of values[]
+    push(value) {
+        if (value.T == "VErr") {
+            this.tasks = [];
+            this.values = [];
+        }
+        this.values.push(value);
+    }
+
+    // Returns result value, or `undefined` if still pending
+    step() {
+        let node = this.tasks.pop();
+        //logf("V: %q\n", this.values);
+        //logf("T: %q @ %s\n", node, this.tasks.length);
+
+        if (node == undefined) {
+            return this.values[0];
+        } else if (node.T == "IVal") {
+            let [ty, arg] = node;
+            this.push(this.ctors(ty, arg));
+        } else if (node.T == "IArg") {
+            let [ups, pos] = node;
+            let frame = stackGet(this.stack, ups);
+            assert(frame !== undefined && frame[pos] !== undefined);
+            this.push(frame[pos]);
+        } else if (node.T == "IFun") {
+            let [body] = node;
+            this.push(VFun(this.stack, body));
+        } else if (node.T == "IApp") {
+            let [fn, args] = node;
+            this.tasks.push(N("_call", this.values.length));
+            for (let n = args.length-1; n >= 0; --n) {
+                this.tasks.push(args[n]);
+            }
+            this.tasks.push(fn);
+        } else if (node.T == "_call") {
+            let [idx] = node;
+            let fn = this.values[idx];
+            let args = this.values.slice(idx + 1);
+            this.values = this.values.slice(0, idx);
+            if (fn.T == "VFun") {
+                let [fstack, body] = fn;
+                this.tasks.push(N("_ret", this.stack));
+                this.stack = stackPush(fstack, args);
+                this.tasks.push(body);
+            } else if (fn.T == "VNat") {
+                let [fnNative] = fn;
+                this.push(fnNative(...args));
+            } else {
+                this.push(VErr("NotAFunction", fn));
+            }
+        } else if (node.T == "_ret") {
+            let [stack] = node;
+            this.stack = stack;
+        } else if (node.T == "IErr") {
+            let [desc] = node;
+            this.push(VErr(desc, null));
+        } else {
+            fail("Unsupported: %q", node);
+        }
+    }
+
+    sync() {
+        while (this.step() == undefined) {}
+        return this.step();
     }
 };
 
@@ -79,7 +203,7 @@ let evalIL = (node, stack, ctors) => {
 //    (VVec value...)             Vector
 //    (VRec {name, value}...)     Record
 //    (VFun stack params body)    Function
-//    (VErr code where what)
+//    (VErr code value)           Error
 //
 // name: string
 // code: string
@@ -87,9 +211,9 @@ let evalIL = (node, stack, ctors) => {
 // what: Value
 // all others: Value
 //
-// VErr is a pseudo-value: never passed to functions or otherwise used in
-// `eval`, it is passed to `error()`, and then returned from `trapEval`, to
-// indicate that a fault was encountered.
+// VErr is a fatal error or exception.  It is never passed to a
+// Rio function; when returned by a native function, it causes
+// the interpreter loop to terminate.
 
 // Format a value as Rio source text that produces that value (except for
 // functions)
@@ -132,32 +256,8 @@ let getProp = (value, name) => {
     return gp(value, name);
 };
 
-// faultIf() is called from native functions in the context of an
-// evaluation.
-//
-//   what = offending value
-//   where = AST node at which the error occurred
-//
-// TODO: Resolve confusion of use cases.  At run time we can identify a
-// (Rio) value and not an AST node (e.g. in a native function).  At
-// translation time (e.g. in desugarC) we can identify an AST node and some
-// other (non-Rio) value.
-//
-function faultIf(cond, typ, what, where) {
-    if (cond) {
-        let err = new Error("Fault: " + typ);
-        err.fault = N("VErr", typ, what ?? null, where ?? null);
-        throw err;
-    }
-}
-
-function assertType(value, type, where) {
-    faultIf(valueType(value) !== type, "Expected_" + type, value, where);
-}
-
-function baseBehavior(value, name) {
-    faultIf(true, "UnknownProperty:" + name, value);
-}
+let baseBehavior = (value, name) =>
+    VErr("UnknownProperty:" + name, value);
 
 // Wrap a function operating on two values with a function suitable as a
 // native function for use with makeMethodProp.
@@ -168,8 +268,8 @@ function wrapBinop(typeName) {
             // The surface language calling convention, used to call the
             // method, puts its argument in a vector (arg bundle).
             let [b] = args;
-            assertType(b, typeName);
-            return fn(a, b);
+            return vassertType(typeName, b)
+                || fn(a, b);
         }
     }
 }
@@ -248,10 +348,10 @@ let boolBinops = {
 };
 
 let boolMethods = {
-    "switch": (self, args) => {
-        faultIf(args.length !== 2, "SwitchArity", args[3])
-        return self ? args[0] : args[1];
-    },
+    "switch": (self, args) =>
+        args.length == 2
+        ? (self ? args[0] : args[1])
+        : VErr("SwitchArity", args[3]),
 };
 
 behaviors.VBool = makeBehavior(boolUnops, boolBinops, boolMethods, "VBool");
@@ -279,18 +379,18 @@ let strBinops = {
 let strMethods = {
     slice: (self, args) => {
         let [start, limit] = args;
-        assertType(start, "VNum");
-        assertType(limit, "VNum");
-        faultIf(start < 0 || start >= self.length, "Bounds", start);
-        faultIf(limit < start || limit >= self.length, "Bounds", start);
-        return self.slice(start, limit);
+        return vassertType("VNum", start)
+            || vassertType("VNum", limit)
+            || verrIf(start < 0 || start >= self.length, "Bounds", start)
+            || verrIf(limit < start || limit >= self.length, "Bounds", start)
+            || self.slice(start, limit);
     },
 
     "@[]": (self, args) => {
         let [offset] = args;
-        assertType(offset, "VNum");
-        faultIf(offset < 0 || offset >= self.length, "Bounds", offset);
-        return self.charCodeAt(offset);
+        return vassertType("VNum", offset)
+            || verrIf(offset < 0 || offset >= self.length, "Bounds", offset)
+            || self.charCodeAt(offset);
     },
 };
 
@@ -351,26 +451,26 @@ let vecBinops = {
 let vecMethods = {
     slice: (self, args) => {
         let [start, limit] = args;
-        assertType(start, "VNum");
-        assertType(limit, "VNum");
-        faultIf(start < 0 || start >= self.length, "Bounds", start);
-        faultIf(limit < start || limit >= self.length, "Bounds", start);
-        return N("VVec", ...self.slice(start, limit));
+        return vassertType("VNum", start)
+            || vassertType("VNum", limit)
+            || verrIf(start < 0 || start >= self.length, "Bounds", start)
+            || verrIf(limit < start || limit >= self.length, "Bounds", start)
+            || N("VVec", ...self.slice(start, limit));
     },
 
     set: (self, args) => {
         let [index, value] = args;
-        assertType(index, "VNum");
-        // enforce contiguity (growable, but one at a time)
-        faultIf(index < 0 || index > self.length, "Bounds", index);
-        return set(self, index, value);
+        return vassertType("VNum", index)
+            // enforce contiguity (growable, but one at a time)
+            || verrIf(index < 0 || index > self.length, "Bounds", index)
+            || set(self, index, value);
     },
 
     "@[]": (self, args) => {
         let [offset] = args;
-        assertType(offset, "VNum");
-        faultIf(offset < 0 || offset >= self.length, "Bounds", offset);
-        return self[offset];
+        return vassertType("VNum", offset)
+            || verrIf(offset < 0 || offset >= self.length, "Bounds", offset)
+            || self[offset];
     },
 };
 
@@ -382,12 +482,11 @@ let vvecNew = (...args) => {
 
 // Note different calling convention than `@[]`.
 //
-let vvecNth = (self, n) => {
-    assertType(self, "VVec");
-    assertType(n, "VNum");
-    faultIf(n < 0 || n >= self.length, "Bounds", self);
-    return self[n];
-}
+let vvecNth = (self, n) =>
+    vassertType("VVec", self)
+    || vassertType("VNum", n)
+    || verrIf(n < 0 || n >= self.length, "Bounds", self)
+    || self[n];
 
 // tests
 //
@@ -415,9 +514,9 @@ let recBinops = {
 let recMethods = {
     setProp: (self, args) => {
         let [name, value] = args;
-        assertType(name, "VStr");
-        let ndx = recFindPair(self, name) ?? self.length;
-        return set(self, ndx, [name, value]);
+        return vassertType("VStr", name)
+            || set(self, (recFindPair(self, name) ?? self.length),
+                   [name, value]);
     },
 };
 
@@ -457,9 +556,7 @@ eq(behaviors.VRec(rv2, "b"), 7);
 // Store names of native functions for debugging
 //==============================
 
-let stop = () => {
-    faultIf(true, "Stop");
-}
+let stop = () => VErr("Stop", null);
 
 let builtins = {
     "vecNew": VNat(vvecNew),
@@ -478,7 +575,7 @@ let builtinCtors = (type, arg) => {
         // use native type for numbers
         return Number(arg);
     } else {
-        // TODO: return "Error" value, or stop?
+        fail("Unexpected IVal type");
     }
 };
 
@@ -489,130 +586,117 @@ let manifestVars = {
 
 let [manifestEnv, manifestStack] = makeManifest(manifestVars);
 
-function evalAST(ast) {
-    // create `env` and `stack` for manifest
-    return evalIL(manifestEnv.desugar(ast), manifestStack, builtinCtors);
-}
-
 //==============================================================
 // Tests
 //==============================================================
 
-function trapEval(fn, ...args) {
-    let value;
-    try {
-        value = fn(...args);
-    } catch (err) {
-        if (err.fault) {
-            // This represents an error in the Rio program, not an error in
-            // the interpreter.
-            // printf("Fault:\n%s\n", err.stack);
-            return err.fault;
-        }
-        throw err;
-    };
-    return value;
+function trapEvalAST(ast) {
+    // create `env` and `stack` for manifest
+    return trapEval(manifestEnv.desugar(ast), manifestStack, builtinCtors);
 }
 
-function et(source, evalue, eoob) {
+let syncEvalAST = (ast) => {
+    let il = manifestEnv.desugar(ast);
+    return new Eval(il, manifestStack, builtinCtors).sync();
+};
+
+let ET = (source, valueOut, oobOut) => {
+    //printf("ET: %s\n", valueOut);
     source = L(source).replace(/ \| /g, "\n");
     let [ast, oob] = parseModule(source);
-    eqAt(2, "OOB: " + (eoob || ""), "OOB: " + astFmtV(oob || []));
-    let val = trapEval(evalAST, ast);
-    eqAt(2, evalue, valueFmt(val));
-}
+    eqAt(2, "OOB: " + (oobOut || ""), "OOB: " + astFmtV(oob || []));
+    eqAt(2, valueFmt(trapEvalAST(ast)), valueOut);
+    eqAt(2, valueFmt(syncEvalAST(ast)), valueOut);
+};
 
 // manifest variables
 
-et("true", 'true');
+ET("true", 'true');
 
 // parse error
 
-et(".5", "0.5", '(Error "NumDigitBefore")');
+ET(".5", "0.5", '(Error "NumDigitBefore")');
 
 // eval error
 
-// TODO: error --> IErr --> VErr
-// et("x", '(VErr "Undefined" "x" null)');
+ET("x", '(VErr "Undefined:x" null)');
 
 // literals and constructors
 
-et("1.23", "1.23");
-et('"abc"', '"abc"');
-et("[1,2,3]", "[1, 2, 3]");
-et("{a: 1, b: 2}", "{a: 1, b: 2}");
+ET("1.23", "1.23");
+ET('"abc"', '"abc"');
+ET("[1,2,3]", "[1, 2, 3]");
+ET("{a: 1, b: 2}", "{a: 1, b: 2}");
 
 // Fn
 
-et("x -> x", '(...) -> $0:0');
+ET("x -> x", '(...) -> $0:0');
 
 // Function calls
 
-et("(x -> x)(2)", "2");
-et("(x -> [x])(2)", "[2]");
-et("(x -> [x]) $ 2", "[2]");
+ET("(x -> x)(2)", "2");
+ET("(x -> [x])(2)", "[2]");
+ET("(x -> [x]) $ 2", "[2]");
 
 // operators and properties ...
 
 // ... Boolean
-et("not (1==1)", "false");
-et("1==1 or 1==2", "true");
-et("1==1 and 1==2", "false");
-et("(1==1) != (1==2)", "true");
-et("(2==2).switch(1,0)", "1");
-et("(2==3).switch(1,0)", "0");
+ET("not (1==1)", "false");
+ET("1==1 or 1==2", "true");
+ET("1==1 and 1==2", "false");
+ET("(1==1) != (1==2)", "true");
+ET("(2==2).switch(1,0)", "1");
+ET("(2==3).switch(1,0)", "0");
 
 // ... Number
-et("1 + 2", "3");
-et("7 // 3", "2");
-et("-(1)", "-1");
-et("1 < 2", "true");
-et("1 < 2 < 3", "true");
+ET("1 + 2", "3");
+ET("7 // 3", "2");
+ET("-(1)", "-1");
+ET("1 < 2", "true");
+ET("1 < 2 < 3", "true");
 
 // ... String
-et(' "abc" ++ "def" ', '"abcdef"');
-et(' "abc".len ', '3');
-et(' "abcd".slice(1, 3) ', '"bc"');
-et(' "abc" == "abc" ', 'true');
-et(' "abc"[1] ', '98');
+ET(' "abc" ++ "def" ', '"abcdef"');
+ET(' "abc".len ', '3');
+ET(' "abcd".slice(1, 3) ', '"bc"');
+ET(' "abc" == "abc" ', 'true');
+ET(' "abc"[1] ', '98');
 
 // ... Vector
-et("[7,8,9].len", "3");
-et("[7,8,9][1]", "8");
-et("[7,8,9,0].slice(1,3)", "[8, 9]");
-et("[7,8,9,0].slice(1,1)", "[]");
-et("[7,8,9].set(1, 2)", "[7, 2, 9]");
+ET("[7,8,9].len", "3");
+ET("[7,8,9][1]", "8");
+ET("[7,8,9,0].slice(1,3)", "[8, 9]");
+ET("[7,8,9,0].slice(1,1)", "[]");
+ET("[7,8,9].set(1, 2)", "[7, 2, 9]");
 
 // ... Record
-et("{a:1}.a", "1");
-et('{a:1}.setProp("b",2).setProp("a",3)', "{a: 3, b: 2}");
+ET("{a:1}.a", "1");
+ET('{a:1}.setProp("b",2).setProp("a",3)', "{a: 3, b: 2}");
 
 // If
 
-et("if 1 < 2: 1 | 0", "1");
-et("if 1 < 0: 1 | 0", "0");
+ET("if 1 < 2: 1 | 0", "1");
+ET("if 1 < 0: 1 | 0", "0");
 
 // Assert
 
-et("assert 2<3 | 1", "1");
-et("assert 2>3 | 1", '(VErr "Stop" null null)');
+ET("assert 2<3 | 1", "1");
+ET("assert 2>3 | 1", '(VErr "Stop" null)');
 
 // Let
 
-et("x = 1 | x + 2", "3");
-et("x = 1 | x := 2 | x + 2 | ", "4");
-et("x = 1 | x += 2 | x + 2 | ", "5");
-// TODO: eliminate catch
-//et("x = 1 | x = 2 | x | ", '(VErr "Shadow" "x" null)');
-//et("x := 1 | x | ", '(VErr "Undefined" "x" null)');
-
-et("x = [1,2] | x[0] := 3 | x | ", "[3, 2]");
-et("x = [1,2] | x[0] += 3 | x | ", "[4, 2]");
-et("x = {a:[1]} | x.a[1] := 2 | x", "{a: [1, 2]}");
+ET("x = 1 | x + 2", "3");
+ET("x = 1 | x := 2 | x + 2 | ", "4");
+ET("x = 1 | x += 2 | x + 2 | ", "5");
+ET("x = 1 | x = 2 | x | ", '(VErr "Shadow:x" null)');
+ET("x := 1 | x | ", '(VErr "Undefined:x" null)');
+ET("x = [1,2] | x[0] := 3 | x | ", "[3, 2]");
+ET("x = [1,2] | x[0] += 3 | x | ", "[4, 2]");
+ET("x = {a:[1]} | x.a[1] := 2 | x", "{a: [1, 2]}");
 
 // Loop
 
-et([ 'x = 1',
+ET([ 'x = 1',
      'loop while x < 10:',
      '  x *= 2',
      'x',
@@ -621,19 +705,19 @@ et([ 'x = 1',
 
 // Match
 
-et([
+ET([
     'match 1:',
     '   2 => 3',
     '   x => x',
 ], '1');
 
-et([
+ET([
     'match 2:',
     '   2 => 3',
     '   x => x',
 ], '3');
 
-et([
+ET([
     'match [1,2]:',
     '     [2, x] => 1',
     '     [1, x] => x',
@@ -656,7 +740,7 @@ let fibr = [
     '',
 ];
 
-et(fibr, "13")
+ET(fibr, "13")
 
 let fibloop = [
     '',
@@ -671,4 +755,4 @@ let fibloop = [
     '',
 ];
 
-et(fibloop, "13");
+ET(fibloop, "13");
