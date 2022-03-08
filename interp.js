@@ -1,5 +1,5 @@
 import {eq, eqAt, serialize, assert, fail, printf} from "./test.js";
-import {clone, override, map, set, L, N} from "./misc.js";
+import {clone, override, map, set, L} from "./misc.js";
 import {astFmt, astFmtV, parseModule} from "./syntax.js";
 import {Env, ilFmt} from "./desugar.js";
 
@@ -33,13 +33,13 @@ let makeManifest = (vars) => {
 //==============================================================
 
 // Construct an IL function value
-let VFun = (env, body) => N("VFun", env, body);
+let VFun = (stack, body) => ({T:"VFun", stack: stack, body: body});
 
 // Construct a native function value
-let VNat = (fn) => N("VNat", fn);
+let VNat = (fn) => ({T:"VNat", fn: fn});
 
 // Construct an error value
-let VErr = (desc, what) => N("VErr", desc, what);
+let VErr = (desc, what) => ({T:"VErr", desc: desc, what: what});
 
 let verrIf = (cond, desc, what) =>
     cond && VErr(desc, what);
@@ -95,30 +95,28 @@ class Eval {
             this.push(VFun(this.stack, body));
         } else if (node.T == "IApp") {
             let [fn, args] = node;
-            this.tasks.push(N("_call", this.values.length));
+            this.tasks.push({T:"_call", idx: this.values.length});
             for (let n = args.length-1; n >= 0; --n) {
                 this.tasks.push(args[n]);
             }
             this.tasks.push(fn);
         } else if (node.T == "_call") {
-            let [idx] = node;
+            let idx = node.idx;
             let fn = this.values[idx];
             let args = this.values.slice(idx + 1);
             this.values = this.values.slice(0, idx);
             if (fn.T == "VFun") {
-                let [fstack, body] = fn;
-                this.tasks.push(N("_ret", this.stack));
-                this.stack = stackPush(fstack, args);
-                this.tasks.push(body);
+                this.tasks.push({T:"_ret", stack: this.stack});
+                this.stack = stackPush(fn.stack, args);
+                this.tasks.push(fn.body);
             } else if (fn.T == "VNat") {
-                let [fnNative] = fn;
+                let fnNative = fn.fn;
                 this.push(fnNative(...args));
             } else {
                 this.push(VErr("NotAFunction", fn));
             }
         } else if (node.T == "_ret") {
-            let [stack] = node;
-            this.stack = stack;
+            this.stack = node.stack;
         } else if (node.T == "IErr") {
             let [desc] = node;
             this.push(VErr(desc, null));
@@ -157,36 +155,61 @@ class Eval {
 // Rio function; when returned by a native function, it causes
 // the interpreter loop to terminate.
 
+let VBool = (b) => ({T:"VBool", v: b});  // `v` => native value
+let VNum = (n) => ({T:"VNum", v: n});
+let VStr = (s) => ({T:"VStr", v: s});
+let VVec = (a) => ({T:"VVec", v: a});
+let VRec = (p) => ({T:"VRec", pairs: p});
+
+// Construct a Value record from its native (JS) type
+let box = (value) =>
+    typeof value == "boolean" ? VBool(value) :
+    typeof value == "string" ? VStr(value) :
+    typeof value == "number" ? VNum(value) :
+    value instanceof Array ? VVec(value) :
+    value.T ? value :
+    fail("box: unknown value");
+
+// Recover native (JS) type from a Value (if there is one)
+let unbox = (value) =>
+    (value.T && value.v !== undefined) ? value.v :
+    value.T == "VRec" ? value :
+    fail("unbox: unknown value");
+
+eq({T:"VBool", v:false}, box(false));
+eq(false, unbox(box(false)));
+eq(1, unbox(box(1)));
+eq("a", unbox(box("a")));
+
 // Format a value as Rio source text that produces that value (except for
 // functions)
 //
-function valueFmt(value) {
-    if (typeof value == "string") {
-        return serialize(value);
-    } else if (!(value instanceof Array)) {
-        return String(value);
-    }
-
-    if (value.T == "VVec") {
-        return '[' + value.map(valueFmt).join(', ') + ']';
+let valueFmt = (value) => {
+    if (value.T == "VBool") {
+        return String(value.v);
+    } else if (value.T == "VNum") {
+        return String(value.v);
+    } else if (value.T == "VStr") {
+        return '"' + value.v + '"';
+    } else if (value.T == "VVec") {
+        let a = value.v;
+        return '[' + a.map(valueFmt).join(', ') + ']';
     } else if (value.T == "VRec") {
         let fmtPair = ([key, value]) => key + ": " + valueFmt(value);
-        return '{' + value.map(fmtPair).join(', ') + '}';
+        return '{' + value.pairs.map(fmtPair).join(', ') + '}';
     } else if (value.T == "VFun") {
-        let [fstack, body] = value;
-        return '(...) -> ' + ilFmt(body);
+        return '(...) -> ' + ilFmt(value.body);
     } else if (value.T == "VErr") {
-        return "(VErr " + astFmtV(value) + ")";
+        return "(VErr " + astFmt(value.desc) + " " + astFmt(value.what) + ")";
+    } else {
+        return "UnknownValue: " + serialize(value);
     }
-}
+};
 
-function valueType(value) {
-    return (typeof value == 'string' ? 'VStr' :
-            typeof value == 'number' ? 'VNum' :
-            typeof value == 'boolean' ? 'VBool' :
-            typeof (value ?? undefined) == 'object' ? value.T :
+let valueType = (value) => {
+    return (typeof (value ?? undefined) == 'object' ? value.T :
             fail('BadValue:' + (value === null ? 'null' : typeof(value))));
-}
+};
 
 // A type's "behavior" is a function that obtains properties of its values:
 //   (value, propertyName) -> propertyValue
@@ -198,23 +221,22 @@ let getProp = (value, name) => {
     return gp(value, name);
 };
 
-let baseBehavior = (value, name) =>
+let unknownProperty = (value, name) =>
     VErr("UnknownProperty:" + name, value);
 
-// Wrap a function operating on two values with a function suitable as a
-// native function for use with makeMethodProp.
+
+// Wrap a "native" binop function with a VNat-suitable function.
+// as a "Lib" function.
 //
-function wrapBinop(typeName) {
-    return function (fn) {
-        return function(a, args) {
-            // The surface language calling convention, used to call the
-            // method, puts its argument in a vector (arg bundle).
-            let [b] = args;
-            return vassertType(typeName, b)
-                || fn(a, b);
-        }
-    }
-}
+let wrapBinop = (typeName) => (fn) => (a, args) => {
+    // The surface language calling convention, used to call the
+    // method, puts its argument in a vector (arg bundle).
+    let [b] = args;
+    return vassertType(typeName, b)
+        || box(fn(unbox(a), unbox(b)));
+};
+
+let wrapUnop = (fn) => (v) => box(fn(unbox(v)));
 
 // Construct a binary operator property: a function that takes one argument
 // and calls `nativeMethod` with (self, arg).
@@ -222,25 +244,23 @@ function wrapBinop(typeName) {
 // nativeMethod: (self, args) -> value
 // result: (value) -> VFun that calls `nativeMethod` with `value` and its arg
 //
-function makeMethodProp(nativeMethod) {
-    return function (value) {
-        return VNat( (...args) => nativeMethod(value, args));
-    }
-}
+let makeMethodProp = (nativeMethod) => (value) =>
+    VNat( (...args) => nativeMethod(value, args));
 
 // Construct a behavior from a map of property names to functions that
 // construct properties.
 //
-function behaviorFn(propCtors, base) {
-    base = base || baseBehavior;
-    return function(value, name) {
+let behaviorFn = (propCtors, base) => {
+    base = base || unknownProperty;
+    return (value, vname) => {
+        let name = unbox(vname);
         let pfn = propCtors[name];
         if (pfn) {
             return pfn(value);
         }
         return base(value, name);
-    }
-}
+    };
+};
 
 // Construct the behavior for a type.
 //
@@ -257,21 +277,21 @@ function behaviorFn(propCtors, base) {
 //   been verified to be of the same type as `self`.  Method functions
 //   receive the arg bundle directly.
 //
-function makeBehavior(unops, binops, methods, typeName, base) {
+let makeBehavior = (unops, binops, methods, typeName, base) => {
     let nativeMethods = map(binops, wrapBinop(typeName));
     override(nativeMethods, methods);
 
     let propCtors = map(nativeMethods, makeMethodProp);
-    override(propCtors, unops);
+    override(propCtors, map(unops, wrapUnop));
     return behaviorFn(propCtors, base);
-}
+};
 
 //==============================
 // VFun (exclusively constructed by `eval`...)
 //==============================
 
 behaviors.VFun = (value, name) => {
-    return baseBehavior(value, name);
+    return unknownProperty(value, name);
 };
 
 //==============================
@@ -290,10 +310,12 @@ let boolBinops = {
 };
 
 let boolMethods = {
-    "switch": (self, args) =>
-        args.length == 2
-        ? (self ? args[0] : args[1])
-        : VErr("SwitchArity", args[3]),
+    "switch": (vself, args) => {
+        let self = unbox(vself);
+        return args.length == 2
+            ? (self ? args[0] : args[1])
+            : VErr("SwitchArity", args[2]);
+    },
 };
 
 behaviors.VBool = makeBehavior(boolUnops, boolBinops, boolMethods, "VBool");
@@ -319,20 +341,25 @@ let strBinops = {
 };
 
 let strMethods = {
-    slice: (self, args) => {
-        let [start, limit] = args;
-        return vassertType("VNum", start)
-            || vassertType("VNum", limit)
+    slice: (vself, args) => {
+        let [vstart, vlimit] = args;
+        let self = unbox(vself);
+        let start = unbox(vstart);
+        let limit = unbox(vlimit);
+        return vassertType("VNum", vstart)
+            || vassertType("VNum", vlimit)
             || verrIf(start < 0 || start >= self.length, "Bounds", start)
             || verrIf(limit < start || limit >= self.length, "Bounds", start)
-            || self.slice(start, limit);
+            || box(self.slice(start, limit));
     },
 
-    "@[]": (self, args) => {
-        let [offset] = args;
-        return vassertType("VNum", offset)
+    "@[]": (vself, args) => {
+        let [voffset] = args;
+        let self = unbox(vself);
+        let offset = unbox(voffset);
+        return vassertType("VNum", voffset)
             || verrIf(offset < 0 || offset >= self.length, "Bounds", offset)
-            || self.charCodeAt(offset);
+            || box(self.charCodeAt(offset));
     },
 };
 
@@ -365,16 +392,6 @@ let numBinops = {
 
 behaviors.VNum = makeBehavior(numUnops, numBinops, {}, "VNum");
 
-// Construct a VNum or VStr
-//
-function newValue(nativeValue) {
-    if (typeof nativeValue === "number") {
-        return nativeValue;
-    } else {
-        return String(nativeValue);
-    }
-}
-
 //==============================
 // VVec
 //==============================
@@ -384,66 +401,73 @@ let vecUnops = {
 };
 
 let vecBinops = {
-    "@++": (a, b) => {
-        let o = clone(a);
-        return move(b, 1, b.length, o.length+1, o);
-    },
+    "@++": (a, b) => [...a, ...b],
+  //      let o = clone(a);
+  //      return move(b, 1, b.length, o.length+1, o);
 };
 
 let vecMethods = {
-    slice: (self, args) => {
-        let [start, limit] = args;
-        return vassertType("VNum", start)
-            || vassertType("VNum", limit)
+    slice: (vself, args) => {
+        let self = unbox(vself);
+        let [vstart, vlimit] = args;
+        let start = unbox(vstart);
+        let limit = unbox(vlimit);
+        return vassertType("VNum", vstart)
+            || vassertType("VNum", vlimit)
             || verrIf(start < 0 || start >= self.length, "Bounds", start)
             || verrIf(limit < start || limit >= self.length, "Bounds", start)
-            || N("VVec", ...self.slice(start, limit));
+            || box(self.slice(start, limit));
     },
 
-    set: (self, args) => {
-        let [index, value] = args;
-        return vassertType("VNum", index)
+    set: (vself, args) => {
+        let self = unbox(vself);
+        let [vindex, value] = args;
+        let index = unbox(vindex);
+        return vassertType("VNum", vindex)
             // enforce contiguity (growable, but one at a time)
             || verrIf(index < 0 || index > self.length, "Bounds", index)
-            || set(self, index, value);
+            || box(set(self, index, value));
     },
 
-    "@[]": (self, args) => {
-        let [offset] = args;
-        return vassertType("VNum", offset)
+    "@[]": (vself, args) => {
+        let self = unbox(vself);
+        let [voffset] = args;
+        let offset = unbox(voffset);
+        return vassertType("VNum", voffset)
             || verrIf(offset < 0 || offset >= self.length, "Bounds", offset)
-            || self[offset];
+            || box(self[offset]);
     },
 };
 
 behaviors.VVec = makeBehavior(vecUnops, vecBinops, vecMethods, "VVec");
 
-let vvecNew = (...args) => {
-    return N("VVec", ...args);
-};
+let vvecNew = (...args) => VVec(args);
 
 // Note different calling convention than `@[]`.
 //
-let vvecNth = (self, n) =>
-    vassertType("VVec", self)
-    || vassertType("VNum", n)
-    || verrIf(n < 0 || n >= self.length, "Bounds", self)
-    || self[n];
+let vvecNth = (vself, vn) => {
+    let self = unbox(vself);
+    let n = unbox(vn);
+    return vassertType("VVec", vself)
+        || vassertType("VNum", vn)
+        || verrIf(n < 0 || n >= self.length, "Bounds", self)
+        || box(self[n]);
+};
 
 // tests
 //
-let tv1 = vvecNew(newValue(9), newValue(8));
-eq(tv1, N("VVec", 9, 8));
-eq(vvecNth(tv1, newValue(0)), newValue(9));
+let tv1 = vvecNew(box(9), box(8));
+eq(tv1, VVec([box(9), box(8)]));
+eq(unbox(vvecNth(tv1, box(0))), 9);
 
 //==============================
 // VRec
 //==============================
 
-let vrecEmpty = N("VRec");
+let vrecEmpty = VRec([]);
 
-function recFindPair(rec, name) {
-    for (let [index, pair] of rec.entries()) {
+let pairsFind = (pairs, name) => {
+    for (let [index, pair] of pairs.entries()) {
         if (pair[0] === name) {
             return index;
         }
@@ -455,28 +479,33 @@ let recBinops = {
 
 let recMethods = {
     setProp: (self, args) => {
-        let [name, value] = args;
-        return vassertType("VStr", name)
-            || set(self, (recFindPair(self, name) ?? self.length),
-                   [name, value]);
+        let [vname, value] = args;
+        let pairs = self.pairs;
+        let name = unbox(vname);
+        return vassertType("VStr", vname)
+            || VRec(set(pairs, (pairsFind(pairs, name) ?? pairs.length),
+                        [name, value]));
     },
 };
 
 let recBase = makeBehavior({}, recBinops, recMethods, "VRec");
 
-behaviors.VRec = function (value, name) {
-    let ndx = recFindPair(value, name);
+behaviors.VRec = (vself, vname) => {
+    let name = unbox(vname);  // TODO: assert string?
+    let pairs = vself.pairs;
+    let ndx = pairsFind(pairs, name);
     return ndx === undefined
-        ? recBase(value, name)
-        : value[ndx][1];
+        ? recBase(vself, vname)
+        : pairs[ndx][1];
 };
 
 let vrecNew = (...names) => (...values) => {
-    let v = set([], "T", "VRec");
+    let pairs = [];
     for (let ii of names.keys()) {
-        v[ii] = [names[ii], values[ii]];
+        let key = unbox(names[ii]);        // TODO: assert string?
+        pairs[ii] = [key, values[ii]];
     }
-    return v;
+    return VRec(pairs);
 };
 
 // vrecDef: names -> values -> record
@@ -486,13 +515,13 @@ let vrecDef = (...names) => VNat(vrecNew(...names));
 // tests
 //----------------
 
-let rval = vrecNew("a", "b")(1, 2);
-eq(0, recFindPair(rval, "a"))
-eq(1, recFindPair(rval, "b"))
-eq(undefined, recFindPair(rval, "x"))
-eq(behaviors.VRec(rval, "b"), 2);
-let rv2 = recMethods.setProp(rval, ["b", 7]);
-eq(behaviors.VRec(rv2, "b"), 7);
+let rval = vrecNew(box("a"), box("b"))(box(1), box(2));
+eq(0, pairsFind(rval.pairs, "a"));
+eq(1, pairsFind(rval.pairs, "b"));
+eq(undefined, pairsFind(rval.pairs, box("x")));
+eq(unbox(behaviors.VRec(rval, box("b"))), 2);
+let rv2 = recMethods.setProp(rval, [box("b"), box(7)]);
+eq(unbox(behaviors.VRec(rv2, box("b"))), 7);
 
 //==============================
 // Store names of native functions for debugging
@@ -512,18 +541,18 @@ let builtinCtors = (type, arg) => {
         assert(builtins[arg]);
         return builtins[arg];
     } else if (type == "String") {
-        return String(arg);
+        return box(String(arg));
     } else if (type == "Number") {
         // use native type for numbers
-        return Number(arg);
+        return box(Number(arg));
     } else {
         fail("Unexpected IVal type");
     }
 };
 
 let manifestVars = {
-    "true": true,
-    "false": false,
+    "true": VBool(true),
+    "false": VBool(false),
 };
 
 let [manifestEnv, manifestStack] = makeManifest(manifestVars);
