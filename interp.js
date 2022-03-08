@@ -47,64 +47,6 @@ let verrIf = (cond, desc, what) =>
 let vassertType = (type, what) =>
     (valueType(what) !== type) && VErr("Expected " + type, what);
 
-let evalIL = (node, stack, ctors) => {
-    let ee = e => evalIL(e, stack, ctors);
-    let value;
-
-    if (node.T == "IVal") {
-        let [ty, arg] = node;
-        value = ctors(ty, arg);
-    } else if (node.T == "IArg") {
-        let [ups, pos] = node;
-        let frame = stackGet(stack, ups);
-        assert(frame !== undefined && frame[pos] !== undefined);
-        value = frame[pos];
-    } else if (node.T == "IFun") {
-        let [body] = node;
-        value = VFun(stack, body);
-    } else if (node.T == "IApp") {
-        let [fn, args] = node;
-        let fnResult = ee(fn);
-        let argResults = args.map(ee);
-        if (fnResult.T == "VFun") {
-            let [fstack, body] = fnResult;
-            value = evalIL(body, stackPush(fstack, argResults), ctors);
-        } else if (fnResult.T == "VNat") {
-            let [fnNative] = fnResult;
-            value = fnNative(...argResults);
-        } else {
-            value = VErr("NotAFunction", fnResult);
-        }
-    } else if (node.T == "IErr") {
-        let [desc] = node;
-        value = VErr(desc, null);
-    } else {
-        fail("Unsupported: %q", node);
-    }
-    if (value.T == "VErr") {
-        let err = new Error(value);
-        err.value = value;
-        throw err;
-    }
-    return value;
-};
-
-let trapEval = (node, stack, ctors) => {
-    let value;
-    try {
-        value = evalIL(node, stack, ctors);
-    } catch (err) {
-        if (err.value) {
-            // This represents an error in the Rio program, not an error in
-            // the interpreter.
-            return err.value;
-        } else {
-            throw err;
-        }
-    };
-    return value;
-};
-
 // Eval
 //
 // tasks[] is an array of IL records or internal tasks (_call or _ret).
@@ -586,27 +528,21 @@ let manifestVars = {
 
 let [manifestEnv, manifestStack] = makeManifest(manifestVars);
 
-//==============================================================
-// Tests
-//==============================================================
-
-function trapEvalAST(ast) {
-    // create `env` and `stack` for manifest
-    return trapEval(manifestEnv.desugar(ast), manifestStack, builtinCtors);
-}
-
-let syncEvalAST = (ast) => {
+let evalAST = (ast) => {
     let il = manifestEnv.desugar(ast);
     return new Eval(il, manifestStack, builtinCtors).sync();
 };
+
+//==============================================================
+// Tests
+//==============================================================
 
 let ET = (source, valueOut, oobOut) => {
     //printf("ET: %s\n", valueOut);
     source = L(source).replace(/ \| /g, "\n");
     let [ast, oob] = parseModule(source);
     eqAt(2, "OOB: " + (oobOut || ""), "OOB: " + astFmtV(oob || []));
-    eqAt(2, valueFmt(trapEvalAST(ast)), valueOut);
-    eqAt(2, valueFmt(syncEvalAST(ast)), valueOut);
+    eqAt(2, valueFmt(evalAST(ast)), valueOut);
 };
 
 // manifest variables
@@ -686,12 +622,12 @@ ET("assert 2>3 | 1", '(VErr "Stop" null)');
 // Let
 
 ET("x = 1 | x + 2", "3");
-ET("x = 1 | x := 2 | x + 2 | ", "4");
-ET("x = 1 | x += 2 | x + 2 | ", "5");
+ET("x = 1 | x := 2 | x + 2", "4");
+ET("x = 1 | x += 2 | x + 2", "5");
 ET("x = 1 | x = 2 | x | ", '(VErr "Shadow:x" null)');
 ET("x := 1 | x | ", '(VErr "Undefined:x" null)');
-ET("x = [1,2] | x[0] := 3 | x | ", "[3, 2]");
-ET("x = [1,2] | x[0] += 3 | x | ", "[4, 2]");
+ET("x = [1,2] | x[0] := 3 | x", "[3, 2]");
+ET("x = [1,2] | x[0] += 3 | x", "[4, 2]");
 ET("x = {a:[1]} | x.a[1] := 2 | x", "{a: [1, 2]}");
 
 // Loop
