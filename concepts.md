@@ -58,8 +58,8 @@ structured using [indentation](#2d-syntax).  Block-level syntax enables:
 For example:
 
     f = (a, b) ->
-        x = a + b
         if x < 1: 0
+        total = 0
         loop while x < 10:
             total += x
             x += 1
@@ -70,7 +70,7 @@ Other syntax topics:
  * [Vertical syntax](#vertical-syntax) describes the philosophy behind
    assignments and conditionals.
  * [Imperative Syntax](#imperative-syntax)
- * [Pattern matching)(#pattern-matching)
+ * [Pattern Matching](#pattern-matching)
 
 
 ## Imperative Syntax
@@ -86,7 +86,7 @@ pitfalls of mutable data, are implemented as syntactic sugar.
 ## Vertical Syntax
 
 Rio syntax supports a "vertical" program structure, so that code reads down
-the page instead of diagonally down and to the right in some other
+the page instead of diagonally down and to the right as in some other
 functional langauges.  Likewise, data flow (during execution) generally
 progesses down the page, which can help in visualizing and understanding the
 code, as well as authoring in a worksheet-based [live
@@ -508,7 +508,7 @@ This works best when the code is written in a language with
 
 A number of visual presentation techniques can greatly improve readability
 of source code.  Many of them follow from embracing variable widths,
-heights, and more flexible rendering that are enabled by GUI environments.
+heights, and more flexible rendering, which are enabled by GUI environments.
 
 - Render certain ASCII sequences as special glyphs:
 
@@ -616,7 +616,7 @@ where the language can easily identify the cycles at time of construction.
 Immutability of variables and data comes with some well-known downsides.
 Some people see it as less intuitive and find things more difficult to
 express in such a language than in languages with mutation, especially
-loops.  Our answer to this is two-fold.  First, it provides ["imperative
+loops.  Our answer to this is two-fold.  First, we provide ["imperative
 syntax"](#imperative-syntax) features that support a more intuitive way of
 thinking about iteration (without actually involving side effects).  Second,
 while a different functional "mode" of thinking will be more
@@ -660,8 +660,8 @@ due to the potential of cyclic data structures, but [immutability
 
 ## Lexical Scoping
 
-In lexical scoping, the visibility of a variable is exident from the source
-of the program, and does not require anylyzing the dynamic execution paths
+In lexical scoping, the visibility of a variable is evident from the source
+of the program, and does not require analyzing the dynamic execution paths
 of the program.
 
 In Rio, there is no other type of scoping.  A variable's scope is the rest
@@ -1231,7 +1231,7 @@ Rio provides a syntax for elegantly dealing with callbacks:
     REST
 
 The first line is a clause that designates the "rest" of the block as a
-callback.  PARMS is a parameter list, as it would appear in a function
+callback.  PARAMS is a parameter list, as it would appear in a function
 definition.  ACTION is an expression that evaluates to a value that
 implements an `and_then` property.  The rest of the block is packaged as a
 function, accepting PARAMS, that is passed to the action object.  The above
@@ -1248,10 +1248,10 @@ A chain of such clauses will result in a nested series of functions.  For exampl
 
 ... is equivalent to:
 
-    get("X").and_then(
-        x -> get("Y").and_then(
-            y -> get("Z").and_then(
-                z -> REST)))
+    get("X").and_then(x ->
+        get("Y").and_then(y ->
+            get("Z").and_then(z ->
+                REST)))
 
 This could be used to describe a chain of actions to be performed
 asynchronously:
@@ -1263,14 +1263,13 @@ asynchronously:
         () <- s.connect(addr, port)
         OK(s)
 
-
 At each `<-` clause, execution of the "rest" of the block is at the
 discretion of the action object.  This allows each action object to handle
 failures by short-circuiting the rest of the chain.  This can be used as a
 generic error-handling mechanism.  In the example above, we presume the
 action objects short-circuit and return a Failure() value that itself is a
 valid action object, so `connect` will be expected to return an action
-object.  The last line uses an `OK()` constructor to wraps the successful
+object.  The last line uses an `OK()` constructor to wrap the successful
 result in an action object.
 
 This composesly nicely with assignments, [update syntax](#update-syntax),
