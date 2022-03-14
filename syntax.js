@@ -11,7 +11,7 @@
 //   (Number str)
 //   (String str)
 //   (Vector [expr...])
-//   (Record [str expr ...])
+//   (Map [str expr ...])
 //   (Fn [param...] body)
 //   (Op op a b)
 //   (Unop op a)
@@ -255,8 +255,8 @@ let needExpr = or(expr, N("Missing"));
 
 let vector = and(T("["), cseq(expr), or(T("]"), E("CloseSquare")));
 
-let recordNV = and(nameNode, T(":"), needExpr);
-let record = and(T("{"), cseq(recordNV), or(T("}"), E("CloseCurly")));
+let mapNV = and(nameNode, T(":"), needExpr);
+let map = and(T("{"), cseq(mapNV), or(T("}"), E("CloseCurly")));
 
 let grouping = and(T("("), needExpr, or(T(")"), E("CloseParen")));
 
@@ -267,7 +267,7 @@ let atom = or(
     N("String", qstring),
     variable,
     N("Vector", vector),
-    N("Record", record),
+    N("Map", map),
     grouping,
     N("Block", nlBlock.A, ss),
     N("Match", T("match"), needExpr, T(":"), needBlock));
@@ -633,12 +633,12 @@ testAtom("[a, b, c]", '(Vector [a b c])');
 testAtom("[a ", '(Vector [a])', '(Error "CloseSquare")');
 testAtom("[a,", '(Vector [a])', '(Error "CloseSquare")');
 
-// record
+// map
 
-testAtom("{}", '(Record [])');
-testAtom("{a: A, b: B}", '(Record [a A b B])');
-testAtom("{a: A,  ", '(Record [a A])', '(Error "CloseCurly")');
-testAtom("{a:,}", '(Record [a (Missing)])');
+testAtom("{}", '(Map [])');
+testAtom("{a: A, b: B}", '(Map [a A b B])');
+testAtom("{a: A,  ", '(Map [a A])', '(Error "CloseCurly")');
+testAtom("{a:,}", '(Map [a (Missing)])');
 
 // grouping
 

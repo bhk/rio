@@ -135,21 +135,8 @@ class Eval {
 // Built-In Types
 //==============================================================
 
-// A Rio built-in Value can be one of:
-//
-//    VBool = <boolean>           Boolean
-//    VNum = <number>             Number
-//    VStr = <string>             String
-//    (VVec value...)             Vector
-//    (VRec {name, value}...)     Record
-//    (VFun stack params body)    Function
-//    (VErr code value)           Error
-//
-// name: string
-// code: string
-// where: ASTNode | null
-// what: Value
-// all others: Value
+// A Rio built-in Value is a JS object with T: TYPE, where TYPE
+// is one of: VBool, VNum, VStr, VMap, VFun, VNat, VErr.
 //
 // VErr is a fatal error or exception.  It is never passed to a
 // Rio function; when returned by a native function, it causes
@@ -159,7 +146,7 @@ let VBool = (b) => ({T:"VBool", v: b});  // `v` => native value
 let VNum = (n) => ({T:"VNum", v: n});
 let VStr = (s) => ({T:"VStr", v: s});
 let VVec = (a) => ({T:"VVec", v: a});
-let VRec = (p) => ({T:"VRec", pairs: p});
+let VMap = (p) => ({T:"VMap", pairs: p});
 
 // Construct a Value record from its native (JS) type
 let box = (value) =>
@@ -173,7 +160,7 @@ let box = (value) =>
 // Recover native (JS) type from a Value (if there is one)
 let unbox = (value) =>
     (value.T && value.v !== undefined) ? value.v :
-    value.T == "VRec" ? value :
+    value.T == "VMap" ? value :
     fail("unbox: unknown value");
 
 eq({T:"VBool", v:false}, box(false));
@@ -194,7 +181,7 @@ let valueFmt = (value) => {
     } else if (value.T == "VVec") {
         let a = value.v;
         return '[' + a.map(valueFmt).join(', ') + ']';
-    } else if (value.T == "VRec") {
+    } else if (value.T == "VMap") {
         let fmtPair = ([key, value]) => key + ": " + valueFmt(value);
         return '{' + value.pairs.map(fmtPair).join(', ') + '}';
     } else if (value.T == "VFun") {
@@ -402,8 +389,6 @@ let vecUnops = {
 
 let vecBinops = {
     "@++": (a, b) => [...a, ...b],
-  //      let o = clone(a);
-  //      return move(b, 1, b.length, o.length+1, o);
 };
 
 let vecMethods = {
@@ -414,8 +399,8 @@ let vecMethods = {
         let limit = unbox(vlimit);
         return vassertType("VNum", vstart)
             || vassertType("VNum", vlimit)
-            || verrIf(start < 0 || start >= self.length, "Bounds", start)
-            || verrIf(limit < start || limit >= self.length, "Bounds", start)
+            || verrIf(start < 0 || start >= self.length, "Bounds", vstart)
+            || verrIf(limit < start || limit >= self.length, "Bounds", vstart)
             || box(self.slice(start, limit));
     },
 
@@ -425,7 +410,7 @@ let vecMethods = {
         let index = unbox(vindex);
         return vassertType("VNum", vindex)
             // enforce contiguity (growable, but one at a time)
-            || verrIf(index < 0 || index > self.length, "Bounds", index)
+            || verrIf(index < 0 || index > self.length, "Bounds", vindex)
             || box(set(self, index, value));
     },
 
@@ -461,10 +446,10 @@ eq(tv1, VVec([box(9), box(8)]));
 eq(unbox(vvecNth(tv1, box(0))), 9);
 
 //==============================
-// VRec
+// VMap
 //==============================
 
-let vrecEmpty = VRec([]);
+let vmapEmpty = VMap([]);
 
 let pairsFind = (pairs, name) => {
     for (let [index, pair] of pairs.entries()) {
@@ -474,54 +459,63 @@ let pairsFind = (pairs, name) => {
     }
 }
 
-let recBinops = {
+let mapBinops = {
 };
 
-let recMethods = {
-    setProp: (self, args) => {
+let mapMethods = {
+    set: (vself, args) => {
         let [vname, value] = args;
-        let pairs = self.pairs;
+        let pairs = vself.pairs;
         let name = unbox(vname);
         return vassertType("VStr", vname)
-            || VRec(set(pairs, (pairsFind(pairs, name) ?? pairs.length),
+            || VMap(set(pairs, (pairsFind(pairs, name) ?? pairs.length),
                         [name, value]));
+    },
+
+    "@[]": (vself, args) => {
+        let [vkey] = args;
+        let pairs = vself.pairs;
+        let index = pairsFind(pairs, unbox(vkey));
+        return vassertType("VStr", vkey)
+            || verrIf(index == undefined, "NotFound", vkey)
+            || box(pairs[index][1]);
     },
 };
 
-let recBase = makeBehavior({}, recBinops, recMethods, "VRec");
+let mapBase = makeBehavior({}, mapBinops, mapMethods, "VMap");
 
-behaviors.VRec = (vself, vname) => {
+behaviors.VMap = (vself, vname) => {
     let name = unbox(vname);  // TODO: assert string?
     let pairs = vself.pairs;
     let ndx = pairsFind(pairs, name);
     return ndx === undefined
-        ? recBase(vself, vname)
+        ? mapBase(vself, vname)
         : pairs[ndx][1];
 };
 
-let vrecNew = (...names) => (...values) => {
+let vmapNew = (...names) => (...values) => {
     let pairs = [];
     for (let ii of names.keys()) {
         let key = unbox(names[ii]);        // TODO: assert string?
         pairs[ii] = [key, values[ii]];
     }
-    return VRec(pairs);
+    return VMap(pairs);
 };
 
-// vrecDef: names -> values -> record
-let vrecDef = (...names) => VNat(vrecNew(...names));
+// vmapDef: names -> values -> map
+let vmapDef = (...names) => VNat(vmapNew(...names));
 
 //----------------
 // tests
 //----------------
 
-let rval = vrecNew(box("a"), box("b"))(box(1), box(2));
+let rval = vmapNew(box("a"), box("b"))(box(1), box(2));
 eq(0, pairsFind(rval.pairs, "a"));
 eq(1, pairsFind(rval.pairs, "b"));
 eq(undefined, pairsFind(rval.pairs, box("x")));
-eq(unbox(behaviors.VRec(rval, box("b"))), 2);
-let rv2 = recMethods.setProp(rval, [box("b"), box(7)]);
-eq(unbox(behaviors.VRec(rv2, box("b"))), 7);
+eq(unbox(behaviors.VMap(rval, box("b"))), 2);
+let rv2 = mapMethods.set(rval, [box("b"), box(7)]);
+eq(unbox(behaviors.VMap(rv2, box("b"))), 7);
 
 //==============================
 // Store names of native functions for debugging
@@ -531,7 +525,7 @@ let stop = () => VErr("Stop", null);
 
 let builtins = {
     "vecNew": VNat(vvecNew),
-    "recDef": VNat(vrecDef),
+    "mapDef": VNat(vmapDef),
     "stop": VNat(stop),
     "getProp": VNat(getProp),
 };
@@ -634,9 +628,9 @@ ET("[7,8,9,0].slice(1,3)", "[8, 9]");
 ET("[7,8,9,0].slice(1,1)", "[]");
 ET("[7,8,9].set(1, 2)", "[7, 2, 9]");
 
-// ... Record
+// ... Map
 ET("{a:1}.a", "1");
-ET('{a:1}.setProp("b",2).setProp("a",3)', "{a: 3, b: 2}");
+ET('{a:1}.set("b",2).set("a",3)', "{a: 3, b: 2}");
 
 // If
 
@@ -657,7 +651,7 @@ ET("x = 1 | x = 2 | x | ", '(VErr "Shadow:x" null)');
 ET("x := 1 | x | ", '(VErr "Undefined:x" null)');
 ET("x = [1,2] | x[0] := 3 | x", "[3, 2]");
 ET("x = [1,2] | x[0] += 3 | x", "[4, 2]");
-ET("x = {a:[1]} | x.a[1] := 2 | x", "{a: [1, 2]}");
+ET('x = {a:[1]} | x["a"][1] := 2 | x', '{a: [1, 2]}');
 
 // Loop
 

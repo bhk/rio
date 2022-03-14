@@ -129,14 +129,14 @@ The notation used is from PEG[1], with some added conveniences:
               / String           # "abc"
               / Variable         # var, true, false
               / Vector           # [1,2,3]
-              / Record           # {a: 1, b: 2}
+              / Map              # {a: 1, b: 2}
               / "(" Expr ")"     # (1 + 2)
               / Block            # [from 2D syntax]
               / "match" Expr ":" Block
 
     Vector   <- "[" Expr,* "]"
 
-    Record   <- "{" (Name ":" Expr),* "}"
+    Map      <- "{" (Name ":" Expr),* "}"
 
     Variable <- !Keyword Name
     Keyword  <- ("and" / "or" / "not" / "if" / "loop" / "while" / "for") !NameCh

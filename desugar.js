@@ -338,7 +338,7 @@ let desugar = (ast, env) => {
     } else if (T == "Vector") {
         let [elems] = ast;
         return IApp($lib("vecNew"), elems.map(recur));
-    } else if (T == "Record") {
+    } else if (T == "Map") {
         let [rpairs] = ast;
         let keys = [];
         let values = [];
@@ -346,8 +346,8 @@ let desugar = (ast, env) => {
             keys.push( $str(astName_string(rpairs[ii])) );
             values.push( rpairs[ii+1] );
         }
-        let recCons = IApp($lib("recDef"), keys);
-        return IApp(recCons, values.map(recur));
+        let mapCons = IApp($lib("mapDef"), keys);
+        return IApp(mapCons, values.map(recur));
     } else if (T == "Match") {
         let [value, cases] = ast;
         let v = astName(".value");
@@ -510,8 +510,8 @@ ilEQ("x ? 1 : 2", $if($x, $1, $2));
 // Vector
 ilEQ("[1, 2]", IApp($lib("vecNew"), [$1, $2]));
 
-// Record
-ilEQ("{A:1, B:2}", IApp(IApp($lib("recDef"), [$str("A"), $str("B")]), [$1, $2]));
+// Map
+ilEQ("{A:1, B:2}", IApp(IApp($lib("mapDef"), [$str("A"), $str("B")]), [$1, $2]));
 
 // Match
 ilEQ([
