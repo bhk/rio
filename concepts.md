@@ -19,10 +19,11 @@ The following list of ingredients can give one a feel for the flavor of Rio.
  * [Duck typing](#duck-typing)
  * [Imperative Syntax](#imperative-syntax)
  * [Compile-Time Evaluation](#compile-time-evaluation)
+ * [Friendly Data Types](#friendly-data-types)
  * [Typed Structures](#typed-structures)
  * [Reactive Programming](#reactive-programming)
  * [Order Annotations](#order-annotations)
- * Pattern Matching & Destructuring
+ * [Pattern Matching](#pattern-matching) & Destructuring
  * [Gradual Typing](#gradual-typing)
 
 So, think "Smalltalk", but without mutation.  And with some Python-like
@@ -42,7 +43,7 @@ Here is a quick summary of Rio's "inline" syntax:
  - Function application: `f(x, y)`
  - Vector construction: `[x, y, z]`
  - Vector de-reference: `a[1]`
- - Record construction: `{a: 1, b: 2, c: 3}`
+ - Map construction: `{a: 1, b: 2, c: 3}`
  - Property de-reference: `r.prop`
 
 Refer to [`syntax.md`](syntax.md#grammar) for all the gory details.
@@ -168,8 +169,8 @@ value to one of its own methods.  The expression `a.foo()` is equivalent to
 other programming languages).
 
 Also, Rio does not confuse properties with members of collections.  Indexing
-expressions -- e.g. `value[index]` -- access members of a vector or
-dictionary, not their properties.
+expressions -- e.g. `value[index]` -- access members of a vector or map, not
+their properties.
 
 Rio's infix operators are defined in terms of properties.  Assuming a
 hypothetical function called `get_property` that allows direct access to all
@@ -339,7 +340,7 @@ possible.  There are different kinds of knowledge we may have about a value:
 
   - We may know its type.
 
-  - We may know that the value is a composite (vector or record), and have
+  - We may know that the value is a composite (vector or map), and have
     further knowledge about some of its members.
 
   - Over time, there are more granular forms of knowledge that we may
@@ -366,8 +367,8 @@ known about the values and their types.
 
 ## Specialization
 
-A generic function can be compiled to one or more non-generic object
-instances that assume the types or values of one or more parameters.
+A generic function can be compiled to one or more non-generic instances that
+assume the types or values of one or more parameters.
 
 Validation of the assumptions must be done before executing the specialized
 object code.  When the specialization was triggered by [partial
@@ -547,7 +548,7 @@ heights, and more flexible rendering, which are enabled by GUI environments.
   implementing a certain interface).
 
 - Display tablular data (constructors of vector-of-vectors or
-  vector-of-records) as an actual table, with cell borders.
+  vector-of-maps) as an actual table, with cell borders.
 
 
 ## Assertions
@@ -859,7 +860,7 @@ evaluation](#partial-evaluation), Rio semantics will often be "tighter" than
 those of other dynamic languages.  The arguments passed to a function must
 agree with its formal parameter list.  Rio provides fewer implicit type
 conversions, such as coercion to boolean.  Rio does not have a "null" value,
-and treats accesses of undefined vector or dictionary members as errors.
+and treats accesses of undefined vector or map members as errors.
 
 
 ## The REPL Problem
@@ -1074,8 +1075,8 @@ We treat it as sugar for:
 
 ## Shadowing
 
-Due to immutability, variables cannot be modified, but they can be shadowed.
-For example, in this code excerpt ...
+Due to [immutability](#immutability), variables cannot be modified, but they
+can be shadowed.  For example, in this code excerpt ...
 
     x = 1
     f = n -> n + x
@@ -1108,19 +1109,18 @@ Due to [immutability](#immutability), we do not literally modify vectors or
 structures, but we can construct new values that include the "modification"
 we want.
 
-The `set` method "replaces" a member of a vector or dictionary.
+The `set` method "replaces" a member of a vector or map.
 
-    x = [1,2,3]
-    y = s.set(1, 7)          # y = [1,7,3]
+    v = [1,2,3]
+    v.set(1, 7)          # --> [1,7,3]
 
-The `setProp` method "replaces" a property in a value.
+    m = {a:1, b:2, c:3}
+    m.set("b", 5)        # --> {a:1, b:5, c:3}
 
-    x = {a:1, b:2, c:3}
-    y = x.setProp(b, 7)      #  y = {a: 1, b: 7, c: 3}
+The `setProp` method "replaces" a data property in a structure.
 
-Different values support `setProp` differently.  Records, in particular,
-support `setProp` for any of their named properties (those listed in the
-record constructor call).
+    s = UserStruct({a: 1, b: 2})
+    s.setProp(b, 9)      # --> UserStruct({a: 1, b: 2})
 
 Rio's update syntax allows such operations to be expressed easily,
 by extending the notion of shadowing assignments.
@@ -1454,8 +1454,8 @@ When behavior is not completely specified by the language, it creates
 problems for programmers.  Unit tests may work one run, and fail the next.
 Programs working for months may suddenly fail.  Instead, we should prefer
 clearly specified behavior.  Stable sorts and deterministic enumeration of
-record/dictionary members are to be preferred.  (JavaScript's HashMap
-enumeration behavior is a good example).
+map members are to be preferred.  (JavaScript's HashMap enumeration behavior
+is a good example).
 
 Under no circumstances is it acceptable to use the C language's "all bets
 are off" definition of undefined behavior. When you cannot place any bounds
@@ -1477,22 +1477,51 @@ definition ... a language that is unspecified, constantly changing, and that
 differs from compiler to compiler.
 
 
+## Friendly Data Types
+
+Rio provides the workhorse data types familiar to uses of modern dynamic
+languages: booleans, strings, numbers, and functions, vectors (arrays), and
+maps (aka hashmaps, dictionaries, associative arrays).  Aggregate values can
+be constructed with declarative syntax: `[VALUE, ...]` and `{NAME: VALUE,
+...}`.
+
+Memory management is, of course, automatic.  Aggregates automatically "grow"
+to accommodate new values [but actually, due to
+[immutability](#immutability), what actually happens is new, larger values
+are constructed.]
+
+Vectors and maps can accommodate values of all types.  Instead of providing
+a number of *alternative* types that differ in semantics and performance
+characteristics -- e.g. untyped vector vs. typed tuple vs. homogeneous
+vector -- these generic aggregates provide more uniform semantics while
+allowing the programmer to add [hints](#hints) and
+[assertions](#assertions), such as [typed structures](#typed-structures), to
+select different performance characteristics or functional constraints.
+
+
 ## Typed Structures
 
 Dynamic languages typically provide free-form data structuring mechanisms
 that allow a variable number of fields, each of which can hold any type of
 value.
 
-However, dynamic languaes are not incompatible with the notion of typed
-structures and vectors, which can allow a precise, efficient memory layout.
+However, dynamic languages are not incompatible with the notion of typed
+structures and vectors, which afford precise and efficient memory layout.
 The best example of this is LuaJIT and its C FFI, which can actually be used
 to great effect without ever calling into C.  Another example is
 JavaScript's typed arrays.
 
-These typed structures do not manifest as static declarations and typing
+Typed structures do not manifest as static declarations and typing
 constraints on variables.  Instead, they are created at run-time, either by
 first creating a [reified type](#reified-types) and then instantiating it,
-or by directly creating an instance.  Rio uses reified types.
+or by directly creating an instance.  For example:
+
+    a = Vector(I32)([1, 2, 3])
+
+In the above example, a declarative heterogeneous vector expression is used
+to intialize a homogeneous vector.  It is intended that [partial
+evaluation](#partial-evaluation) will "optimize out" the construction of
+such intermediate heterogeneous vectors.
 
 
 ## Reified Types
