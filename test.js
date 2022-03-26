@@ -214,6 +214,7 @@ let assert = (cond) => {
     if (!cond) {
         fail("Assertion failed!");
     }
+    return cond;
 };
 
 ////////////////////////////////////////////////////////////////

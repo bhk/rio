@@ -26,7 +26,7 @@ let assert = test.assert;
 let IVal = (type, arg) => N("IVal", type, arg);
 let IArg = (ups, pos) => N("IArg", ups, pos);
 let IFun = (body) => N("IFun", body);
-let IApp = (fn, arg) => N("IApp", fn, arg);
+let IApp = (fn, args) => N("IApp", fn, args);
 let IErr = (desc) => N("IErr", desc);
 
 let ilFmt = sexprFormatter({
@@ -595,4 +595,19 @@ ilEQ([ 'assert x', '1' ],
 // exports
 //==============================================================
 
-export {ilFmt, Env};
+let IL = {
+    Val: IVal,
+    Arg: IArg,
+    Fun: IFun,
+    App: IApp,
+    Err: IErr,
+    str: $str,
+    num: $num,
+    lib: $lib,
+    prop: $prop,
+    send: $send,
+    iif: $if,
+    fmt: ilFmt,
+};
+
+export {ilFmt, Env, IL};

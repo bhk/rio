@@ -1,7 +1,7 @@
 import {eq, eqAt, serialize, assert, fail, printf} from "./test.js";
 import {clone, override, map, set, L} from "./misc.js";
 import {astFmt, astFmtV, parseModule} from "./syntax.js";
-import {Env, ilFmt} from "./desugar.js";
+import {Env, IL} from "./desugar.js";
 
 let log = false;
 let logf = (...args) => { if (log) printf(...args); }
@@ -88,6 +88,9 @@ class Eval {
         } else if (node.T == "IArg") {
             let [ups, pos] = node;
             let frame = stackGet(this.stack, ups);
+            if (!frame || !frame[pos]) {
+                printf("node = %q\nstack = %q\n", node, this.stack);
+            }
             assert(frame !== undefined && frame[pos] !== undefined);
             this.push(frame[pos]);
         } else if (node.T == "IFun") {
@@ -136,7 +139,7 @@ class Eval {
 //==============================================================
 
 // A Rio built-in Value is a JS object with T: TYPE, where TYPE
-// is one of: VBool, VNum, VStr, VMap, VFun, VNat, VErr.
+// is one of: VBool, VNum, VStr, VMap, VObj, VFun, VNat, VErr.
 //
 // VErr is a fatal error or exception.  It is never passed to a
 // Rio function; when returned by a native function, it causes
@@ -147,6 +150,7 @@ let VNum = (n) => ({T:"VNum", v: n});
 let VStr = (s) => ({T:"VStr", v: s});
 let VVec = (a) => ({T:"VVec", v: a});
 let VMap = (p) => ({T:"VMap", pairs: p});
+let VObj = (cls, values) => ({T:"VObj", cls, values});
 
 // Construct a Value record from its native (JS) type
 let box = (value) =>
@@ -157,7 +161,7 @@ let box = (value) =>
     value.T ? value :
     fail("box: unknown value");
 
-// Recover native (JS) type from a Value (if there is one)
+// Recover native (JS) type from a Value (if othere is one)
 let unbox = (value) =>
     (value.T && value.v !== undefined) ? value.v :
     value.T == "VMap" ? value :
@@ -185,9 +189,16 @@ let valueFmt = (value) => {
         let fmtPair = ([key, value]) => key + ": " + valueFmt(value);
         return '{' + value.pairs.map(fmtPair).join(', ') + '}';
     } else if (value.T == "VFun") {
-        return '(...) -> ' + ilFmt(value.body);
+        return '(...) -> ' + IL.fmt(value.body);
     } else if (value.T == "VErr") {
         return "(VErr " + astFmt(value.desc) + " " + astFmt(value.what) + ")";
+    } else if (value.T == "VObj") {
+        let members = value.cls.fields.map(
+            (name, idx) => name + ":" + valueFmt(value.values[idx])
+        ).join(" ");
+        return "(VObj " + members + ")";
+    } else if (value.T == "VCls") {
+        return "(VCls " + value.fields.join(" ") + ")";
     } else {
         return "UnknownValue: " + serialize(value);
     }
@@ -449,8 +460,6 @@ eq(unbox(vvecNth(tv1, box(0))), 9);
 // VMap
 //==============================
 
-let vmapEmpty = VMap([]);
-
 let pairsFind = (pairs, name) => {
     for (let [index, pair] of pairs.entries()) {
         if (pair[0] === name) {
@@ -505,17 +514,115 @@ let vmapNew = (...names) => (...values) => {
 // vmapDef: names -> values -> map
 let vmapDef = (...names) => VNat(vmapNew(...names));
 
-//----------------
-// tests
-//----------------
+{
+    // Test VMap
+    let rval = vmapNew(box("a"), box("b"))(box(1), box(2));
+    eq(0, pairsFind(rval.pairs, "a"));
+    eq(1, pairsFind(rval.pairs, "b"));
+    eq(undefined, pairsFind(rval.pairs, box("x")));
+    eq(unbox(behaviors.VMap(rval, box("b"))), 2);
+    let rv2 = mapMethods.set(rval, [box("b"), box(7)]);
+    eq(unbox(behaviors.VMap(rv2, box("b"))), 7);
+}
 
-let rval = vmapNew(box("a"), box("b"))(box(1), box(2));
-eq(0, pairsFind(rval.pairs, "a"));
-eq(1, pairsFind(rval.pairs, "b"));
-eq(undefined, pairsFind(rval.pairs, box("x")));
-eq(unbox(behaviors.VMap(rval, box("b"))), 2);
-let rv2 = mapMethods.set(rval, [box("b"), box(7)]);
-eq(unbox(behaviors.VMap(rv2, box("b"))), 7);
+//==============================
+// VObj & VCls
+//==============================
+
+let VCls = (fields) => ({T:"VCls", fields});
+
+let objSetProp = (vself) => (vname, vvalue) => {
+    let {cls, values} = vself;
+    let name = unbox(vname);
+    let index = cls.fields.indexOf(name);
+    return vassertType("VStr", vname)
+        || verrIf(index < 0, "Unknown", vname)
+        || VObj(cls, set(values, index, value));
+};
+
+behaviors.VObj = (vself, vprop) => {
+    let {cls, values} = vself;
+    let prop = unbox(vprop);
+    let index;
+    return vassertType("VStr", vprop)
+        || prop == "setProp" && objSetProp(vself)
+        || verrIf((index = cls.fields.indexOf(prop)) < 0, "Unknown", vprop)
+        || values[index];
+};
+
+// Class.new(...values) -> object
+let VCls_new = (vself) => {
+    let {fields} = vself;
+    let ctor = (...values) => {
+        assert(values.length == fields.length);
+        return VObj(vself, values);
+    };
+    return VNat(ctor);
+};
+
+// match = (class) => (self, fnThen, fnElse) =>
+//     if $is(class, self):
+//        fnThen(...$members(self))
+//     fnElse()
+//
+let VCls_match = (vclass) => {
+    let ilClass = IL.Arg(1, 0);
+    let ilValue = IL.Arg(0, 0);
+    let ilValue2 = IL.Arg(1, 0);   // when nested within an IFun
+    let memberValues = vclass.fields.map(
+        (name, idx) => IL.prop(ilValue2, name)
+    );
+    //  (value, fnThen, fnElse) -> result
+    return VFun(
+        stackPush(emptyStack, [vclass]),
+        // Note: IIF wraps the `then` and `else` expressions in a IFun, so all
+        //    IArg `ups` values must be incremented by one.
+        IL.iif(IL.App(IL.prop(ilClass, "matches"), [ilValue]),
+               IL.App(IL.Arg(1, 1), memberValues),  // ifThen
+               IL.App(IL.Arg(1, 2), []))            // ifElse
+    );
+};
+
+let VCls_has = (vclass) =>
+    VNat((value) => box(value.T == "VObj" && value.cls == vclass));
+
+behaviors.VCls = (vself, vprop) => {
+    let prop = unbox(vprop);
+    return vassertType("VStr", vprop)
+        || prop == "new" && VCls_new(vself)
+        || prop == "matches" && VCls_has(vself)
+        || prop == "match" && VCls_match(vself)
+        || VErr("UnknownProp", vprop);
+};
+
+let NewClass = (vmap) => {
+    assert(vmap.T == "VMap");
+    let fields = vmap.pairs.map(([key, value]) => key);
+    return VCls(fields);
+};
+
+{
+    // Test VObj & VCls
+    let tmap = vmapNew(box("a"), box("b"))(box(true), box(true));
+    let cls = NewClass(tmap);
+    assert(cls.T == "VCls");
+
+    // new()
+    let vnew = getProp(cls, box("new"));
+    assert(vnew.T == "VNat");
+    let obj = vnew.fn(box(1), box(2));
+    assert(obj.T == "VObj");
+    eq(unbox(getProp(obj, VStr("a"))), 1);
+
+    // matches()
+    let vmatches = getProp(cls, box("matches"));
+    assert(vmatches.T == "VNat");
+    assert(unbox(vmatches.fn(obj)), true);
+
+    // match()
+    let vmatch = getProp(cls, box("match"));
+    assert(vmatch.T == "VFun");
+}
 
 //==============================
 // Store names of native functions for debugging
@@ -547,6 +654,7 @@ let builtinCtors = (type, arg) => {
 let manifestVars = {
     "true": VBool(true),
     "false": VBool(false),
+    "NewClass": VNat(NewClass),
 };
 
 let [manifestEnv, manifestStack] = makeManifest(manifestVars);
@@ -682,6 +790,15 @@ ET([
     '     [1, x] => x',
     '     _ => 9',
 ], '2');
+
+// Classes & Objects
+
+ET(['S = NewClass({a:1, b:1})',
+    's = S.new(2, 3)',
+    '[ S.match(s, (a,b) -> a+b, () -> 9),',
+    '  S.match(0, (a,b) -> a+b, () -> 9) ]'
+   ],
+   '[5, 9]');
 
 // Examples
 
