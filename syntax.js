@@ -129,7 +129,6 @@ let p2dInitialState = {
     oob: [],
 }
 
-
 //==============================
 // Inline Syntax
 //==============================
@@ -146,7 +145,7 @@ function Node(typ, pos, ...args) {
 
 // returns: match `patterns` and construct a Node from its captures
 //
-function N(typ, ...patterns) {
+function M(typ, ...patterns) {
     return and(cpos, ...patterns).F( caps => [ Node(typ, ...caps) ]);
 }
 
@@ -166,16 +165,15 @@ function Coob(pat) {
 
 // returns: log an out-of-band error
 function E(desc) {
-    return Coob(N("Error", CC(desc)));
+    return Coob(M("Error", CC(desc)));
 }
-
 
 let nameInitial = R("az", "AZ", "__");
 let nameChar = R("az", "AZ", "__", "09");
 let opChar = S("!#$%&'*+-./<=>?\\^`|~");
 // Remaining ASCII printables:  @{}():;,"
 
-let comment = and(P("#").at, Coob(N("Comment", NonNL.X0.C)));
+let comment = and(P("#").at, Coob(M("Comment", NonNL.X0.C)));
 
 // skip whitespace
 let controlChar = and(R("\x00\x09", "\x0b\x1f").at, E("BadChar"), 1);
@@ -246,12 +244,12 @@ function cseq(p) {
     return or(and(p, and(T(","), p).X0, opt(T(","))), 0).A;
 }
 
-let nameNode = N("Name", name);
+let nameNode = M("Name", name);
 
 let variable = and(keywords.not, nameNode);
 
 let expr = V("Expr");
-let needExpr = or(expr, N("Missing"));
+let needExpr = or(expr, M("Missing"));
 
 let vector = and(T("["), cseq(expr), or(T("]"), E("CloseSquare")));
 
@@ -260,17 +258,17 @@ let map = and(T("{"), cseq(mapNV), or(T("}"), E("CloseCurly")));
 
 let grouping = and(T("("), needExpr, or(T(")"), E("CloseParen")));
 
-let needBlock = or( and(nlBlock.A, ss), N("MissingBlock"));
+let needBlock = or( and(nlBlock.A, ss), M("MissingBlock"));
 
 let atom = or(
-    N("Number", number),
-    N("String", qstring),
+    M("Number", number),
+    M("String", qstring),
     variable,
-    N("Vector", vector),
-    N("Map", map),
+    M("Vector", vector),
+    M("Map", map),
     grouping,
-    N("Block", nlBlock.A, ss),
-    N("Match", T("match"), needExpr, T(":"), needBlock));
+    M("Block", nlBlock.A, ss),
+    M("Match", T("match"), needExpr, T(":"), needBlock));
 
 function binop(op, pos, a, b) {
     return Node("Binop", pos, op, a, b);
@@ -362,7 +360,7 @@ let callSuffix =
 let memberSuffix =
     and(T("["), CC("Index"), needExpr, or(T("]"), E("CloseSquare")));
 let dotSuffix =
-    and(T("."), CC("Dot"), or(nameNode, and(N("Missing"), E("DotName"))));
+    and(T("."), CC("Dot"), or(nameNode, and(M("Missing"), E("DotName"))));
 
 let params = or(and(T("("), cseq(variable), T(")")), variable.A);
 
@@ -394,20 +392,20 @@ let letTarget = matchSuf(variable, or(dotSuffix, memberSuffix))
 
 let pattern = or(
     variable,
-    N("Number", number),
-    N("String", qstring),
-    N("VecPattern", T("["), cseq(V("Pattern")), T("]")));
+    M("Number", number),
+    M("String", qstring),
+    M("VecPattern", T("["), cseq(V("Pattern")), T("]")));
 
 let statement = or(
-    N("S-Let", letTarget, letOp, needExpr),
-    N("S-Act", params, T("<-"), needExpr),
-    N("S-Case", pattern, T("=>"), needExpr),
-    N("S-If", T("if"), expr, T(":"), expr),
-    N("S-Loop", T("loop"), T(":"), needBlock),
-    N("S-LoopWhile", T("loop"), T("while"), expr, T(":"), needBlock),
-    N("S-While", T("while"), needExpr),
-    N("S-For", T("for"), variable, T("in"), expr, T(":"), expr),
-    N("S-Assert", T("assert"), needExpr));
+    M("S-Let", letTarget, letOp, needExpr),
+    M("S-Act", params, T("<-"), needExpr),
+    M("S-Case", pattern, T("=>"), needExpr),
+    M("S-If", T("if"), expr, T(":"), expr),
+    M("S-Loop", T("loop"), T(":"), needBlock),
+    M("S-LoopWhile", T("loop"), T("while"), expr, T(":"), needBlock),
+    M("S-While", T("while"), needExpr),
+    M("S-For", T("for"), variable, T("in"), expr, T(":"), expr),
+    M("S-Assert", T("assert"), needExpr));
 
 let atBlock = or(
     stmtKeywords,
@@ -419,12 +417,12 @@ let atBlock = or(
 let discardEOL = and(E("Garbage"), or(NonNL.X1, nlWhite, nlBlock).X0)
 
 let logLine = and(
-    or( and(atBlock.at, or(statement, N("BadStmt"))),
+    or( and(atBlock.at, or(statement, M("BadStmt"))),
         and(ss, ile),
-        N("BadILE")),
+        M("BadILE")),
     or(nlEOL.at, discardEOL));
 
-let rioModule = N("Block", p2dModule.A);
+let rioModule = M("Block", p2dModule.A);
 
 let rioG = {
     Module: rioModule,
@@ -468,11 +466,9 @@ export {parseModule, astFmtV, astFmt};
 // Tests
 //==============================================================
 
-
 //==============================
 // 2D Parsing Tests
 //==============================
-
 
 let group = name => captures =>
     [ [name, ...captures] ];
@@ -610,9 +606,9 @@ function testM(subj, esexpr, eoob) {
     }
 }
 
-// N()
+// M()
 
-testPat(N("Number", number), "7.5 ", '7.5');
+testPat(M("Number", number), "7.5 ", '7.5');
 
 // cseq()
 

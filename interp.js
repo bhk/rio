@@ -19,7 +19,7 @@ let stackPush = (stack, arg) => [arg, ...stack];
 
 let stackGet = (stack, index) => stack[index];
 
-// Construct env & matching stack from a set of manifest variables
+// Construct env & matching stack from a map {varName -> value}
 let makeManifest = (vars) => {
     let names = Object.keys(vars).sort();
     let values = names.map(k => vars[k]);
@@ -29,26 +29,37 @@ let makeManifest = (vars) => {
 };
 
 //==============================================================
-// eval
+// Built-In Types
 //==============================================================
 
-// Construct an IL function value
-let VFun = (stack, body) => ({T:"VFun", stack: stack, body: body});
-
-// Construct a native function value
-let VNat = (fn) => ({T:"VNat", fn: fn});
-
-// Construct an error value
-let VErr = (desc, what) => ({T:"VErr", desc: desc, what: what});
-
-let verrIf = (cond, desc, what) =>
-    cond && VErr(desc, what);
-
-let vassertType = (type, what) =>
-    (valueType(what) !== type) && VErr("Expected " + type, what);
-
-// Eval
+// A Rio built-in Value is a JS object with T: TYPE, where TYPE
+// is one of: VBool, VNum, VStr, VMap, VObj, VFun, VNFn, VErr.
 //
+// VErr is a fatal error or exception.  It is never passed to a
+// Rio function; when returned by a native function, it causes
+// the interpreter loop to terminate.
+//
+
+let VBool = (v) => ({T:"VBool", v});  // v = native bool
+let VNum = (v) => ({T:"VNum", v});    // v = native number
+let VStr = (v) => ({T:"VStr", v});    // v = native string
+let VVec = (v) => ({T:"VVec", v});    // v = native Array
+let VNFn = (v) => ({T:"VNFn", v});    // v = native function
+let VMap = (pairs) => ({T:"VMap", pairs});
+let VObj = (cls, values) => ({T:"VObj", cls, values});
+let VCls = (fields) => ({T:"VCls", fields});
+let VFun = (stack, body) => ({T:"VFun", stack, body});
+let VErr = (desc, what) => ({T:"VErr", desc, what});
+
+let matchFun = (value, ifStackBody, ifNat, ifNot) =>
+    (value.T == "VFun" ? ifStackBody(value.stack, value.body) :
+     value.T == "VNFn" ? ifNat(value.v) :
+     ifNot());
+
+//==============================================================
+// Eval
+//==============================================================
+
 // tasks[] is an array of IL records or internal tasks (_call or _ret).
 // values[] is an array of result values.
 //
@@ -108,16 +119,16 @@ class Eval {
             let fn = this.values[idx];
             let args = this.values.slice(idx + 1);
             this.values = this.values.slice(0, idx);
-            if (fn.T == "VFun") {
-                this.tasks.push({T:"_ret", stack: this.stack});
-                this.stack = stackPush(fn.stack, args);
-                this.tasks.push(fn.body);
-            } else if (fn.T == "VNat") {
-                let fnNative = fn.fn;
-                this.push(fnNative(...args));
-            } else {
-                this.push(VErr("NotAFunction", fn));
-            }
+            matchFun(
+                fn,
+                (stack, body) => {
+                    this.tasks.push({T:"_ret", stack: this.stack});
+                    this.stack = stackPush(stack, args);
+                    this.tasks.push(body);
+                },
+                (fnNative) => this.push(fnNative(...args)),
+                () => this.push(VErr("NotAFunction", fn))
+            );
         } else if (node.T == "_ret") {
             this.stack = node.stack;
         } else if (node.T == "IErr") {
@@ -135,79 +146,60 @@ class Eval {
 };
 
 //==============================================================
-// Built-In Types
+// Implementation of Built-In Types
 //==============================================================
 
-// A Rio built-in Value is a JS object with T: TYPE, where TYPE
-// is one of: VBool, VNum, VStr, VMap, VObj, VFun, VNat, VErr.
-//
-// VErr is a fatal error or exception.  It is never passed to a
-// Rio function; when returned by a native function, it causes
-// the interpreter loop to terminate.
-
-let VBool = (b) => ({T:"VBool", v: b});  // `v` => native value
-let VNum = (n) => ({T:"VNum", v: n});
-let VStr = (s) => ({T:"VStr", v: s});
-let VVec = (a) => ({T:"VVec", v: a});
-let VMap = (p) => ({T:"VMap", pairs: p});
-let VObj = (cls, values) => ({T:"VObj", cls, values});
-
 // Construct a Value record from its native (JS) type
-let box = (value) =>
+let wrap = (value) =>
     typeof value == "boolean" ? VBool(value) :
     typeof value == "string" ? VStr(value) :
     typeof value == "number" ? VNum(value) :
+    typeof value == "function" ? VNFn(value) :
     value instanceof Array ? VVec(value) :
     value.T ? value :
-    fail("box: unknown value");
+    fail("wrap: unknown value");
 
 // Recover native (JS) type from a Value (if othere is one)
-let unbox = (value) =>
-    (value.T && value.v !== undefined) ? value.v :
-    value.T == "VMap" ? value :
-    fail("unbox: unknown value");
+let unwrap = (value) =>
+    (!value.T ? fail("unwrap: unknown value: " + serialize(value)) :
+     value.v !== undefined ? value.v :
+     value);
 
-eq({T:"VBool", v:false}, box(false));
-eq(false, unbox(box(false)));
-eq(1, unbox(box(1)));
-eq("a", unbox(box("a")));
+{
+    // test wrap/unwrap
+    eq({T:"VBool", v:false}, wrap(false));
+    eq(false, unwrap(wrap(false)));
+    eq(1, unwrap(wrap(1)));
+    eq("a", unwrap(wrap("a")));
+}
+
+let zip = (a, b) => a.map((e, i) => [e, b[i]]);
+
+let fmtPairs = (pairs) =>
+    pairs.map(([key, value]) => key + ": " + valueFmt(value)).join(", ");
 
 // Format a value as Rio source text that produces that value (except for
 // functions)
 //
-let valueFmt = (value) => {
-    if (value.T == "VBool") {
-        return String(value.v);
-    } else if (value.T == "VNum") {
-        return String(value.v);
-    } else if (value.T == "VStr") {
-        return '"' + value.v + '"';
-    } else if (value.T == "VVec") {
-        let a = value.v;
-        return '[' + a.map(valueFmt).join(', ') + ']';
-    } else if (value.T == "VMap") {
-        let fmtPair = ([key, value]) => key + ": " + valueFmt(value);
-        return '{' + value.pairs.map(fmtPair).join(', ') + '}';
-    } else if (value.T == "VFun") {
-        return '(...) -> ' + IL.fmt(value.body);
-    } else if (value.T == "VErr") {
-        return "(VErr " + astFmt(value.desc) + " " + astFmt(value.what) + ")";
-    } else if (value.T == "VObj") {
-        let members = value.cls.fields.map(
-            (name, idx) => name + ":" + valueFmt(value.values[idx])
-        ).join(" ");
-        return "(VObj " + members + ")";
-    } else if (value.T == "VCls") {
-        return "(VCls " + value.fields.join(" ") + ")";
-    } else {
-        return "UnknownValue: " + serialize(value);
-    }
-};
+let valueFmt = v =>
+    v.T == "VBool" ? String(v.v) :
+    v.T == "VNum" ? String(v.v) :
+    v.T == "VStr" ? '"' + v.v + '"' :
+    v.T == "VVec" ? '[' + v.v.map(valueFmt).join(', ') + ']' :
+    v.T == "VMap" ? "{" + fmtPairs(v.pairs) + '}' :
+    v.T == "VFun" ? '(...) -> ' + IL.fmt(v.body) :
+    v.T == "VErr" ? ("(VErr " + astFmt(v.desc) +
+                     (v.what ? " " + valueFmt(v.what) : "") +
+                     ")") :
+    v.T == "VObj" ? "(VObj " + fmtPairs(zip(v.fields, v.values)) + ")" :
+    v.T == "VCls" ? "(VCls " + v.fields.join(" ") + ")" :
+    "UnknownValue: " + serialize(value);
 
-let valueType = (value) => {
-    return (typeof (value ?? undefined) == 'object' ? value.T :
-            fail('BadValue:' + (value === null ? 'null' : typeof(value))));
-};
+let vassert = (cond, desc, what) =>
+    !cond && VErr(desc, what);
+
+let vassertType = (type, what) =>
+    what.T !== type && VErr("Expected " + type, what);
 
 // A type's "behavior" is a function that obtains properties of its values:
 //   (value, propertyName) -> propertyValue
@@ -215,15 +207,14 @@ let valueType = (value) => {
 let behaviors = Object.create(null);
 
 let getProp = (value, name) => {
-    let gp = behaviors[valueType(value)];
+    let gp = behaviors[value.T];
     return gp(value, name);
 };
 
 let unknownProperty = (value, name) =>
     VErr("UnknownProperty:" + name, value);
 
-
-// Wrap a "native" binop function with a VNat-suitable function.
+// Wrap a "native" binop function with a VNFn-suitable function.
 // as a "Lib" function.
 //
 let wrapBinop = (typeName) => (fn) => (a, args) => {
@@ -231,10 +222,10 @@ let wrapBinop = (typeName) => (fn) => (a, args) => {
     // method, puts its argument in a vector (arg bundle).
     let [b] = args;
     return vassertType(typeName, b)
-        || box(fn(unbox(a), unbox(b)));
+        || wrap(fn(unwrap(a), unwrap(b)));
 };
 
-let wrapUnop = (fn) => (v) => box(fn(unbox(v)));
+let wrapUnop = (fn) => (v) => wrap(fn(unwrap(v)));
 
 // Construct a binary operator property: a function that takes one argument
 // and calls `nativeMethod` with (self, arg).
@@ -243,7 +234,7 @@ let wrapUnop = (fn) => (v) => box(fn(unbox(v)));
 // result: (value) -> VFun that calls `nativeMethod` with `value` and its arg
 //
 let makeMethodProp = (nativeMethod) => (value) =>
-    VNat( (...args) => nativeMethod(value, args));
+    VNFn( (...args) => nativeMethod(value, args));
 
 // Construct a behavior from a map of property names to functions that
 // construct properties.
@@ -251,7 +242,7 @@ let makeMethodProp = (nativeMethod) => (value) =>
 let behaviorFn = (propCtors, base) => {
     base = base || unknownProperty;
     return (value, vname) => {
-        let name = unbox(vname);
+        let name = unwrap(vname);
         let pfn = propCtors[name];
         if (pfn) {
             return pfn(value);
@@ -309,7 +300,7 @@ let boolBinops = {
 
 let boolMethods = {
     "switch": (vself, args) => {
-        let self = unbox(vself);
+        let self = unwrap(vself);
         return args.length == 2
             ? (self ? args[0] : args[1])
             : VErr("SwitchArity", args[2]);
@@ -341,23 +332,23 @@ let strBinops = {
 let strMethods = {
     slice: (vself, args) => {
         let [vstart, vlimit] = args;
-        let self = unbox(vself);
-        let start = unbox(vstart);
-        let limit = unbox(vlimit);
+        let self = unwrap(vself);
+        let start = unwrap(vstart);
+        let limit = unwrap(vlimit);
         return vassertType("VNum", vstart)
             || vassertType("VNum", vlimit)
-            || verrIf(start < 0 || start >= self.length, "Bounds", start)
-            || verrIf(limit < start || limit >= self.length, "Bounds", start)
-            || box(self.slice(start, limit));
+            || vassert(start >= 0 && start < self.length, "Bounds", vstart)
+            || vassert(limit >= start && limit < self.length, "Bounds", vstart)
+            || wrap(self.slice(start, limit));
     },
 
     "@[]": (vself, args) => {
         let [voffset] = args;
-        let self = unbox(vself);
-        let offset = unbox(voffset);
+        let self = unwrap(vself);
+        let offset = unwrap(voffset);
         return vassertType("VNum", voffset)
-            || verrIf(offset < 0 || offset >= self.length, "Bounds", offset)
-            || box(self.charCodeAt(offset));
+            || vassert(offset >= 0 && offset < self.length, "Bounds", offset)
+            || wrap(self.charCodeAt(offset));
     },
 };
 
@@ -404,34 +395,34 @@ let vecBinops = {
 
 let vecMethods = {
     slice: (vself, args) => {
-        let self = unbox(vself);
+        let self = unwrap(vself);
         let [vstart, vlimit] = args;
-        let start = unbox(vstart);
-        let limit = unbox(vlimit);
+        let start = unwrap(vstart);
+        let limit = unwrap(vlimit);
         return vassertType("VNum", vstart)
             || vassertType("VNum", vlimit)
-            || verrIf(start < 0 || start >= self.length, "Bounds", vstart)
-            || verrIf(limit < start || limit >= self.length, "Bounds", vstart)
-            || box(self.slice(start, limit));
+            || vassert(start >= 0 && start < self.length, "Bounds", vstart)
+            || vassert(limit >= start && limit < self.length, "Bounds", vlimit)
+            || wrap(self.slice(start, limit));
     },
 
     set: (vself, args) => {
-        let self = unbox(vself);
+        let self = unwrap(vself);
         let [vindex, value] = args;
-        let index = unbox(vindex);
+        let index = unwrap(vindex);
         return vassertType("VNum", vindex)
             // enforce contiguity (growable, but one at a time)
-            || verrIf(index < 0 || index > self.length, "Bounds", vindex)
-            || box(set(self, index, value));
+            || vassert(index >= 0 && index <= self.length, "Bounds", vindex)
+            || wrap(set(self, index, value));
     },
 
     "@[]": (vself, args) => {
-        let self = unbox(vself);
+        let self = unwrap(vself);
         let [voffset] = args;
-        let offset = unbox(voffset);
+        let offset = unwrap(voffset);
         return vassertType("VNum", voffset)
-            || verrIf(offset < 0 || offset >= self.length, "Bounds", offset)
-            || box(self[offset]);
+            || vassert(offset >= 0 && offset < self.length, "Bounds", voffset)
+            || wrap(self[offset]);
     },
 };
 
@@ -442,30 +433,32 @@ let vvecNew = (...args) => VVec(args);
 // Note different calling convention than `@[]`.
 //
 let vvecNth = (vself, vn) => {
-    let self = unbox(vself);
-    let n = unbox(vn);
+    let self = unwrap(vself);
+    let n = unwrap(vn);
     return vassertType("VVec", vself)
         || vassertType("VNum", vn)
-        || verrIf(n < 0 || n >= self.length, "Bounds", self)
-        || box(self[n]);
+        || vassert(n >= 0 && n < self.length, "Bounds", vself)
+        || wrap(self[n]);
 };
 
-// tests
-//
-let tv1 = vvecNew(box(9), box(8));
-eq(tv1, VVec([box(9), box(8)]));
-eq(unbox(vvecNth(tv1, box(0))), 9);
+{
+    // test VVec
+    let tv1 = vvecNew(wrap(9), wrap(8));
+    eq(tv1, VVec([wrap(9), wrap(8)]));
+    eq(unwrap(vvecNth(tv1, wrap(0))), 9);
+}
 
 //==============================
 // VMap
 //==============================
 
-let pairsFind = (pairs, name) => {
+let pairsFind = (pairs, name, ifNotFound) => {
     for (let [index, pair] of pairs.entries()) {
         if (pair[0] === name) {
             return index;
         }
     }
+    return ifNotFound || -1;
 }
 
 let mapBinops = {
@@ -475,29 +468,29 @@ let mapMethods = {
     set: (vself, args) => {
         let [vname, value] = args;
         let pairs = vself.pairs;
-        let name = unbox(vname);
+        let name = unwrap(vname);
         return vassertType("VStr", vname)
-            || VMap(set(pairs, (pairsFind(pairs, name) ?? pairs.length),
+            || VMap(set(pairs, pairsFind(pairs, name, pairs.length),
                         [name, value]));
     },
 
     "@[]": (vself, args) => {
         let [vkey] = args;
         let pairs = vself.pairs;
-        let index = pairsFind(pairs, unbox(vkey));
+        let index = pairsFind(pairs, unwrap(vkey));
         return vassertType("VStr", vkey)
-            || verrIf(index == undefined, "NotFound", vkey)
-            || box(pairs[index][1]);
+            || vassert(index >= 0, "NotFound", vkey)
+            || wrap(pairs[index][1]);
     },
 };
 
 let mapBase = makeBehavior({}, mapBinops, mapMethods, "VMap");
 
 behaviors.VMap = (vself, vname) => {
-    let name = unbox(vname);  // TODO: assert string?
+    let name = unwrap(vname);  // TODO: assert string?
     let pairs = vself.pairs;
     let ndx = pairsFind(pairs, name);
-    return ndx === undefined
+    return ndx < 0
         ? mapBase(vself, vname)
         : pairs[ndx][1];
 };
@@ -505,48 +498,47 @@ behaviors.VMap = (vself, vname) => {
 let vmapNew = (...names) => (...values) => {
     let pairs = [];
     for (let ii of names.keys()) {
-        let key = unbox(names[ii]);        // TODO: assert string?
+        let key = unwrap(names[ii]);        // TODO: assert string?
         pairs[ii] = [key, values[ii]];
     }
     return VMap(pairs);
 };
 
 // vmapDef: names -> values -> map
-let vmapDef = (...names) => VNat(vmapNew(...names));
+let vmapDef = (...names) => VNFn(vmapNew(...names));
 
 {
-    // Test VMap
-    let rval = vmapNew(box("a"), box("b"))(box(1), box(2));
+    // test VMap
+    let rval = vmapNew(wrap("a"), wrap("b"))(wrap(1), wrap(2));
     eq(0, pairsFind(rval.pairs, "a"));
     eq(1, pairsFind(rval.pairs, "b"));
-    eq(undefined, pairsFind(rval.pairs, box("x")));
-    eq(unbox(behaviors.VMap(rval, box("b"))), 2);
-    let rv2 = mapMethods.set(rval, [box("b"), box(7)]);
-    eq(unbox(behaviors.VMap(rv2, box("b"))), 7);
+    eq(-1, pairsFind(rval.pairs, wrap("x")));
+    eq(99, pairsFind(rval.pairs, wrap("x"), 99));
+    eq(unwrap(behaviors.VMap(rval, wrap("b"))), 2);
+    let rv2 = mapMethods.set(rval, [wrap("b"), wrap(7)]);
+    eq(unwrap(behaviors.VMap(rv2, wrap("b"))), 7);
 }
 
 //==============================
 // VObj & VCls
 //==============================
 
-let VCls = (fields) => ({T:"VCls", fields});
-
 let objSetProp = (vself) => (vname, vvalue) => {
     let {cls, values} = vself;
-    let name = unbox(vname);
+    let name = unwrap(vname);
     let index = cls.fields.indexOf(name);
     return vassertType("VStr", vname)
-        || verrIf(index < 0, "Unknown", vname)
+        || vassert(index >= 0, "Unknown", vname)
         || VObj(cls, set(values, index, value));
 };
 
 behaviors.VObj = (vself, vprop) => {
     let {cls, values} = vself;
-    let prop = unbox(vprop);
+    let prop = unwrap(vprop);
     let index;
     return vassertType("VStr", vprop)
         || prop == "setProp" && objSetProp(vself)
-        || verrIf((index = cls.fields.indexOf(prop)) < 0, "Unknown", vprop)
+        || vassert((index = cls.fields.indexOf(prop)) >= 0, "Unknown", vprop)
         || values[index];
 };
 
@@ -557,7 +549,7 @@ let VCls_new = (vself) => {
         assert(values.length == fields.length);
         return VObj(vself, values);
     };
-    return VNat(ctor);
+    return VNFn(ctor);
 };
 
 // match = (class) => (self, fnThen, fnElse) =>
@@ -584,10 +576,10 @@ let VCls_match = (vclass) => {
 };
 
 let VCls_has = (vclass) =>
-    VNat((value) => box(value.T == "VObj" && value.cls == vclass));
+    VNFn((value) => wrap(value.T == "VObj" && value.cls == vclass));
 
 behaviors.VCls = (vself, vprop) => {
-    let prop = unbox(vprop);
+    let prop = unwrap(vprop);
     return vassertType("VStr", vprop)
         || prop == "new" && VCls_new(vself)
         || prop == "matches" && VCls_has(vself)
@@ -602,25 +594,23 @@ let NewClass = (vmap) => {
 };
 
 {
-    // Test VObj & VCls
-    let tmap = vmapNew(box("a"), box("b"))(box(true), box(true));
+    // test VObj & VCls
+    let tmap = vmapNew(wrap("a"), wrap("b"))(wrap(true), wrap(true));
     let cls = NewClass(tmap);
     assert(cls.T == "VCls");
 
     // new()
-    let vnew = getProp(cls, box("new"));
-    assert(vnew.T == "VNat");
-    let obj = vnew.fn(box(1), box(2));
+    let fnew = unwrap(getProp(cls, wrap("new")));
+    let obj = fnew(wrap(1), wrap(2));
     assert(obj.T == "VObj");
-    eq(unbox(getProp(obj, VStr("a"))), 1);
+    eq(unwrap(getProp(obj, VStr("a"))), 1);
 
     // matches()
-    let vmatches = getProp(cls, box("matches"));
-    assert(vmatches.T == "VNat");
-    assert(unbox(vmatches.fn(obj)), true);
+    let fmatches = unwrap(getProp(cls, wrap("matches")));
+    assert(unwrap(fmatches(obj)), true);
 
     // match()
-    let vmatch = getProp(cls, box("match"));
+    let vmatch = getProp(cls, wrap("match"));
     assert(vmatch.T == "VFun");
 }
 
@@ -631,10 +621,10 @@ let NewClass = (vmap) => {
 let stop = () => VErr("Stop", null);
 
 let builtins = {
-    "vecNew": VNat(vvecNew),
-    "mapDef": VNat(vmapDef),
-    "stop": VNat(stop),
-    "getProp": VNat(getProp),
+    "vecNew": VNFn(vvecNew),
+    "mapDef": VNFn(vmapDef),
+    "stop": VNFn(stop),
+    "getProp": VNFn(getProp),
 };
 
 let builtinCtors = (type, arg) => {
@@ -642,10 +632,10 @@ let builtinCtors = (type, arg) => {
         assert(builtins[arg]);
         return builtins[arg];
     } else if (type == "String") {
-        return box(String(arg));
+        return wrap(String(arg));
     } else if (type == "Number") {
         // use native type for numbers
-        return box(Number(arg));
+        return wrap(Number(arg));
     } else {
         fail("Unexpected IVal type");
     }
@@ -654,7 +644,7 @@ let builtinCtors = (type, arg) => {
 let manifestVars = {
     "true": VBool(true),
     "false": VBool(false),
-    "NewClass": VNat(NewClass),
+    "NewClass": VNFn(NewClass),
 };
 
 let [manifestEnv, manifestStack] = makeManifest(manifestVars);
@@ -686,7 +676,7 @@ ET(".5", "0.5", '(Error "NumDigitBefore")');
 
 // eval error
 
-ET("x", '(VErr "Undefined:x" null)');
+ET("x", '(VErr "Undefined:x")');
 
 // literals and constructors
 
@@ -748,15 +738,15 @@ ET("if 1 < 0: 1 | 0", "0");
 // Assert
 
 ET("assert 2<3 | 1", "1");
-ET("assert 2>3 | 1", '(VErr "Stop" null)');
+ET("assert 2>3 | 1", '(VErr "Stop")');
 
 // Let
 
 ET("x = 1 | x + 2", "3");
 ET("x = 1 | x := 2 | x + 2", "4");
 ET("x = 1 | x += 2 | x + 2", "5");
-ET("x = 1 | x = 2 | x | ", '(VErr "Shadow:x" null)');
-ET("x := 1 | x | ", '(VErr "Undefined:x" null)');
+ET("x = 1 | x = 2 | x | ", '(VErr "Shadow:x")');
+ET("x := 1 | x | ", '(VErr "Undefined:x")');
 ET("x = [1,2] | x[0] := 3 | x", "[3, 2]");
 ET("x = [1,2] | x[0] += 3 | x", "[4, 2]");
 ET('x = {a:[1]} | x["a"][1] := 2 | x', '{a: [1, 2]}');

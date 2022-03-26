@@ -1,10 +1,8 @@
 // desugar: Convert AST to IL
 
-import * as test from "./test.js";
+import {assert, eq, eqAt} from "./test.js";
 import {L, N, sexprFormatter} from "./misc.js";
 import {astFmt, parseModule} from "./syntax.js";
-
-let assert = test.assert;
 
 //==============================================================
 // Inner Language
@@ -23,13 +21,15 @@ let assert = test.assert;
 // desc : string
 // all others : IExpr || [IExpr]
 
-let IVal = (type, arg) => N("IVal", type, arg);
-let IArg = (ups, pos) => N("IArg", ups, pos);
-let IFun = (body) => N("IFun", body);
-let IApp = (fn, args) => N("IApp", fn, args);
-let IErr = (desc) => N("IErr", desc);
+let IL = {
+    Val: (type, arg) => N("IVal", type, arg),
+    Arg: (ups, pos) => N("IArg", ups, pos),
+    Fun: (body) => N("IFun", body),
+    App: (fn, args) => N("IApp", fn, args),
+    Err: (desc) => N("IErr", desc),
+};
 
-let ilFmt = sexprFormatter({
+IL.fmt = sexprFormatter({
     // $0 = argument to this function; $1 = argument to parent, ...
     IArg: (e) => "$" + e[0] + ":" + e[1],
     // number, string
@@ -38,12 +38,14 @@ let ilFmt = sexprFormatter({
                   e[1]),
 });
 
-let $str = str  => IVal("String", str);
-let $num = num  => IVal("Number", String(num));
-let $lib = name => IVal("Lib", name);
-let $getProp = $lib("getProp");
-let $prop = (target, name) => IApp($getProp, [target, $str(name)]);
-let $send = (target, name, ...args) => IApp( $prop(target, name), args);
+IL.str = str  => IL.Val("String", str);
+IL.num = num  => IL.Val("Number", String(num));
+IL.lib = name => IL.Val("Lib", name);
+IL.getProp = IL.lib("getProp");
+IL.prop = (target, name) => IL.App(IL.getProp, [target, IL.str(name)]);
+IL.send = (target, name, ...args) => IL.App( IL.prop(target, name), args);
+// Note: a & b will be wrapped in IL.Fun without adjusting their 'ups'
+IL.iif = (cond, a, b) => IL.App(IL.send(cond, "switch", IL.Fun(a), IL.Fun(b)), []);
 
 //==============================
 // Env object
@@ -124,7 +126,7 @@ let xlatCase = (value, pattern, onMatch, onFail) => {
         }
         return astCall(astLet(f, astFn([], onFail), m), []);
     } else {
-        return IErr("bad case");
+        return IL.Err("bad case");
     }
 };
 
@@ -200,15 +202,15 @@ let unwrapTarget = (target, value) => {
 
 // Construct an IL function from AST body & params
 let dsFun = (body, params, env) =>
-    IFun(env.extend(params.map(astName_string)).desugar(body));
+    IL.Fun(env.extend(params.map(astName_string)).desugar(body));
 
 // Construct an IL "if" construct from AST condition, then, & else
 let dsIf = (c, a, b, env) =>
-    IApp($send(env.desugar(c), "switch", dsFun(a, [], env), dsFun(b, [], env)), []);
+    IL.App(IL.send(env.desugar(c), "switch", dsFun(a, [], env), dsFun(b, [], env)), []);
 
 // Construct an IL "let" construct from AST variable name, value, and body.
 let dsLet = (target, value, body, env) =>
-    IApp( dsFun(body, [target], env), [env.desugar(value)]);
+    IL.App( dsFun(body, [target], env), [env.desugar(value)]);
 
 // Construct an IL expression for a block
 let dsBlock = (lines, loopVars, env) => {
@@ -252,9 +254,9 @@ let dsBlock = (lines, loopVars, env) => {
         [target, value] = unwrapTarget(target, value);
         let isBound = env.find(astName_string(target));
         if (aop == "=" && isBound) {
-            return IErr("Shadow:" + astName_string(target));
+            return IL.Err("Shadow:" + astName_string(target));
         } else if (aop != "=" && !isBound) {
-            return IErr("Undefined:" + astName_string(target));
+            return IL.Err("Undefined:" + astName_string(target));
         }
         return dsLet(target, value, k, env);
     } else if (T == "S-Loop") {
@@ -280,7 +282,7 @@ let dsBlock = (lines, loopVars, env) => {
         let [cond] = ast;
         return dsIf(cond, k, astCall(astName(".stop"), []), env);
     } else {
-        return IErr("unknown statement");
+        return IL.Err("unknown statement");
     }
 };
 
@@ -296,58 +298,58 @@ let desugar = (ast, env) => {
         let [lines, loopVars] = ast;
         return dsBlock(lines, loopVars, env);
     } else if (T == "Number") {
-        return $num(ast[0]);
+        return IL.num(ast[0]);
     } else if (T == "String") {
-        return $str(ast[0]);
+        return IL.str(ast[0]);
     } else if (T == "Name") {
         let [name] = ast;
         if (name == "repeat" || name == "break") {
-            return IErr("bad " + name);
+            return IL.Err("bad " + name);
         } else if (name == ".stop") {
-            return $lib("stop");
+            return IL.lib("stop");
         }
         let rec = env.find(name);
         if (!rec) {
-            return IErr("Undefined:" + name);
+            return IL.Err("Undefined:" + name);
         }
         let [ups, pos] = rec;
-        return IArg(ups, pos);
+        return IL.Arg(ups, pos);
     } else if (T == "Fn") {
         let [params, body] = ast;
         return dsFun(body, params, env);
     } else if (T =="Call") {
         let [fn, args] = ast;
-        return IApp(recur(fn), args.map(recur));
+        return IL.App(recur(fn), args.map(recur));
     } else if (T =="Dot") {
         let [a, b] = ast;
-        return $prop(recur(a), astName_string(b));
+        return IL.prop(recur(a), astName_string(b));
     } else if (T =="Index") {
         let [a, b] = ast;
-        return $send(recur(a), "@[]", recur(b));
+        return IL.send(recur(a), "@[]", recur(b));
     } else if (T =="Binop") {
         let [op, a, b] = ast;
         return op == "$"
-            ? IApp(recur(a), [recur(b)])
-            : $send(recur(a), "@" + op, recur(b));
+            ? IL.App(recur(a), [recur(b)])
+            : IL.send(recur(a), "@" + op, recur(b));
     } else if (T == "Unop") {
         let [op, svalue] = ast;
-        return $prop(recur(svalue), op);
+        return IL.prop(recur(svalue), op);
     } else if (T == "IIf") {
         let [c, a, b] = ast;
         return dsIf(c, a, b, env);
     } else if (T == "Vector") {
         let [elems] = ast;
-        return IApp($lib("vecNew"), elems.map(recur));
+        return IL.App(IL.lib("vecNew"), elems.map(recur));
     } else if (T == "Map") {
         let [rpairs] = ast;
         let keys = [];
         let values = [];
         for (let ii = 0; ii < rpairs.length; ii += 2) {
-            keys.push( $str(astName_string(rpairs[ii])) );
+            keys.push( IL.str(astName_string(rpairs[ii])) );
             values.push( rpairs[ii+1] );
         }
-        let mapCons = IApp($lib("mapDef"), keys);
-        return IApp(mapCons, values.map(recur));
+        let mapCons = IL.App(IL.lib("mapDef"), keys);
+        return IL.App(mapCons, values.map(recur));
     } else if (T == "Match") {
         let [value, cases] = ast;
         let v = astName(".value");
@@ -359,13 +361,13 @@ let desugar = (ast, env) => {
         }
         return recur(astLet(v, value, m));
     } else if (T == "Missing") {
-        return IErr("missing");
+        return IL.Err("missing");
     } else if (T == "Error") {
         // constructed only by desugaring
         let [desc] = ast;
-        return IErr(desc);
+        return IL.Err(desc);
     } else {
-        return IErr("unknown");
+        return IL.Err("unknown");
     }
 };
 
@@ -375,40 +377,37 @@ let desugar = (ast, env) => {
 
 let parseToAST = (src) => parseModule(src)[0];
 
-let astEQ = (a, b) => test.eqAt(2, astFmt(a), astFmt(b));
+let astEQ = (a, b) => eqAt(2, astFmt(a), astFmt(b));
 
 let testEnv = new Env(['a', 'b']).extend(['x', 'y']);
-test.eq([1,0], testEnv.find('a'));
-test.eq([0,1], testEnv.find('y'));
+eq([1,0], testEnv.find('a'));
+eq([0,1], testEnv.find('y'));
 
-let $x = IArg(0, 0);  // 'x' in testEnv
-let $a = IArg(1, 0);  // 'a' in testEnv
-let $b = IArg(1, 1);  // 'b' in testEnv
+let $x = IL.Arg(0, 0);  // 'x' in testEnv
+let $a = IL.Arg(1, 0);  // 'a' in testEnv
+let $b = IL.Arg(1, 1);  // 'b' in testEnv
 
 let serializeIL = input =>
-    ilFmt(input.T ? input :                         // IL
+    IL.fmt(input.T ? input :                         // IL
           desugar(parseToAST(L(input)), testEnv));  // source
 
-let ilEQ = (a, b) => test.eqAt(2, serializeIL(a), serializeIL(b));
+let ilEQ = (a, b) => eqAt(2, serializeIL(a), serializeIL(b));
 
-let $1 = $num(1);
-let $2 = $num(2);
+let $1 = IL.num(1);
+let $2 = IL.num(2);
 
-// Note: a & b will be wrapped in IFun without adjusting their 'ups'
-let $if = (cond, a, b) => IApp($send(cond, "switch", IFun(a), IFun(b)), []);
+// test IL.prop
+eq(IL.prop($a, "p"), IL.App(IL.getProp, [$a, IL.str("p")]));
 
-// test $prop
-test.eq($prop($a, "p"), IApp($getProp, [$a, $str("p")]));
-
-// test $send
-test.eq($send($a, "p", $1), IApp( $prop($a, "p"), [$1]));
+// test IL.send
+eq(IL.send($a, "p", $1), IL.App( IL.prop($a, "p"), [$1]));
 
 // test unwrapTarget
 
 let test_unwrapTarget = (srcA, srcB) => {
     let parseLet = (src) => {
         let block = parseToAST(src);
-        test.assert(block.T == "Block" && block[0][0].T == "S-Let");
+        assert(block.T == "Block" && block[0][0].T == "S-Let");
         return block[0][0];
     }
     let [tA, _A, vA] = parseLet(srcA);
@@ -475,7 +474,7 @@ astEQ(xlatCase(astName("v"), N("VecPattern", [astNum(3), astName("p")]),
 ilEQ("1", $1);
 
 // String
-ilEQ('"ABC"', $str("ABC"));
+ilEQ('"ABC"', IL.str("ABC"));
 
 // Name
 ilEQ("x", $x);
@@ -483,35 +482,35 @@ ilEQ("a", $a);
 ilEQ("b", $b);
 
 // Fn
-ilEQ("x -> 1", IFun($1));
-ilEQ("x -> a", IFun(IArg(2, 0)));
+ilEQ("x -> 1", IL.Fun($1));
+ilEQ("x -> a", IL.Fun(IL.Arg(2, 0)));
 
 // Call
-ilEQ("x(1)", IApp($x, [$1]));
+ilEQ("x(1)", IL.App($x, [$1]));
 
 // Dot
-ilEQ("a.P", $prop($a, "P"));
+ilEQ("a.P", IL.prop($a, "P"));
 
 // Index
-ilEQ("a[1]", $send($a, "@[]", $1));
+ilEQ("a[1]", IL.send($a, "@[]", $1));
 
 // Binop
-ilEQ("x + 1", $send($x, "@+", $1));
+ilEQ("x + 1", IL.send($x, "@+", $1));
 
 // Binop `$`
-ilEQ("a $ 1", IApp($a, [$1]));
+ilEQ("a $ 1", IL.App($a, [$1]));
 
 // Unop
-ilEQ("-a", $prop($a, "-"));
+ilEQ("-a", IL.prop($a, "-"));
 
 // IIf ("inline" if)
-ilEQ("x ? 1 : 2", $if($x, $1, $2));
+ilEQ("x ? 1 : 2", IL.iif($x, $1, $2));
 
 // Vector
-ilEQ("[1, 2]", IApp($lib("vecNew"), [$1, $2]));
+ilEQ("[1, 2]", IL.App(IL.lib("vecNew"), [$1, $2]));
 
 // Map
-ilEQ("{A:1, B:2}", IApp(IApp($lib("mapDef"), [$str("A"), $str("B")]), [$1, $2]));
+ilEQ("{A:1, B:2}", IL.App(IL.App(IL.lib("mapDef"), [IL.str("A"), IL.str("B")]), [$1, $2]));
 
 // Match
 ilEQ([
@@ -589,25 +588,10 @@ ilEQ([
 
 // Block: S-Assert
 ilEQ([ 'assert x', '1' ],
-     $if($x, $1, IApp( $lib("stop"), [])));
+     IL.iif($x, $1, IL.App( IL.lib("stop"), [])));
 
 //==============================================================
 // exports
 //==============================================================
 
-let IL = {
-    Val: IVal,
-    Arg: IArg,
-    Fun: IFun,
-    App: IApp,
-    Err: IErr,
-    str: $str,
-    num: $num,
-    lib: $lib,
-    prop: $prop,
-    send: $send,
-    iif: $if,
-    fmt: ilFmt,
-};
-
-export {ilFmt, Env, IL};
+export {Env, IL};
