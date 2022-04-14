@@ -1506,10 +1506,10 @@ that allow a variable number of fields, each of which can hold any type of
 value.
 
 However, dynamic languages are not incompatible with the notion of typed
-structures and vectors, which afford precise and efficient memory layout.
-The best example of this is LuaJIT and its C FFI, which can actually be used
-to great effect without ever calling into C.  Another example is
-JavaScript's typed arrays.
+structures and vectors, which facilitate efficient memory layouts.  The best
+example of this is LuaJIT and its C FFI, which can actually be used to great
+effect without ever calling into C.  Another example is JavaScript's typed
+arrays.
 
 Typed structures do not manifest as static declarations and typing
 constraints on variables.  Instead, they are created at run-time, either by
