@@ -1,6 +1,40 @@
 TODO
 
+* run text file
+* diagnostics: Report location of error (command line)
+  - store AST node in INfn
+  - when VErr is returned from a native function call, get location from INfn record
+* diagnostics: Trace Value (GUI)
+     Display UI for values in context of the expression that generates them
+   - Design
+      Breakdown = rendering of an AST node and its sub-expression values.
+      ValueBox = rendering of a value; default = Brief
+      ResultBox = component that toggles between ValueBox & Breakdown
+      ErrorDialog = view that shows assertion failure *at* `assert` in text
+      - Breakdowns for all AST expression nodes
+      - ValueBox for all V...
+      - ErrorDialog & its interaction with text view
+      - "jump" feature, ResultDialog anchored to expression?
+      - stack view
+      - ValueBox: toggling between
+      - Other navigation? Step?
+  - Impl simple ErrorDialog
+  - Add ValueBox and Breakdown to ErrorDialog
+  - ResultBox: Allow toggling of sub-expressions
+  - ResultDialog: jump to anchored result
+* diagnostics: Breakpoint/Step Execution?
+
+* check arity
+
 * Unimplemented language features:
+  - eval VFUN: fall back to "call" method for non-functions
+  - methods: {NAME: FUN, ...}
+  - enums
+  - match function-like patterns  F(a) => THEN --> F.match(V, (a) -> THEN, E)
+  - Class.extend()
+  - rest/spread varargs
+  - arrays (in patterns)
+  - dictionaries (in patterns)
   - recursive definitions (forward declarations)
   - type constructors
   - `where`
@@ -12,10 +46,14 @@ TODO
   - String syntax: `\xXX` and `\u{X...}`
   - `'` suffixes in variable names (shadowing avoidance)
   - dictionaries/hashmaps
+  - named & positional arguments & defaults
+  - f("...") == f"...";  f({...}) == f{...}  [?]
+  - `true`, `false` as keywords (not manifest vars)
   - disallow re-binding `true`, `false`, `break`, `repeat`
      a) trap at parse time?
      b) use an IErr "wrapper" of the Fn expression?
   - treat `match` as a statement (no match => rest of block)
+  - `match VALUE in ENUM: Foo => A` --> `match VALUE: ENUM.Foo => A`
   - allow match cases to `break`, `repeat`, and re-bind loop vars
 
 * Visualize execution
@@ -29,6 +67,8 @@ TODO
   4. Index
   5. Comments
 
+
+################################################################
 
 ---- Long-term
 
