@@ -10,6 +10,7 @@ background.
 
 ----
 
+
 ## Rio Overview
 
 The following list of ingredients can give one a feel for the flavor of Rio.
@@ -18,17 +19,17 @@ The following list of ingredients can give one a feel for the flavor of Rio.
  * [Lexical scoping](#lexical-scoping)
  * [Duck typing](#duck-typing)
  * [Imperative Syntax](#imperative-syntax)
- * [Compile-Time Evaluation](#compile-time-evaluation)
+ * [Early Evaluation](#early-evaluation)
  * [Friendly Data Types](#friendly-data-types)
  * [Typed Structures](#typed-structures)
  * [Reactive Programming](#reactive-programming)
  * [Order Annotations](#order-annotations)
- * [Pattern Matching](#pattern-matching) & Destructuring
+ * [Pattern Matching](#pattern-matching)
  * [Gradual Typing](#gradual-typing)
 
-So, think "Smalltalk", but without mutation.  And with some Python-like
-syntax.  And with an implementation that heavily leverages inlining and
-partial evaluation.
+Think of a mix of Lisp and Smalltalk, but without mutation.  And with some
+Python-like syntax.  And with an implementation that heavily leverages
+inlining and early evaluation.
 
 
 ## Syntax Introduction
@@ -66,10 +67,9 @@ For example:
             x += 1
         total
 
-Other syntax topics:
+Other syntax features:
 
- * [Vertical syntax](#vertical-syntax) describes the philosophy behind
-   assignments and conditionals.
+ * [Vertical syntax](#vertical-syntax)
  * [Imperative Syntax](#imperative-syntax)
  * [Pattern Matching](#pattern-matching)
 
@@ -88,8 +88,8 @@ pitfalls of mutable data, are implemented as syntactic sugar.
 
 Rio syntax supports a "vertical" program structure, so that code reads down
 the page instead of diagonally down and to the right as in some other
-functional langauges.  Likewise, data flow (during execution) generally
-progesses down the page, which can help in visualizing and understanding the
+functional languages.  Likewise, data flow (during execution) generally
+progresses down the page, which can help in visualizing and understanding the
 code, as well as authoring in a worksheet-based [live
 programming](#live-programming) environment.
 
@@ -122,7 +122,7 @@ For example, the following Lisp code:
 ## Pattern Matching
 
 A `match` expression selects between multiple alternatives, potentially
-binding names to values.
+de-structuring aggregates and binding names.
 
     match Value:
        Pattern => Expr
@@ -133,7 +133,7 @@ A `Pattern` can be one of the following:
  - Name: A name matches any value.  When the corresponding `Expr` is
    evaluated, the value is bound to the variable of that name.
 
- - Constant: A literal number or stirng will match an equivalent value.
+ - Constant: A literal number or string will match an equivalent value.
 
  - `[Pattern, ...]`: A sequence of zero or more comma-delimited patterns
    enclosed in `[` and `]` will match a vector value if it has the same
@@ -144,8 +144,8 @@ The value of the `match` expression is the value of the expression
 corresponding to the first matching pattern. If none of the patterns match,
 an error occurs.
 
-In the following example, the fourth pattern is the first to match, and the
-resulting value is 6.
+In the following example, the fourth pattern is the first to match,
+resulting in a value of 6.
 
     match [1,2,3]:
         [a, b, c, d] => 1
@@ -161,14 +161,11 @@ Values may have properties and methods.
 The `.` operator is used to obtain properties.  For example, `value.name`
 evaluates to the `name` property of `value.`
 
-A "method" is nothing more than a property that evaluates to a function.  A
-method will typically be able to access the value from which it was obtained
-(its `self` value) as a captured value, so there is no need to pass its
-value to one of its own methods.  The expression `a.foo()` is equivalent to
-`tmp = a.foo; tmp()`, exactly as logic would dictate (but unlike as in some
-other programming languages).
+A "method" is nothing more than a property that evaluates to a function.
+The expression `a.foo()` is equivalent to `tmp = a.foo; tmp()`, exactly as
+logic would dictate (but unlike as in some other programming languages).
 
-Also, Rio does not confuse properties with members of collections.  Indexing
+Rio does not confuse properties with members of collections.  Indexing
 expressions -- e.g. `value[index]` -- access members of a vector or map, not
 their properties.
 
@@ -198,247 +195,246 @@ Compilation is an overloaded term, referring to a number of separate issues
 that go together in traditional languages, but not necessarily in Rio:
 static analysis, code generation, and construction of an "object" file.
 
-Compilation usually involves some amount of static analysis.  Let us call
-this static analysis, and not "compile-time" analysis, and define it as the
+Compilation usually involves some amount of static analysis.  We will call
+this static analysis, and not compile-time analysis, and define it as the
 analysis that is done by examining the program alone, without any knowledge
-of inputs to the program.
+of inputs that the program might encounter in the future.  Note that, given
+the nature of worksheets, much of the actual execution of the program might
+occur at "compile time" in this sense.
 
 Compilation and code generation are often thought of as synonymous -- and in
 fact code generation is typically the biggest part of a "compiler".  In Rio,
-code generation can happen after a deployable image is generated, and after
-user input has been consumed, similarly to how a JIT-based VM works.
+however, code generation can happen after a deployable image is generated,
+and after user input has been consumed, similarly to how a JIT-based VM
+works.
 
 Originally, compiling meant producing an object file: a deployable
 executable image.  In a Rio *worksheet*, the user sees the results
 immediately as the program is modified.  There is no executable image to
-see, or even to ascribe any meaning to.  Rio can generate deployable
-executables, but that step should be seen as just "deployment", and not as
-the trigger for code generation or static analysis.
+see.  Rio can generate deployable executables, but that step should be seen
+as just deployment.
 
-This goes beyond implementation choice; the language definition does not
-depend on a notion of "compile-time".  Rio does not distinguish [top-level
-code](#top-level-code), and it provides no "compile-time" primitives, like
-`#ifdef` as an alternative to `if`, since values that never change
-(e.g. size of a number) will be erased during [partial
-evaluation](#partial-evaluation).
+The traditional sharp distinction between compile time and run time is
+reflected in terms like "compile-time evaluation" (CTE).  It is important to
+note that in Rio, [early evaluation](#early-evaluation) provides the
+benefits of CTE.
+
+This lack of a sharp distinction between compilation and interpretation is
+not merely an implementation choice.  It simplifies the *language* itself by
+avoiding the notion of [top-level code](#top-level-code) and compile-time
+primitives like `#ifdef`.
 
 
 ## Top-Level Code
 
-Some languages distinguish "top-level" code from code that occurs within a
-function body.  This complicates the mental model of the language.
+Some languages distinguish "top-level" code from code that occurs within the
+body of a function.  This complicates the mental model of the language.
 
 For example, in C or Rust, the expressions that are valid in top-level --
 e.g. on the RHS of a global variable definition -- are a subset of the
-expressions valid within a function.  This means that when complex
-initialization is required, it must be done (using mutation) at "run-time",
-introducing the problem of ensuring the initialization is done before the
-variable is referenced.  Also, there are different visibility rules for
-functions and variables defined at the top level than for variables defined
-within a function body.  In Rust, this means that the programmer cannot rely
-on type inference for globals, and must explicitly declare types.
+expressions valid within a function.  The visibility rules for functions and
+variables defined at the top level are different from those defined within a
+function's body.  In Rust, this means that the programmer cannot rely on
+type inference for globals, and must explicitly declare types.  More
+generally, user functions cannot be called in top-level expressions, so
+construction of complex data structures must be done after `main` is called.
 
-In Lua, JavaScript, and Python, top-level code is not special, it is the
-same as function body code.  Compilation is just an optimization that does
-not complicate the language.
+In dynamic languages such as Lua, JavaScript, and Python, top-level code is
+not special, it is the same as function body code.  Loading a module
+executes the body of the module.
 
-The motivations for assigning a different meaning to top-level code stem
-from the model for compilation and linking used by those language
-implementations, and from performance concerns.  These motivations disappear
-when [compile-time evaluation](#compile-time-evaluation) is supported.  The
-modules can be discovered, loaded, and evaluated at "compile-time".  Module
-return values, such as exported functions, are typically constant, allowing
-their returned functions to be directly linked with call sites, or even
-inlined.  [Note that "bundle-time" or "deploy-time" is perhaps a better term
-in this case, since compilation of code, such as user-supplied code, at
-"run-time" is not absolutely forbidden.]
+Rio follows the dynamic language model.  One might assume that this comes
+with a performance penalty, but that is not necessarily so.  With [early
+evaluation](#early-evaluation), much of the computation can be done at
+[compile time](#compile-time).  For example, modules can be discovered,
+loaded, and evaluated.  Module return values, such as exported functions,
+are typically constant, allowing their returned functions to be directly
+linked with call sites, or even inlined.  [Inline tests](#inline-tests) can
+be executed.  Dead code, such as conditionals based on constants, can be
+eliminated.
+
+
+## Observer Pattern
+
+In a most programming languages, callbacks (typically using the observer
+pattern) are used to enable propagation of changes between components.  This
+comes with a number of drawbacks that may or may not be evident at the
+outset:
+
+ 1. Work.  Code must be written to register for various type of changes,
+    and to deregister, and on the notifying side to accept registrations and
+    de-registrations and to deliver notifications at the correct times.
+    Also, code must be written to receive the notifications (perhaps
+    different kinds of them) and correctly update the component's internal
+    state.
+
+ 2. Cycles.  Applied naively, this pattern introduces reference cycles into
+    a program, so it requires strategies and techniques for avoiding memory
+    leaks.  Even in languages with garbage collection, this introduces a
+    resource lifetime management problem.
+
+ 3. Inconsistency.  Changes to the state of an object necessarily take time
+    to propagate to downstream objects (notification callbacks must be
+    called, and the notified objects must perform some work to update its
+    state).  Whether an observer updates its state (synchronously *or*
+    asynchronously) it still exists for some time in a state that is out of
+    synch with the object it observes, and likewise, other objects in the
+    system may be in such a state. (Perhaps they have not yet been notified
+    because their callback was further down the list.)  The question arises,
+    then, which methods of an object are "safe" to call in such a state,
+    and, if not *all* of them, how can we ensure that we don't perform an
+    unsafe call?
+
+ 4. Performance.  When the graph of objects includes diamond-shaped
+    dependencies, a single notification can multiply as it propagates
+    through the dependency graph.  This can lead to an explosion in
+    computational complexity in a large graph.  Additionally, some
+    programmatic changes to a component, such as processing a bundle of
+    updates from a server, can result in many notifications.  As a result, a
+    single change to the system -- for example, when a user clicks a button
+    -- might require thousands of notifications to be processed.
+
+"Invalidation" and asynchronous update can be employed to address the
+performance problem, but this exacerbates the inconsistency problem.  I feel
+that thorough contemplation of all these problems together drives one toward
+a coherent paradigm wherein updates are orchestrated such that each
+component can receive and processes its notifications all at once after all
+its dependencies have processed theirs.  Looking at this abstractly, such a
+paradigm resembles the way [build systems](#build-systems) work, and also
+[reactive programming](#reactive-programming).
 
 
 ## Reactive Programming
 
-Reactive programming languages allow us to deal with time-changing values
-implicitly, rather than explicitly.
+Reactive programming allows us to deal with time-changing values implicitly,
+rather than explicitly.  Instead of, as in the [observer
+pattern](#observer-pattern), where we might write a class that computes its
+internal state and then monitors changing inputs and responds to them, with
+reactive programming we write a function that computes a value.  When the
+inputs change, the language recognizes which values have been invalidated,
+and performs what computation is necessary to recompute the new result.
 
-In a conventional procedural programming language, changes are indicated
-with callbacks, typically using the observer pattern.  When one object
-constructs its state (for example, a UI view) using data obtains from a
-second object (for example, a time source), it will register for
-notification of changes from the second object, and on receiving that
-notification it will re-calculate as necessary.
+The observer pattern is just one approach, but (due to its drawbacks) it is
+not a universal solution, and programmers generally employ a number of other
+ways to propagate changing data over time, like "stream" or "socket"
+interfaces.  Given the possible design decisions, these can differ in many
+ways: Does it use a pull vs. push approach? Are notifications synchronous or
+asynchronous? Do notifications carry a payload?  When connecting components
+that use different approaches, code must be written to address the
+"impedance mismatch".  By providing a consistent, universally-applicable
+approach, reactive programming can further simplify our programs.
 
-In a reactive language, one would simply express the UI view as a function
-of the time source.  As the time source changed, so would the UI view.
-There is no need to write code for registering for notifications, or the
-registration function itself, or notification of observers.  Nor is there any
-need for all the de-registration aspects that come along with those
-registration mechanism.
+When we do not have reactive evaluation built into the language, we can
+attempt to tackle reactive programming with a library.  While this has had
+success -- especially when tackling components such as UI views that where
+the benefits are significant -- it requires the programmer to write code in
+a stylized manner, maintaining a high level of awareness of how the library
+works and avoiding things that would violate the abstraction.
 
-Aside from drastically reducing the amount of code required, this paradigm
-simplifies designs by factoring out the notion of whether a value changes
-over time.  In an OO listener-based approach, values that are allowed to
-change over time are special, and the mechanisms to support it present
-numerous small design decisions that can lead to many superficial
-differences (pull vs. push, whether notifications are delivered as deltas,
-etc.)
-
-For efficient reactive programming, [incremental
-evaluation](#incremental-evaluation) should be pursued.
-
-Reactive approaches and [incremental evaluation](#incremental-evaluation)
-are easier to add to a language with [immutability](#immutability).
+In Rio, we see reactive programming as a special case of [incremental
+evaluation](#incremental-evaluation).  We use the term "reactive" to refer
+to cases where the changing values come from outside our program,
+progressing with time, and re-calculation is entirely implicit -- an
+alternative to the observer pattern or other such strategies.  Incremental
+evaluation, more generally, allows a program to explicitly request
+evaluation of a function and subsequent re-evaluations, controlling the
+changes to inputs.  Incremental evaluation is used by the Rio language
+infrastructure to to implement reactive evaluation in our programs.
 
 
 ## Incremental Evaluation
 
-Once a programmer has written a function, the language can not only compute
-its result when given its inputs, it can also efficiently recompute a new
-result given slightly different results.  This avoids the need for the
-programmer to manually write incremental variants of functions.
+An incremental algorithm is one that can, after computing a result, compute
+a new result more efficiently when not all of the inputs have changed.
 
-This idea does not require a magical, universal solution that applies to
-arbitrarily complicated algorithms.  In order to be useful and relevant, it
-only needs to be reasonably effective for the kinds of functions we most
-commonly encounter in programming (searching, filtering, transformation,
-etc.).  Even when some programmer involvement is required -- e.g. via
-annotations that influence the granularity of recalculation -- it could
-still reduce the amount of programming work dramatically.
+With language support for incremental evaluation, we can avoid the need for
+a programmer to manually write incremental variants of functions.
 
+This idea does not require a magical, universal solution that optimally
+handles arbitrarily complicated algorithms.  In order to be useful and
+relevant, it only needs to be reasonably effective for the kinds of
+functions we most commonly encounter in programming (searching, filtering,
+transformation, etc.).  Even when some programmer involvement is required --
+e.g. via [hints](#hints) that influence the granularity of recalculation --
+it could still reduce the amount of programming work dramatically.
 
-## Compile-Time Evaluation
-
-*Compile-time execution* or evaluation (CTE) is a commonly used term for
-executing parts of a program during "compilation", rather than at
-"run-time".  Given Rio's [compile-time](#compile-time) flexibility, this
-terminology is not ideal, but the essence of the term still applies.
-Generally, when we talk of something evaluated at "compile-time" we are
-referring to an expression that is evaluated once during the execution of
-the program, whereas "run-time" implies potentially many times.
-
-In Rio, this is driven by [partial evaluation](#partial-evaluation) as an
-initial step in code generation.
-
-CTE affords many [zero-cost abstractions](#zero-cost-abstractions), and
-allows us to have "nice" semantics without paying the full price for them.
-CTE reduces dynamic language overheads by enabling inlining of function
-calls and erasure ot type information. It turns [inline
-stests](#inline-tests) into compile-time tests.
+For (hopefully) obvious reasons, [incremental evaluation
+](#incremental-evaluation) is easier to implement in a language with
+[immutable](#immutability) data structures.
 
 
-## Partial Evaluation
+## Early Evaluation
 
-Partial evaluation is [specialization](#specialization) of functions for the
-context in which where they are called.  For example, when we know the value
-of a parameter being passed by the caller, or if we know the type of the
-value, we can eliminate assertions, propagate constants (e.g. method
-lookups), etc., to yield a faster function.
+*Early evaluation* refers to to performing computations "out of order", so
+that we can avoid performing them multiple times.  We might compute a
+sub-expression once before entering a loop, rather than per-iteration, or
+once when a function is constructed, rather than every time it is called, or
+once when compiling a program, rather than every time the program is
+invoked.
 
-In partial evaluation, we propagate knowledge we have about the function's
-inputs and free variables, evaluating and simplifying sub-expressions where
-possible.  There are different kinds of knowledge we may have about a value:
+For example, we can compute sub-expressions out of order when we know the
+values of all of their dependencies.  For example, we can replace `1 + 2`
+with `3`.  Cases like this involve applying the ordinary rules of evaluation
+to a sub-expression.
 
-  - We may know the precise value.
+When the value of a function is known, we can "inline" the function: replace
+the a function application node with the body of the function, analogous to
+a β-reduction in lambda calculus.  This avoids the overhead of the function
+call, and, more importantly, it can enable early evaluation of
+sub-expressions within the body of the inlined function.  Alternatively,
+depending on the size of the function and other factors, we could generate a
+call to a [specialized](#specialization) form of the function.
 
-  - We may know its type.
+Even when we do not know the precise value of a dependency, we may have
+some imprecise knowledge that will enable early evaluation.  For
+example:
 
-  - We may know that the value is a composite (vector or map), and have
-    further knowledge about some of its members.
+   - We might know its type.  This would allow us to perform method
+     lookup at an early stage.
 
-  - Over time, there are more granular forms of knowledge that we may
-    introduce.  One general area for exploration is predicates on built-in
-    types, such as `0 < value < 10`, or `is_valid_utf8(value)`.
+   - We might know that it falls within a set of possible values.  For
+     example, it may be an integer from 0 to 100.
 
-Some well-known optimizations can be considered specializations:
+   - We might know that it is of a particular aggregate type, and know
+     some of its members, but not all.  In this case, we might avoid
+     code to extract a member from the value, and in turn maybe avoid
+     the need to actually instantiate the aggregate.
 
- * Constant propagation specializes for specific values.
+Knowledge of values (precise or imprecise) can be gleaned by abstractly
+interpreting an expression.  Constant expressions will have known values.
+Conditionals and assertions in a program will restrict the possibilities in
+subsequent paths of execution.
 
- * JIT tracing specializes control flow, according to how types and values
-   influence branches.
+The fact that variables and data structures are [immutable](#immutability)
+in Rio makes early evaluation particularly effective.  For example, the
+functions imported by a module will generally be known statically, enabling
+inlining or [specialization] of those functions.  This allows us to use
+functions as [zero-cost abstractions](#zero-cost-abstractions).
 
-Note that [immutability](#immutability) and [pure
-functions](#pure-functions) in Rio maximize the potential for partial
-evaluation.  Most modules (those structured as reusable libraries) will not
-have any inputs that change at run-time, so partial evaluation can produce a
-precise value for every library, and precise values for all the members of
-those libraries.  Functions imported from libraries are always available for
-inlining and specialization.
+Early evaluation is especially relevant to the language design of Rio
+because it can predictably optimize away some overheads associated with
+dynamic languages.  For example, when the type of a value is known, [method
+lookup](#dynamic-dispatch) can be avoided.  This allows us to have "nice"
+semantics without paying an unreasonable price.
 
-There exists the possibility of partial evaluation at run-time when more is
-known about the values and their types.
 
 ## Specialization
 
-A generic function can be compiled to one or more non-generic instances that
-assume the types or values of one or more parameters.
+A *specialization* of a function is a variant of the function this is only
+valid for a subset of its input values.
 
-Validation of the assumptions must be done before executing the specialized
-object code.  When the specialization was triggered by [partial
-evaluation](#partial-evaluation), we know the context is one in which the
-assumptions are valid.  Alternatively, we might generate multiple
-specialized forms of a function (as directed by programmer [hints](#hints)
-or [profiling](#profiling)) and select the appropriate one at run-time.
+For example, for `pow = (x, exp) -> ...`, we can generate a specialization
+for the `(x: Number, exp: Number)` case, which would optimize away all
+method lookups.  When generating code for a function that calls `pow`, if we
+know that both arguments are numbers, we can emit code that directly calls
+the specialized variant.  Otherwise, we can emit code that calls the generic
+variant, which can check the `(Number, Number)` case at run time.
 
-Specialization could be performed at run-time, like a JIT compiler,
-triggered by, perhaps, a previously unseen type for a parameter.  This
-approach makes for an interesting comparison with trace-based JIT
-compilation.  In tracing, the VM normally tracks control flow while
-executing instructions by keeps a log (trace) of instructions.  After a
-certain amount of looping (usually triggered by a counter of backwards
-branches), the trace is then compiled to native code, optimizing out the
-control flow instructions.  Instead, we plan to symbolically execute all
-code the first time through the loop, constructing a structure more general
-than a trace.  One bane of trace-based JIT is dealing with subsequent passes
-through the compiled loop when a deviation from the trace is detected (when
-a "guard" fails).  With symbolic execution, we can generate completely
-generic code with no such guards, or we can generate more specialized code
-with appropriate guards.
-
-
-## Partial Eval Algorithm Notes
-
-[The terms "Symbolic Execution" or "Abstract Interpretation" sound
-appropriate, but each of those terms refers to a body of literature
-describing a specific set of techniques, and I am not familiar enough with
-them to say which term (if either) describes what I have in mind.]
-
-In the case of assignment expressions -- `V = EXPR1 \ EXPR2` -- we first
-statically evaluate EXPR1 to obtain knowledge of V, and then statically
-evaluate EXPR2 with that knowledge of V.
-
-Conditional expressions can be short-circuited when the condition can be
-statically evaluated.  When they cannot be short-circuited, knowledge of the
-resulting value is given by the *unification* of the knowledge of both
-branches.  The condition can provide additional knowledge of values within a
-branch.  For example, in the expression `if x == 7: x*x \ 2`, the
-sub-expression `x*x` statically evaluates to `49` because the condition
-gives us knowledge of `x` in that branch.  Since both `49` and `2` are
-numbers, the result of the `if` expression is known to be a number.
-
-Function values: In the assignment `f = x -> x + 1`, we have a precise
-value for `f` (a function).
-
-Function invocations: When statically evaluating a function call, if we know
-the precise value of the function, then we can statically evaluate the body
-of that function using what knowledge we have of the parameters.  For
-example, given the above definition of `f`, the expression `f(2)`,
-statically evaluates to `3`.
-
-Recursion limits abstract evaluation.  If we do not have precise knowledge
-of all parameters, then we cannot determine when the recursion will
-terminate.  In such cases, partial evaluation results in imprecise knowledge.
-Abstract evaluation does not "loop", and the time spent in abstract
-evaluation of a program -- much more heavyweight than ordinary evaluation --
-is limited to O(N) where N is the number of expressions.
-
-If, however, we have static knowledge of precise values for all parameters
-of the recursive function, we generate optimized (non-abstract) code for it
-and evaluate it, yielding a specific value for the result (statically).
-Although this employs essentially "dynamic" evaluation, since all inputs can
-be determined purely form the program source, the result can as well.
-
-Code generation (for dynamic evaluation) can take advantage of any static
-knowledge of values.  This enables inlining of functions, type erasure,
-eliminating of unreachable code, and skipping method lookup and even double
-dispatch steps.
+Specialized forms may be selected by the compiler based on its observation
+of potential performance improvements, or based on heuristics such as
+"always specialized by argument types".  Specializations can be compiled at
+run time if we encounter variants that were not anticipated at compile time.
+Programmer [hints](#hints) could override or guide the selection.
 
 
 ## Hints
@@ -458,26 +454,30 @@ point to where optimizations are worthwhile.  Observed data types and values
 can suggest opportunities for [specialization](#specialization).
 
 
-## Build System
+## Build Systems
 
-Build systems enable [incremental evaluation](#incremental-evaluation) and/or
-[parallel](#order-annotations) evaluation, working with files as values.
-Typically this is accomplished by explicitly naming dependencies separately
-from the command that consumes them.  Similar problems (not necessarily
-involving “files” and “commands”) occur in many places in software
-development.
+*Build systems* optimize building large projects by enabling
+[parallel](#order-annotations) and [incremental](#incremental-evaluation)
+compilation of source files.  They allow a project's build to be described
+as a tree, where each node corresponds to a source file or and output file
+with an associated build step (e.g. compilation or linking), and where
+parent-child relationships indicate data dependencies.
 
-Note that a language that requires one to explicitly name dependencies -- in
-addition to writing the command -- is requiring one to repeat oneself to a
-degree.  All the information about dependencies could be deduced from the
-command line.  If only the build system could be taught to deduce this
-information, or defining a way for the commands to be invoked so that they
-can report the dependencies encountered during an invocation.
+The same concept can be applied to problems other than software builds.  For
+example, when processing large amounts of data in multiple stages, a build
+system can be used to ensure up-to-date results while minimizing the amount
+of time spent on needlessly repeating processing steps.
 
-Listing dependencies alongside a command means that the dependencies must be
-known before the command is executed.  This is a problem when the set of
-dependencies will vary with inputs to the program, like file contents, which
-are unkown to the build system.
+Typically, build steps are denoted by shell commands, and build systems rely
+on the programmer to separately express the dependencies.  Using a build
+system involves writing software in two ways -- the build system level at
+the top, and one or more other languages that perform the individual
+processing steps.
+
+However, given a language that supports [parallel](#order-annotations) and
+[incremental](#incremental-evaluation) evaluation, the benefits of a build
+system can be had without dealing with two semantically mismtached languages
+and paradigms.
 
 
 ## UI Development
@@ -487,9 +487,11 @@ writing listener-related code: register for notifications, handle
 notifications, de-register, handle registrations and deregistrations,
 deliver notifications.
 
-This is made easier by [incremental evaluation](#incremental-evaluation).
+The amount of code required for a task is minimized by [reactive
+programming](#reactive-programming).
 
-This benefits from [live programming](#live-programming).
+The immediate feedback provided by [live programming](#live-programming)
+makes the process of programming easier and more enjoyable.
 
 
 ## Live Programming
@@ -540,42 +542,41 @@ heights, and more flexible rendering, which are enabled by GUI environments.
 
 - Allow rich text comments, with simple graphics.
 
-- "Syntax" within strings: `\\`, `\t`, and `\n`, can be made nore visually
+- "Syntax" within strings: `\\`, `\t`, and `\n`, can be made more visually
   distinct, perhaps shown as boxed `n`, `t`, and `\` characters.
 
 - Show the internal structure of string literals as determined by a parsing
   function they are later passed to (when that parser returns an object
   implementing a certain interface).
 
-- Display tablular data (constructors of vector-of-vectors or
+- Display tabular data (constructors of vector-of-vectors or
   vector-of-maps) as an actual table, with cell borders.
 
 
 ## Assertions
 
-Assertions can appear anywhere.  They assert a condition that will be
-checked when that code is executed.  If the condition fails, an error is
-generated, preventing execution of the code that follows the assertion.
+Assertions can appear anywhere in a program.  They identify a condition that
+must be true when that line is evaluated.  If, when executed, the condition
+is false, execution stops and an error is reported.  Assertions can help
+reasoning about correctness of the subsequent code, either in terms of
+correctness or in terms of meeting some looser requirements (e.g. types).
 
-Assertions can help reasoning about correctness of subsequent code, either
-in terms of correctness or in terms of meeting some looser (e.g. type)
-requirements.  This can allow an incremental/modular approach to
-verification of a program.
+With [early evaluation](#early-evaluation), many assertion failures can be
+detected statically, before a program processes its time-varying inputs.
+Assertions about the type of a value are particularly amenable to static
+detection, and can be particularly useful for optimization.  Rio's type
+annotations can be thought of as a shorthand for type assertions.
 
-Assertions can also enable optimizations of the subsequent code.
-
-Assertions of type enable optimizations similar to that of static typing,
-except where reachability is in question.  Perhaps the language could take
-an aggressive stance on assertion violation, wherein it will error at
-compile-time unless it can convince itself that the program will not trigger
-the assertion.
-
-With abstract evaluation, assertions approach formal validation.
-
-With [compile-time evaluation](#compile-time-evaluation), assertions can
-generate compile-time errors. detected at compile time. and partial
-evaluation, and compile-time detection of assertion failures, elevated
-assertions look like type errors in a static language.
+By providing more and more such assertions, we can provide more and more
+assurance about the correctness of our program.  However, this approach
+differs from that of static typing with respect to the handling of
+assertions that cannot be decided statically.  In a strongly-typed static
+language, that would be a typing error, whereas in a dynamic language it
+becomes a run-time assertion.  In order to allow the programmer to assert
+soundness, a [hint](#hints) can specify an expression for which all
+reachable asserts must be statically decided.  Type safety -- and other
+assertions of correctness -- can thereby be gradually and modularly
+implemented.
 
 
 ## Elevated Error Messages
@@ -607,7 +608,7 @@ mutation, and introduces significant complexity (such as the still largely
 undocumented "borrow checker") to the language.
 
 Guaranteed immutability of values simplifies many optimizations such as
-[partial evaluation](#partial-evaluation).
+[early evaluation](#early-evaluation).
 
 Immutability allows us to implement [deterministic garbage
 collection](#deterministic-garbage-collection).  Reference cycles in data
@@ -627,48 +628,84 @@ program?"  It is necessary to think in this mode in order to analyze your
 code to prove it correct or develop confidence in it.
 
 
-## Deterministic Garbage Collection
+## Resource Lifetime Management
 
-Garbage collection allows us to ignore the problem of recovering unused
-memory in our programs.  Our programs create new values, consuming memory
-and perhaps other system resources, and those resources are automatically
-recovered when those values are no needed by the program.
+Back in the dark ages of computing, the legend goes, programmers explicitly
+managed memory allocation.  They would call a function like `malloc` to
+obtain the memory needed for a data structure, and they would call `free` to
+return memory to the pool after it was no longer needed by the program.
+Enter garbage collection (GC).  Initially considered a hack, it proved
+workable and provided enormous benefits by freeing the programmer from the
+need to manually manage the lifetimes of memory blocks.
 
-Most languages use garbage collection mechanisms that are non-deterministic
-with regard to *when* the resources will be recovered.  We can often ignore
-this shortcoming, because the event of running out of memory will itself
-trigger a GC cycle and recover memory just-in-time.  However, when dealing
-with values that hold non-memory resources, such as file or socket
-descriptors, we simply rely on GC to perform the cleanup for us.  Instead,
-we have to write the same kind of code we would have written if we had to
-manually manage memory: explicitly recovering the resource after we ware
-done using it, taking care to never do it too early.
+Unfortunately, GC does not solve every lifetime management problem, so even
+in languages with GC the programmer ends up writing code to clean up
+resources.  In particular:
 
-This lifetime management complexity is infectious.  Not only do the
-primitive system resource objects have "destructors" that must be called,
-but any object that owns a reference to such an object will in turn have a
-"destructor" that needs to be called, and so on and so on.  If any such
-object needs to be shared by two other objects, reference counts probably
-come into play, giving the programmer yet more code to write.  Any data
+ - Unless the GC is [deterministic](#deterministic-garbage-collection), we
+   cannot rely on it to discard objects that represent non-memory resources.
+
+ - Objects that have registered for callbacks from long-lived objects will
+   be considered "live" (reachable) by GC even when they are otherwise
+   un-reachable by the program.
+
+ - In a distributed environment, remote object invocation can be used to
+   simplify communication between two software environments.  When GC
+   operates on one of the environments, it can only deal with reference
+   cycles that are fully contained in its own environment.  GC must treat
+   all objects referenced from the other environment as reachable.  If we
+   have a reference cycle that spans the communication boundary, GC will not
+   be able to clean them up, even when both environments individually
+   support GC.
+
+The requirement for lifetime management is contagious.  We must call
+destructors for not only primitive system resource objects, but any object
+that owns a reference to such an object, and so on and so on.  Any data
 structure that takes ownership of values, in order to be fully generic, must
 participate in some lifetime management strategy for the things it contains.
 
+Rio fixes this, through a combination of features:
+
+ - [Deterministic garbage collection](#deterministic-garbage-collection).
+
+ - [Reactive programming](#reactive-programming) avoids the need for
+   reference cycles introduced by the [observer pattern](#observer-pattern).
+
+
+## Deterministic Garbage Collection
+
+Most garbage collection designs are non-deterministic with regard to *when*
+the memory will be reclaimed.  We can often ignore this shortcoming, because
+the event of running out of memory will itself trigger a GC cycle and
+recover memory whenever it is needed.
+
+However, objects that wrap external resources that are in limited supply --
+for example, file handles -- present an additional problem.  With
+*finalizers*, GC can ensure eventual cleanup of these resources, but,
+without determinisitc finalization they may remain unreclaimed for an
+arbitrarily long duration.  The program might exhaust the supply of these
+resources long before it runs out of memory.
+
+In those cases, we cannot rely on GC to perform the cleanup for us.
+Instead, we have to write the same kind of code we would have written if we
+had to manually manage memory: explicitly recovering the resource after we
+were done using it, taking care to never do it too early.
+
 Deterministic garbage collection gets us back to where we don't need to
-worry about lifetime management.  In general, this is a difficult problem,
-due to the potential of cyclic data structures, but [immutability
-](#immutability) helps here.
+worry about lifetime management in those cases.  In general, this is a
+difficult problem, due to the potential of cyclic data structures, but
+[immutability](#immutability) helps here.
 
 
 ## Lexical Scoping
 
-In lexical scoping, the visibility of a variable is evident from the source
-of the program, and does not require analyzing the dynamic execution paths
-of the program.
+With lexical scoping rules, the visibility of a variable can be easily
+determined by looking at the structure of the source code; it does not
+require analyzing the dynamic execution paths of the program.
 
-In Rio, there is no other type of scoping.  A variable's scope is the rest
-of its block.  The "rest of its block" corresponds to all the subsequent
-consecutive lines of code that are indented as much as the assignment or
-more.
+Rio uses lexical scoping.  A variable's scope is the rest of its block.  The
+"rest of its block" corresponds to all the subsequent consecutive lines of
+code that are indented as much as or more than its assignment statement.
 
 When two or more variable assignments use the same name, they define
 different variables (that happen to have the same name).  Where their scopes
@@ -718,8 +755,8 @@ Inline tests can illustrate usage of the tested code.  In this way, they
 nicely complement the [live programming](#live-programming) model.
 
 Placing tests inline is sometimes avoided because of a run-time performance
-penalty or an executable size overhead.  [Partial
-evaluation](#partial-evaluation) avoids boths of those drawbacks.
+penalty or an executable size overhead.  [Early
+evaluation](#early-evaluation) avoids boths of those drawbacks.
 
 In other languages, inline tests are conditionally compiled.  This involves
 additional complexity in the language itself and in the build system.
@@ -779,16 +816,16 @@ structure in your favorite statically typed language.
 
 One drawback typically expected from dynamic typing is lower performance,
 because without static typing we do not have type erasure, static method
-lookups, and inlining.  However, we anticipate that [compile-time
-evaluation](#compile-time-evaluation) can yield the same benefits in a
-dynamic language.
+lookups, and inlining.  However, we anticipate that [early
+evaluation](#early-evaluation) can yield the same benefits in a dynamic
+language.
 
 
 ## Gradual Typing
 
 Gradual typing allows a program to be written with or without static type
 declarations.  Adding type annotations to variables can help identify errors
-at compile-time, improve the maintainability of code, and enable performance
+statically, improve the maintainability of code, and enable performance
 optimizations.
 
 In the approach to gradual typing envisioned for Rio, type annotations will
@@ -803,8 +840,7 @@ and operations allowed on them.  The concepts of type values, type
 expressions, and static typing may then be introduced to the programmer by
 describing them as run-time assertions.  For example:
 
-    sq : Number -> Number
-        = x -> x*x
+    sq = (x : Number) -> x * x
 
 Is equivalent to:
 
@@ -812,17 +848,17 @@ Is equivalent to:
         assert type(x) == Number
         n*n
 
-Given the [compile-time evaluation](#compile-time-evaluation) performed by
-Rio, the execution and failure of an assertion can often be predicted before
-the code is evaluated.  For example, even when the values of certain
-expressions are not known until run time, the types of those expressions may
-be known and run-time error may be deduced in advance.  In these cases, Rio
-will report the error immediately (e.g. at "compile time").
+With [early evaluation](#early-evaluation), the execution and failure of an
+assertion can often be predicted before the code is evaluated.  For example,
+even when the values of certain expressions are not known until run-time,
+the types of those expressions may be known and run-time error may be
+deduced in advance.  In these cases, Rio will report the error immediately
+(e.g. at "compile time").
 
 An exhaustive set of unit tests (integrated into the program) will help
 ensure that run-time errors are either triggered by evaluation or predicted
 at compile time.  However, run-time errors may remain unpredicted, and this
-model of analysis (typing as assertions) provides no guarantee of soundness.
+mode of analysis (typing as assertions) provides no guarantee of soundness.
 
 We then introduce a means for a programmer to identify a function as
 "sound".  This alters what the compiler will treat as an error, flipping the
@@ -854,9 +890,9 @@ type system.  They should enable the compiler to infer types easily, and
 they should be easily describable in the type system, in order to minimize
 the number of type declarations required to achieve soundness.
 
-In order to increase opportunities for finding errors at compile-time, and
-to maximize the knowledge that can be propagated during [partial
-evaluation](#partial-evaluation), Rio semantics will often be "tighter" than
+In order to increase opportunities for finding errors statically, and to
+maximize the knowledge that can be propagated during [early
+evaluation](#early-evaluation), Rio semantics will often be "tighter" than
 those of other dynamic languages.  The arguments passed to a function must
 agree with its formal parameter list.  Rio provides fewer [implicit type
 conversions](#implicit-type-conversions).  Rio does not have a "null" value,
@@ -901,7 +937,7 @@ program grows, the code being explored requires a larger context (bindings
 of names to values) than that of the default REPL environment.  One can
 manually construct a environment in the REPL that matches the lexical
 environment at a given point in a program, but the environment is different
-at different places in the code.  Moving ones attention from one place to
+at different places in the code.  Moving one's attention from one place to
 another or modifying code changes the environment.  The effort required to
 replicate a similar environment in the REPL gets out of hand as the program
 grows.  Unfortunately, when things get complicated is when interactive
@@ -911,7 +947,7 @@ validation of assumptions would provide the most value.
 ## Interactive Value Exploration
 
 IVE is an alternative to REPL-style interaction in a [live
-programming](#live-programming), [functional](#functional) environment.
+programming](#live-programming) environment.
 
 Using a REPL involves a sequential stream of commands and responses that
 modify the interactive environment, resulting in [the REPL problem
@@ -932,9 +968,10 @@ or parallel execution.
 By default, Rio uses [applicative order
 ](https://en.wikipedia.org/wiki/Evaluation_strategy).  Function arguments
 are evaluated before the function is called, and an assignment's value is
-evaluated before its body.  (In reality, partial evaluation may actually be
-used, but the observed behavior should be semantically consistent with
-applicative order.)
+evaluated before its body.  (In reality, early evaluation may change the
+*actual* order of evaluation, but the observed behavior will remain
+consistent with that of applicative order.)
+
 
 ### `defer EXPR`
 
@@ -947,7 +984,7 @@ operator.  For example:
 
 Here, when `y` is 0, `f(x/y)` will not be evaluated.  When `y` is non-zero,
 `g` will be called, and then, when (and if) the value of its first parameter
-is ever needed, `f(x/y)` will be evaluated (at most once).
+is needed, `f(x/y)` will be evaluated (at most once).
 
 To be clear, `defer EXPR` does not specify a lazy evaluation *strategy* for
 the sub-terms of `EXPR`.  In the above example, `x/y` will still be
@@ -971,7 +1008,7 @@ observed if the value is never used.
 
 ## Top Module == Build
 
-There should be no need for a separate [build system](#build-system) or
+There should be no need for a separate [build system](#build-systems) or
 language.  If any artifacts are to be produced by the project -- e.g. a
 command-line executable -- their construction would be described in the
 language, in the "top" or "main" module file of the project.
@@ -981,33 +1018,6 @@ To make this work well, we will want:
  * [Easy Parallelization](#order-annotations)
  * [Reactive programming](#reactive-programming)
  * APIs into the compiler
-
-
-## Immutable Objects / Exploded Functions
-
-A parallel can be drawn between functions, objects, and modules.
-
-In a function body, we have a number of local variable assignments that may
-build on each other, eventually used in producing the result.  Each local
-assignment adds to the local environment, which is discarded at the end of
-the function.
-
-In an object constructor, we have a function body (with its local variable
-assignments) and also member name/value assignments.  The result of the
-function is the member bindings.  In a module, we also have local and
-exported name/value bindings, and the exported bindings are the result.
-Sometimes the value associated with a member/export is also used elsewhere
-locally, so a brief name (as with a local variable) is used.  Collecting all
-of the members/exports at the bottom may not be the most natural
-organization.  Giving members/exports a different naming convention seems
-awkward.
-
-Instead, we could use a keyword (“export var = ...”) or annotation (“*var* =
-...”) (a la Oberon) to indicate visibility.  We would also need to indicate
-that all bindings will constitute the result.  A “bindings” construct could
-surround the bindings, and evaluate to the bindings.  “{...}” or “bindings {
-... }”.  Module context could default to “bindings”, rather than function
-body.
 
 
 ## Execution Contexts
@@ -1035,7 +1045,7 @@ Exceptions: Although ugly, exceptions appear necessary for certain practical
 reasons.  After all, we can’t have one memory allocation failure take down
 our whole world.  We can, however, take an EC down, after partitioning our
 world into ECs.  Therefore, instead of adding exceptions to a language --
-which consitute another way for functions to return -- we should have fatal
+which constitute another way for functions to return -- we should have fatal
 errors *not* return, and simply halt execution (of the EC).  The caller of a
 halting function has no way to catch this, but the owner of the EC can
 observe the change of state of the EC from "running" to "halted".  Note that
@@ -1049,8 +1059,8 @@ the EC, or simply allow the user to decide when to stop waiting.
 A language that leaves these responsibilities to user libraries provides an
 incomplete set of tools to the programmer.  To evaluate such a language we
 must consider it together with some such library.  OS processes are
-typically a very blunt instrument, and without tight integration with the
-language implementation it is unlikely to provide optimal performance.
+typically a very blunt instrument, and, without tight integration with the
+language implementation, are unlikely to provide optimal performance.
 
 
 ## Exceptions
@@ -1075,6 +1085,7 @@ Specialization: We should be able to write a single, generic implementation
 of an algorithm instead of multiple hard-coded variants specialized for
 different use cases.  The compiler should be able to specialize based on
 constant parameters.
+
 
 ## Unique Values
 
@@ -1113,10 +1124,10 @@ can be shadowed.  For example, in this code excerpt ...
     x := 2
     ...
 
-... the line `x := 2` does not actually *modify* a variable.  It introduces a
-*new* variable, also named `x`.  Only the new `x` will be visible to lines
-of code that follow.  The old `x` remains unchanged, so the behavior of `f`
-is not affected by the definition that follows it.
+... the line `x := 2` does not actually *modify* a variable.  It introduces
+a *new* variable, also named `x`.  Only the new `x` will be visible to the
+lines of code that follow.  The old `x` remains unchanged, so the behavior
+of `f` is not affected by the definition that follows it.
 
 As a shorthand for `x := x + EXPR`, we can write `x += EXPR`.  Similar
 operators `-=`, `*=`, etc., are also defined.
@@ -1129,7 +1140,7 @@ the intermediate values.  This might happen more often in conjunction with
 Shadowing is also important for [looping syntax](#looping-syntax).
 
 Because un-intentional shadowing is a frequent source of bugs, the syntax
-makes shadowing explicit.  Shadowing is disallowed when `=` isused.
+makes shadowing explicit.  Shadowing is disallowed when `=` is used.
 Shadowing requires `:=`, `+=`, etc..
 
 
@@ -1216,6 +1227,7 @@ For example:
             total += x
         total
 
+
 ### Implementation Details
 
 More precisely, looping syntax translates an expression of this general
@@ -1252,6 +1264,7 @@ Translating the above example, we get:
             n = n + 1
             _loop(_loop, n, total)
         _loop(_loop, n, total)
+
 
 ## Action Syntax
 
@@ -1302,7 +1315,7 @@ valid action object, so `connect` will be expected to return an action
 object.  The last line uses an `OK()` constructor to wrap the successful
 result in an action object.
 
-This composesly nicely with assignments, [update syntax](#update-syntax),
+This composes nicely with assignments, [update syntax](#update-syntax),
 and [looping syntax](#looping-syntax), as in this example:
 
     fetch_list = list_url ->
@@ -1339,7 +1352,7 @@ For example:
 
 The first Rio implementation is a "bootstrap".  The focus is on simplicity,
 not performance and feature richness.  It does not compile, and it does not
-perform partial evaluation.  The goal is to enable a Rio implementation
+perform early evaluation.  The goal is to enable a Rio implementation
 written in Rio as quickly as possible to reduce the time spent on non-Rio
 code that will not automatically translate to all Rio-supported
 environments.
@@ -1422,10 +1435,10 @@ or their tooling.  One common dividing line is that between compiled
 languages and interpreted.  Another is that between statically-typed and
 dynamically-typed languages.  And there is the [high-level versus
 low-level](#high-level-versus-low-level) gap.  Each side of these divides
-has its plusses and minuses, making them more or less suitable to solving
-different problems.  And some languages have thei own unique tricks, or
-killer features, such as language designed for use in a [build system
-](#build-system).
+has its pluses and minuses, making them more or less suitable to solving
+different problems.  And some languages have their own unique tricks, or
+killer features, such as languages designed for use in [build
+systems](#build-systems).
 
 Hopefully a language will be able to bridge these divides and provide the
 best of both worlds.
@@ -1450,17 +1463,16 @@ language, perpetuating the tyranny of [too many
 languages](#too-many-languages).
 
 We feel that much of the performance benefits of low-level languages can be
-addressed with a high-level language via [compile-time
-evaluation](#compile-time-evaluation), [assertions](#assertions),
-[hints](#hints), [typed structures](#typed-structures), and dynamic
-[profiling](#profiling).
+addressed with a high-level language via [early evaluation
+](#early-evaluation), [assertions](#assertions), [hints](#hints), [typed
+structures](#typed-structures), and dynamic [profiling](#profiling).
 
 In such a language, the programmer's task during optimization is one of
 demonstrating to the compiler that certain shortcuts are legitimate, rather
 than grabbing the controls from the compiler.  Some examples: Type
 assertions can allow the compiler to predict method lookups and inline the
 methods.  The compiler can employ mutation when it knows that the data
-structure is not shared, and a programmer could maximise this by being aware
+structure is not shared, and a programmer could maximize this by being aware
 of the limitations of escape analysis, or even by including
 (compiler-checked) assertions of uniqueness of references (a la Rust).
 
@@ -1549,9 +1561,9 @@ or by directly creating an instance.  For example:
     a = Vector(I32)([1, 2, 3])
 
 In the above example, a declarative heterogeneous vector expression is used
-to intialize a homogeneous vector.  It is intended that [partial
-evaluation](#partial-evaluation) will "optimize out" the construction of
-such intermediate heterogeneous vectors.
+to initialize a homogeneous vector.  It is intended that [early
+evaluation](#early-evaluation) will "optimize out" the construction of such
+intermediate heterogeneous vectors.
 
 
 ## Reified Types
@@ -1572,9 +1584,9 @@ Memoization is important for [reactive programming](#reactive-programming),
 to allow results at T(N+1) to reuse results calculated at T(N).
 
 Since memoization seems to inherently involve stateful side effects, how do
-we have it in a purely function language?  We can address this by
+we have it in a purely functional language?  We can address this by
 considering the memoization cache as state managed by the [execution
-context](#execution-context), which is essentially an instance of the
+context](#execution-contexts), which is essentially an instance of the
 interpreter.  Those state changes are not observable by code running
 *within* that EC, so that code sees no side effects and retains its
 functional purity.  The EC itself explicitly deals with that state, not as a
@@ -1584,12 +1596,12 @@ One challenge with using memoization broadly is placing bounds on the memory
 usage.  If we accumulate prior results indefinitely, we run out of
 resources.  We can associate the memoization cache with a [reactive
 programming](#reactive-programming) graph node -- visible to the EC, not the
-code it hosts.  Node "liveness" will control the lifetime of the memozation
+code it hosts.  Node "liveness" will control the lifetime of the memoization
 cache.  Together with [deterministic garbage collection
 ](#deterministic-garbage-collection) this can ensure proper cleanup.  [This
 works for results accumulated over multiple reactive evaluation cycles;
 within any one evaluation cycles, all memoized results would accumulate, but
-I dont think this is the problematic case.]
+I don't think this is the problematic case.]
 
 
 ## Syntactic Resiliency
@@ -1669,12 +1681,11 @@ lines.  Such lines begin a new block, and other such lines are treated as
 continuation lines.
 
 
-## CTE of Constructors
+## Early Evaluation of Constructors
 
-An implication of [compile-time evaluation](#compile-time-evaluation) that
-is fairly straightforward but still worth calling attention to is that we
-can rely on constructors to be executed at compile-time when they are
-invoked on literals.
+An implication of [early evaluation](#early-evaluation) that is fairly
+straightforward but still worth calling attention to is that we can rely on
+constructors to be evaluated early when they are invoked on literals.
 
 This reduces the pressure to complicate the language with grammar for
 literals of various types.  For example, regular expressions can be
@@ -1684,16 +1695,16 @@ constructed from a string:
 
 This is just as good as a regex literal from a performance perspective.
 Also, any mal-formedness *within* the string will be detected by the `RE`
-constructor at compile-time (in the live environment, *immediately*, as it
-is typed).
+constructor statically (in the live environment, *immediately*, as it is
+typed).
 
-Types derived from [`String`](#string) can also benefit, without being
+Types derived from [`String`](#strings) can also benefit, without being
 hard-coded into the language with their own syntax (as in Python).
 
     text = Utf8("abcdef")
     text = Bin("abcdef")
 
-Perhaps the mot important implication of CTE for constructors is the
+Perhaps the most important implication of CTE for constructors is the
 construction of complex types involving typed data structures.  For example:
 
     V32 = TypedVector(Uint32)
@@ -1701,9 +1712,10 @@ construction of complex types involving typed data structures.  For example:
 
 Here, an untyped vector (a vector of `Any`) is being constructed and then
 passed to the `V32` constructor, which then packs the values into a typed
-vector.  This is all performed at compile-time, no matter what context it
-appears in.  At run-time this manifests only as a constant vector of 32-bit
-values.
+vector.  This is performed exactly once, even if the line of code in which
+it appears is "evaluated" multiple times (according to the canonical order
+of evaluation).  At run-time this manifests only as a constant vector of
+32-bit values.
 
 Rio does not need to summon "backwards-in-time" type inference in order to
 achieve this.  Dynamic typing provides a simple mental mental model for
@@ -1713,14 +1725,14 @@ Going a bit further, consider the following example:
 
     a = V32([x, y, z])
 
-Even when the values of `x`, `y`, and `z` are not known at compile-time, the
+Even when the values of `x`, `y`, and `z` are not known statically, the
 size of the vector is known and the actual existence of the intermediate
 untyped vector is unnecessary.
 
 One option that may be explored is using an arbitrary precision numeric data
 type for numeric literals, in which ordinary operations (`+`, `-`, `==`,
 ...) on the value will first convert it to float64.  This would ensure that
-CTE can easily reduce the values to float64 and avoid complex
+early evaluation can easily reduce the values to float64 and avoid complex
 representations and heap allocation at run-time, yet preserve the original
 meaning of the literal when it is passed to a constructor for an alternate
 numeric type.
@@ -1733,6 +1745,7 @@ interface provided for bypassing coercion to float64.
 
 
 ## Primitive Types
+
 
 ### Number
 
@@ -1764,10 +1777,10 @@ than 2^64.
 
 Perhaps ideally, we could have arbitrary-precision decimal numbers, with all
 operations preserving precision, except for division, which would return
-floating point. CTE could (hopefully) tell the compiler when integers could
-be used to represent the values, such as in a loop counter.  Of couse, some
-`Float64` type would still have to be available in the language for type
-structures and vectors.
+floating point.  Abstract interpretation could (hopefully) tell the compiler
+when integers could be used to represent the values, such as in a loop
+counter.  Of course, some `Float64` type would still have to be available in
+the language for type structures and vectors.
 
 However, floating point is overwhelmingly the practical choice.
 
@@ -1793,11 +1806,11 @@ Some other options under consideration:
    trailing "16" subscript).
 
  * Precise literals, converted to `Float64` when used.  This will allow
-   high-precision number types to leverage [CTE of
-   Constructors](#cte-of-constructors).
+   high-precision number types to leverage [early evaluation of
+   constructors](#early-evaluation-of-constructors).
 
 
-### String
+### Strings
 
 Strings are typed vectors of 8-bit unsigned integers.
 
@@ -1817,5 +1830,5 @@ One may derive a type that ensures the contents are well-formed UTF-8,
 allowing for optimization of some UTF-8-specific operations.  Perhaps this
 will be built into the language.
 
-Note that derived string types benefit from
-[CTE of Constructors](#cte-of-constructors) optimizations.
+Note that derived string types benefit from [early evaluation of
+constructors](#early-evaluation-of-constructors).
