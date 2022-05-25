@@ -60,88 +60,83 @@ let matchFun = (value, ifStackBody, ifNat, ifNot) =>
 // Eval
 //==============================================================
 
-// tasks[] is an array of IL records or internal tasks (_call or _ret).
-// values[] is an array of result values.
-//
-// The last element in tasks[] is the next todo entry to be processed when
-// step() is called.  Processing an IL record pushes its result onto
-// values[].  Processing an internal task performs intermediate steps
-// required for processing an IApp.
+// tasks[] holds a stack of structures akin to activation records.  Each
+//   maintains the state of evaluating a list of sub-nodes.
+// values[] holds a stack of values that have been computed from sub-nodes.
 //
 class Eval {
     constructor(node, stack, ctors) {
         this.ctors = ctors;
         this.values = [];
-        this.tasks = [node];
-        this.stack = stack;
+        this.tasks = [];
+        this.done = false;
+        this.reduce(node, stack);
     }
 
     // Add a value to the end of values[]
     push(value) {
         if (value.T == "VErr") {
-            this.tasks = [];
-            this.values = [];
+            this.done = true;
         }
         this.values.push(value);
     }
 
-    // Returns result value, or `undefined` if still pending
-    step() {
-        let node = this.tasks.pop();
-        //logf("V: %q\n", this.values);
-        //logf("T: %q @ %s\n", node, this.tasks.length);
-
-        if (node == undefined) {
-            return this.values[0];
-        } else if (node.T == "IVal") {
+    // Given an IL node, push its value, or a task that will push its value.
+    reduce(node, stack) {
+        let value;
+        if (node.T == "IVal") {
             let [ty, arg] = node;
-            this.push(this.ctors(ty, arg));
+            value = this.ctors(ty, arg);
         } else if (node.T == "IArg") {
             let [ups, pos] = node;
-            let frame = stackGet(this.stack, ups);
-            if (!frame || !frame[pos]) {
-                printf("node = %q\nstack = %q\n", node, this.stack);
-            }
+            let frame = stackGet(stack, ups);
             assert(frame !== undefined && frame[pos] !== undefined);
-            this.push(frame[pos]);
+            value = frame[pos];
         } else if (node.T == "IFun") {
             let [body] = node;
-            this.push(VFun(this.stack, body));
-        } else if (node.T == "IApp") {
-            let [fn, args] = node;
-            this.tasks.push({T:"_call", idx: this.values.length});
-            for (let n = args.length-1; n >= 0; --n) {
-                this.tasks.push(args[n]);
-            }
-            this.tasks.push(fn);
-        } else if (node.T == "_call") {
-            let idx = node.idx;
-            let fn = this.values[idx];
-            let args = this.values.slice(idx + 1);
-            this.values = this.values.slice(0, idx);
-            matchFun(
-                fn,
-                (stack, body) => {
-                    this.tasks.push({T:"_ret", stack: this.stack});
-                    this.stack = stackPush(stack, args);
-                    this.tasks.push(body);
-                },
-                (fnNative) => this.push(fnNative(...args)),
-                () => this.push(VErr("NotAFunction", fn))
-            );
-        } else if (node.T == "_ret") {
-            this.stack = node.stack;
+            value = VFun(stack, body);
         } else if (node.T == "IErr") {
             let [desc] = node;
-            this.push(VErr(desc, null));
+            value = VErr(desc, null);
+        } else if (node.T == "IApp") {
+            let [fn, args] = node;
+            this.tasks.push({n: 0, subNodes: [fn, ...args], stack, node});
+            return;
         } else {
             fail("Unsupported: %q", node);
         }
+
+        this.push(value);
+    }
+
+    step() {
+        if (this.done || this.tasks.length == 0) {
+            this.done = true;
+            return false;
+        }
+        let {n, subNodes, stack, node} = this.tasks.pop();
+
+        if (n < subNodes.length) {
+            this.tasks.push({n: n+1, subNodes, stack, node});
+            this.reduce(subNodes[n], stack);
+        } else {
+            assert(node.T == "IApp");
+            let vi = this.values.length - n;
+            let fnValue = this.values[vi];
+            let argValues = this.values.slice(vi + 1);
+            this.values = this.values.slice(0, vi);
+            matchFun(fnValue,
+                     (env, body) => this.reduce(body, stackPush(env, argValues)),
+                     (fnNative) => this.push(fnNative(...argValues)),
+                     () => this.push(VErr("NotAFunction", fn))
+                    );
+        }
+        return true;
     }
 
     sync() {
-        while (this.step() == undefined) {}
-        return this.step();
+        while (this.step()) {}
+        return this.values[this.values.length - 1];
     }
 };
 
@@ -193,7 +188,8 @@ let valueFmt = v =>
                      ")") :
     v.T == "VObj" ? "(VObj " + fmtPairs(zip(v.fields, v.values)) + ")" :
     v.T == "VCls" ? "(VCls " + v.fields.join(" ") + ")" :
-    "UnknownValue: " + serialize(value);
+    v.T == "VNFn" ? "(VNfn " + (v.v.name || v.v.toString()) + ")" :
+    "UnknownValue: " + serialize(v);
 
 let vassert = (cond, desc, what) =>
     !cond && VErr(desc, what);
