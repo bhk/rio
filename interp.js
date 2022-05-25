@@ -70,6 +70,8 @@ class Eval {
         this.values = [];
         this.tasks = [];
         this.done = false;
+        this.results = [];
+        this.result = null;
         this.reduce(node, stack);
     }
 
@@ -98,6 +100,13 @@ class Eval {
         } else if (node.T == "IErr") {
             let [desc] = node;
             value = VErr(desc, null);
+        } else if (node.T == "ITag") {
+            let [ast, il] = node;
+            this.tasks.push({n: 0, subNodes: [il], stack, node});
+            // create new Result
+            this.result = {ast, value: null, parent: this.result};
+            this.results.push(this.result);
+            return;
         } else if (node.T == "IApp") {
             let [fn, args] = node;
             this.tasks.push({n: 0, subNodes: [fn, ...args], stack, node});
@@ -119,8 +128,7 @@ class Eval {
         if (n < subNodes.length) {
             this.tasks.push({n: n+1, subNodes, stack, node});
             this.reduce(subNodes[n], stack);
-        } else {
-            assert(node.T == "IApp");
+        } else if (node.T == "IApp") {
             let vi = this.values.length - n;
             let fnValue = this.values[vi];
             let argValues = this.values.slice(vi + 1);
@@ -130,8 +138,28 @@ class Eval {
                      (fnNative) => this.push(fnNative(...argValues)),
                      () => this.push(VErr("NotAFunction", fn))
                     );
+        } else if (node.T == "ITag") {
+            let [ast, il] = node;
+            // leave value of sub-node on values[] stack
+            // store value in Result
+            this.result.value = this.values[this.values.length - 1];
+            this.result = this.result.parent;
         }
         return true;
+    }
+
+    // Return result: {ast, value, parent}
+    where() {
+        return this.result;
+    }
+
+    // Return result: {ast, value, parent}
+    getResult(parentResult, ast) {
+        for (let r of this.results) {
+            if (r.parent == parentResult && r.ast === ast) {
+                return r;
+            }
+        }
     }
 
     sync() {
@@ -645,11 +673,6 @@ let manifestVars = {
 
 let [manifestEnv, manifestStack] = makeManifest(manifestVars);
 
-let evalAST = (ast) => {
-    let il = manifestEnv.desugar(ast);
-    return new Eval(il, manifestStack, builtinCtors).sync();
-};
-
 //==============================================================
 // Tests
 //==============================================================
@@ -657,9 +680,15 @@ let evalAST = (ast) => {
 let ET = (source, valueOut, oobOut) => {
     //printf("ET: %s\n", valueOut);
     source = L(source).replace(/ \| /g, "\n");
+    // parse
     let [ast, oob] = parseModule(source);
     eqAt(2, "OOB: " + (oobOut || ""), "OOB: " + astFmtV(oob || []));
-    eqAt(2, valueFmt(evalAST(ast)), valueOut);
+    // evaluate
+    let il = manifestEnv.desugar(ast);
+    let ev = new Eval(il, manifestStack, builtinCtors);
+    let value = ev.sync();
+    eqAt(2, valueFmt(value), valueOut);
+    return ev;
 };
 
 // manifest variables
@@ -733,8 +762,18 @@ ET("if 1 < 0: 1 | 0", "0");
 
 // Assert
 
-ET("assert 2<3 | 1", "1");
-ET("assert 2>3 | 1", '(VErr "Stop")');
+{
+    ET("assert 2<3 | 1", "1");
+    let ev = ET("assert 2>3 | 1", '(VErr "Stop")');
+    let w = ev.where();
+    let ast = w.ast;
+    eq(ast.T, "S-Assert");
+    eq(ast.pos, 0);
+    let [cond] = ast;
+    let w2 = ev.getResult(w, cond);
+    eq(w2.ast.T, "Binop");
+    eq(w2.value, VBool(false));
+}
 
 // Let
 

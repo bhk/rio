@@ -9,17 +9,25 @@ import {astFmt, parseModule} from "./syntax.js";
 //==============================================================
 
 // Inner Language nodes (IExpr's)
-//   (IVal type args)       // constant/literal/runtime value
-//   (IArg index)           // argument reference
-//   (IFun body)            // function construction (lambda)
-//   (IApp fn arg)          // function application
-//   (IErr desc)            // syntax/compilation error
+//   IL.Val(type, args)      // constant/literal/runtime value
+//   IL.Arg(index)           // argument reference
+//   IL.Fun(body)            // function construction (lambda)
+//   IL.App(fn, arg)         // function application
+//   IL.Err(desc)            // syntax/compilation error
+//   IL.Tag(ast, il)         // identify source code expression
 //
 // value : VNode
 // index : (native) number
 // nfn : (native) function
 // desc : string
+// ast : AST node
+// il : IL node
 // all others : IExpr || [IExpr]
+//
+// A given AST node may expand to a tree of many IL nodes.  Instead of
+// annotating every IL node with its originiating AST node, we use IL Tag
+// nodes to associate an AST node with the IL node that computes its value.
+// Tag nodes do not affect the value computed by the IL tree.
 
 let IL = {
     Val: (type, arg) => N("IVal", type, arg),
@@ -27,6 +35,7 @@ let IL = {
     Fun: (body) => N("IFun", body),
     App: (fn, args) => N("IApp", fn, args),
     Err: (desc) => N("IErr", desc),
+    Tag: (ast, il) => N("ITag", ast, il),
 };
 
 IL.fmt = sexprFormatter({
@@ -36,6 +45,7 @@ IL.fmt = sexprFormatter({
     IVal: (e) => (e[0] == "Number" ? String(e[1]) :
                   e[0] == "String" ? '"' + e[1] + '"' :
                   e[1]),
+    ITag: (e, f) => f(e[1]),
 });
 
 IL.str = str  => IL.Val("String", str);
@@ -86,6 +96,7 @@ let astFn    = (params, body) => N("Fn", params, body);
 let astBlock = (lines, vars)  => N("Block", lines, vars);
 let astBinop = (op, a, b)     => N("Binop", op, a, b);
 let astIIf   = (cond, a, b)   => N("IIf", cond, a, b);
+let astAssert = (cond)        => N("S-Assert", cond);
 
 let astLet = (target, value, body) =>
     astCall( astFn([target], body), [value]);
@@ -206,7 +217,10 @@ let dsFun = (body, params, env) =>
 
 // Construct an IL "if" construct from AST condition, then, & else
 let dsIf = (c, a, b, env) =>
-    IL.App(IL.send(env.desugar(c), "switch", dsFun(a, [], env), dsFun(b, [], env)), []);
+    IL.App(IL.send(env.desugar(c),
+                   "switch",
+                   dsFun(a, [], env),
+                   dsFun(b, [], env)), []);
 
 // Construct an IL "let" construct from AST variable name, value, and body.
 let dsLet = (target, value, body, env) =>
@@ -232,6 +246,7 @@ let dsBlock = (lines, loopVars, env) => {
     }
     let T = ast.T;
     let k = astBlock(rest, loopVars);
+    let node;
 
     if (T == "S-If") {
         let [cond, then] = ast;
@@ -243,7 +258,7 @@ let dsBlock = (lines, loopVars, env) => {
                 then = astBlock([then], loopVars);
             }
         }
-        return dsIf(cond, then, k, env);
+        node = dsIf(cond, then, k, env);
     } else if (T == "S-Let") {
         let [target, aop, value] = ast;
         if (aop != "=" && aop != ":=") {
@@ -258,7 +273,7 @@ let dsBlock = (lines, loopVars, env) => {
         } else if (aop != "=" && !isBound) {
             return IL.Err("Undefined:" + astName_string(target));
         }
-        return dsLet(target, value, k, env);
+        node = dsLet(target, value, k, env);
     } else if (T == "S-Loop") {
         let [lines] = ast;
         let lastStmt = lines[lines.length - 1];
@@ -270,20 +285,22 @@ let dsBlock = (lines, loopVars, env) => {
         let body = astBlock(lines);
         let vars = getLoopVars(body).filter(n => env.find(astName_string(n)));
         let simple = xlatLoop(astBlock(lines, vars), k, vars);
-        return env.desugar(simple);
+        node = env.desugar(simple);
     } else if (T == "S-While") {
         let [cond] = ast;
-        return dsIf(cond, k, astBlock([astName("break")], loopVars), env);
+        node = dsIf(cond, k, astBlock([astName("break")], loopVars), env);
     } else if (T == "S-LoopWhile") {
         let [cond, block] = ast;
         let loop = N("S-Loop", [N("S-While", cond), ...block])
-        return dsBlock([loop, ...rest], loopVars, env);
+        node = dsBlock([loop, ...rest], loopVars, env);
     } else if (T == "S-Assert") {
         let [cond] = ast;
-        return dsIf(cond, k, astCall(astName(".stop"), []), env);
+        node = dsIf(cond, k, astCall(astName(".stop"), []), env);
     } else {
-        return IL.Err("unknown statement");
+        node = IL.Err("unknown statement");
     }
+
+    return IL.Tag(ast, node);
 };
 
 // Desugar an AST expression
@@ -291,55 +308,58 @@ let desugar = (ast, env) => {
     if (!env) todo();
     let recur = expr => desugar(expr, env);
     let T = ast.T;
+    let node;
     //test.printf("AST: %s\n", astFmt(ast));
 
     if (T == "Block") {
         // loopVars is present only when Block is constructed by desugaring
         let [lines, loopVars] = ast;
-        return dsBlock(lines, loopVars, env);
+        node = dsBlock(lines, loopVars, env);
     } else if (T == "Number") {
-        return IL.num(ast[0]);
+        node = IL.num(ast[0]);
     } else if (T == "String") {
-        return IL.str(ast[0]);
+        node = IL.str(ast[0]);
     } else if (T == "Name") {
         let [name] = ast;
         if (name == "repeat" || name == "break") {
-            return IL.Err("bad " + name);
+            node = IL.Err("bad " + name);
         } else if (name == ".stop") {
-            return IL.lib("stop");
+            node = IL.lib("stop");
+        } else {
+            let rec = env.find(name);
+            if (!rec) {
+                node = IL.Err("Undefined:" + name);
+            } else {
+                let [ups, pos] = rec;
+                node = IL.Arg(ups, pos);
+            }
         }
-        let rec = env.find(name);
-        if (!rec) {
-            return IL.Err("Undefined:" + name);
-        }
-        let [ups, pos] = rec;
-        return IL.Arg(ups, pos);
     } else if (T == "Fn") {
         let [params, body] = ast;
-        return dsFun(body, params, env);
+        node = dsFun(body, params, env);
     } else if (T =="Call") {
         let [fn, args] = ast;
-        return IL.App(recur(fn), args.map(recur));
+        node = IL.App(recur(fn), args.map(recur));
     } else if (T =="Dot") {
         let [a, b] = ast;
-        return IL.prop(recur(a), astName_string(b));
+        node = IL.prop(recur(a), astName_string(b));
     } else if (T =="Index") {
         let [a, b] = ast;
-        return IL.send(recur(a), "@[]", recur(b));
+        node = IL.send(recur(a), "@[]", recur(b));
     } else if (T =="Binop") {
         let [op, a, b] = ast;
-        return op == "$"
+        node = op == "$"
             ? IL.App(recur(a), [recur(b)])
             : IL.send(recur(a), "@" + op, recur(b));
     } else if (T == "Unop") {
         let [op, svalue] = ast;
-        return IL.prop(recur(svalue), op);
+        node = IL.prop(recur(svalue), op);
     } else if (T == "IIf") {
         let [c, a, b] = ast;
-        return dsIf(c, a, b, env);
+        node = dsIf(c, a, b, env);
     } else if (T == "Vector") {
         let [elems] = ast;
-        return IL.App(IL.lib("vecNew"), elems.map(recur));
+        node = IL.App(IL.lib("vecNew"), elems.map(recur));
     } else if (T == "Map") {
         let [rpairs] = ast;
         let keys = [];
@@ -349,7 +369,7 @@ let desugar = (ast, env) => {
             values.push( rpairs[ii+1] );
         }
         let mapCons = IL.App(IL.lib("mapDef"), keys);
-        return IL.App(mapCons, values.map(recur));
+        node = IL.App(mapCons, values.map(recur));
     } else if (T == "Match") {
         let [value, cases] = ast;
         let v = astName(".value");
@@ -359,16 +379,19 @@ let desugar = (ast, env) => {
             let [pattern, body] = c;
             m = xlatCase(v, pattern, body, m);
         }
-        return recur(astLet(v, value, m));
+        node = recur(astLet(v, value, m));
     } else if (T == "Missing") {
-        return IL.Err("missing");
+        node = IL.Err("missing");
     } else if (T == "Error") {
         // constructed only by desugaring
         let [desc] = ast;
-        return IL.Err(desc);
+        node = IL.Err(desc);
     } else {
-        return IL.Err("unknown");
+        node = IL.Err("unknown");
     }
+
+    // AST nodes without pos are "synthetic" products of desugaring
+    return ast.pos != null ? IL.Tag(ast, node) : node;
 };
 
 //==============================================================
@@ -388,8 +411,8 @@ let $a = IL.Arg(1, 0);  // 'a' in testEnv
 let $b = IL.Arg(1, 1);  // 'b' in testEnv
 
 let serializeIL = input =>
-    IL.fmt(input.T ? input :                         // IL
-          desugar(parseToAST(L(input)), testEnv));  // source
+        IL.fmt(input.T ? input :                         // IL
+               desugar(parseToAST(L(input)), testEnv));  // source
 
 let ilEQ = (a, b) => eqAt(2, serializeIL(a), serializeIL(b));
 
@@ -589,6 +612,7 @@ ilEQ([
 // Block: S-Assert
 ilEQ([ 'assert x', '1' ],
      IL.iif($x, $1, IL.App( IL.lib("stop"), [])));
+
 
 //==============================================================
 // exports
