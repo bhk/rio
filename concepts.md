@@ -858,9 +858,39 @@ In order to increase opportunities for finding errors at compile-time, and
 to maximize the knowledge that can be propagated during [partial
 evaluation](#partial-evaluation), Rio semantics will often be "tighter" than
 those of other dynamic languages.  The arguments passed to a function must
-agree with its formal parameter list.  Rio provides fewer implicit type
-conversions, such as coercion to boolean.  Rio does not have a "null" value,
+agree with its formal parameter list.  Rio provides fewer [implicit type
+conversions](#implicit-type-conversions).  Rio does not have a "null" value,
 and treats accesses of undefined vector or map members as errors.
+
+
+## Implicit Type Conversions
+
+Most dynamic languages support a rich set of implicit conversions or
+coercions.  While Rio generally has a dynamic "feel", it differs in this
+respect.
+
+* Implicit conversions require the programmer to know the conversion rules
+  implemented by the languages and/or the data type involved.  This is an
+  additional cognitive burden for programmers.
+
+* Implicit conversions can make the intent of the author less clear.
+  Without them, the programmer would have to be more explicit, which can
+  help someone reading the code to see exactly what kind of conversion is
+  anticipated, and can help the development environment automatically
+  [detect errors statically](#early-evaluation).
+
+Particularly problematic are the cases of implicit conversions of a
+condition to a truth value, and implicit conversions performed when testing
+equality.  Some dynamic languages, like Lisp & Lua, use very simple rules,
+but others have rules that are so elaborate that most programmers who
+regularly use the language would be unable to accurately describe them.
+[JavaScript, perhaps the worst, even has rules for truthiness that are not
+consistent with its own rules for equality.  Even when `x == y`, `if (x)
+...` might not do the same thing as `if (y) ...`.]
+
+The implicit numeric conversions in the C language are another example of a
+set of rules so complex that working programmers will often be unable to
+faithfully recount them.
 
 
 ## The REPL Problem
