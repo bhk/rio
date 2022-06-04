@@ -235,8 +235,13 @@ let getProp = (value, name) => {
     return gp(value, name);
 };
 
+let toString = o =>
+    ( typeof o == "string" ? str :
+      o.T == "VStr" ? o.v :
+      valueFmt(str));
+
 let unknownProperty = (value, name) =>
-    VErr("UnknownProperty:" + name, value);
+    VErr("UnknownProperty:" + toString(name), value);
 
 // Wrap a "native" binop function with a VNFn-suitable function.
 // as a "Lib" function.
@@ -673,6 +678,13 @@ let manifestVars = {
 
 let [manifestEnv, manifestStack] = makeManifest(manifestVars);
 
+let evalAST = ast => {
+    let il = manifestEnv.desugar(ast);
+    return new Eval(il, manifestStack, builtinCtors);
+};
+
+export {evalAST, valueFmt};
+
 //==============================================================
 // Tests
 //==============================================================
@@ -684,8 +696,7 @@ let ET = (source, valueOut, oobOut) => {
     let [ast, oob] = parseModule(source);
     eqAt(2, "OOB: " + (oobOut || ""), "OOB: " + astFmtV(oob || []));
     // evaluate
-    let il = manifestEnv.desugar(ast);
-    let ev = new Eval(il, manifestStack, builtinCtors);
+    let ev = evalAST(ast);
     let value = ev.sync();
     eqAt(2, valueFmt(value), valueOut);
     return ev;

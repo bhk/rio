@@ -337,16 +337,16 @@ let desugar = (ast, env) => {
     } else if (T == "Fn") {
         let [params, body] = ast;
         node = dsFun(body, params, env);
-    } else if (T =="Call") {
+    } else if (T == "Call") {
         let [fn, args] = ast;
         node = IL.App(recur(fn), args.map(recur));
-    } else if (T =="Dot") {
+    } else if (T == "Dot") {
         let [a, b] = ast;
         node = IL.prop(recur(a), astName_string(b));
-    } else if (T =="Index") {
+    } else if (T == "Index") {
         let [a, b] = ast;
         node = IL.send(recur(a), "@[]", recur(b));
-    } else if (T =="Binop") {
+    } else if (T == "Binop") {
         let [op, a, b] = ast;
         node = op == "$"
             ? IL.App(recur(a), [recur(b)])
