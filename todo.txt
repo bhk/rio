@@ -1,9 +1,7 @@
 TODO
 
-* run text file
-* diagnostics: Report location of error (command line)
-  - store AST node in INfn
-  - when VErr is returned from a native function call, get location from INfn record
+* show statement breakdowns (=> tag statement IL's with k somehow)
+* in Call breakdown, descend into fn body
 * diagnostics: Trace Value (GUI)
      Display UI for values in context of the expression that generates them
    - Design

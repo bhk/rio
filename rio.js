@@ -17,32 +17,65 @@ let getLineInfo = (text, pos) => {
 eq(getLineInfo("a\nb\nthi*s is a test\n", 7),
    [3, 4, "thi*s is a test"]);
 
-let showResult = (text, ev, result) => {
-    let prefix = "..";
-    let recur = (label, result) => {
-        let ast = result && result.ast;
-        let value = result && result.value;
-        printf("%s%s %s\n", prefix, label, (value ? valueFmt(value) : "<undefined>"));
-        let oldPrefix = prefix;
-        prefix += label.replace(/./g, " ") + " ";
 
-        if (!ast) {
-            // nothing
-        } else if (ast.T == "Binop") {
-            let [op, a, b] = ast;
-            printf("%sa %s b\n", prefix, op);
-            recur("a:", ev.getResult(result, a));
-            recur("b:", ev.getResult(result, b));
-        } else if (ast.T == "Unop") {
-            let [op, a] = ast;
-            printf("%s %s a\n", prefix, op);
-            recur("a:", ev.getResult(result, a));
-        } else {
-            printf("%s(%s)\n", prefix, ast.T);
+// Convert array [<e0>, <e1>, ...] to {a0: <e0>, a1: <e0>, ...}
+let argMap = (args) => {
+    let obj = {};
+    for (let n = 0; n < args.length; ++n) {
+        obj["a" + n] = args[n];
+    }
+    return obj;
+};
+
+eq(argMap(["x", "y"]), {a0: "x", a1: "y"});
+
+
+let astBreakdowns = {
+    Binop: (op, a, b) => ["<a> " + op + " <b>", {a, b}],
+    Unop: (op, a) =>     [op + " <a>", {a}],
+    Dot: (a, name) =>    ["<a>." + astName_string(name), {a}],
+    Index: (a, b) =>     ["a[b]", {a, b}],
+    IIf: (c, a, b) =>    ["<c> ? <a> : <b>", {c, a}],
+    Call: (fn, args) =>  ["<f>(<aN>...)", argMap(args)],
+    Vector: (elems) =>   ["{<aN>...}", argMap(elems)],
+
+    Number: (n) => [],
+    String: (str) => [],
+
+    Map: (rpairs) =>  [],
+    Match: (value, cases) =>  [],
+    Missing: () =>  [],
+    Error: (desc) =>  [],
+    Fn: (params, body) =>  [],
+    Block: (lines, loopVars) => [],
+};
+
+// Convert n to 3-digit decimal representation
+let dec3 = (n) => ("000" + n).slice(-3);
+
+// Display a result's value and breakdown (recursively)
+let showResult = (fileName, text, ev, result) => {
+    let recur = (prefix, result) => {
+        if (!(result && result.ast)) return;
+
+        let {ast, value} = result;
+        let f = astBreakdowns[ast.T];
+        let [template, children] = (f ? f(...ast) : []);
+
+        let [line, col, lineText] = getLineInfo(text, ast.pos);
+        let here = fileName + ":" + dec3(line) + ":" + dec3(col) + ":";
+
+        printf("%s%s%s\n", here, prefix, (value ? valueFmt(value) : "<undefined>"));
+        let p2 = prefix.replace(/./g, " ");
+
+        if (template) {
+            printf("%s%s%s\n", here, p2, template);
         }
-        prefix = oldPrefix;
+        for (let child in children) {
+            recur(p2 + child + ": ", ev.getResult(result, children[child]));
+        }
     };
-    recur("", result);
+    recur(" ", result);
 };
 
 let runText = (text, fileName) => {
@@ -79,10 +112,10 @@ let runText = (text, fileName) => {
         printf("%s:%s:%s: Assertion failed\n", fileName, line, col);
         printf(" | %s\n", lineText);
         let [cond] = result.ast;
-        showResult(text, ev, ev.getResult(result, cond));
+        showResult(fileName, text, ev, ev.getResult(result, cond));
     } else {
         printf("%s:%s:%s: Error: %q\n", fileName, line, col, value.desc);
-        showResult(text, ev, result);
+        showResult(fileName, text, ev, result);
     }
     return 1;
 };

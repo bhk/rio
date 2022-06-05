@@ -341,8 +341,8 @@ let desugar = (ast, env) => {
         let [fn, args] = ast;
         node = IL.App(recur(fn), args.map(recur));
     } else if (T == "Dot") {
-        let [a, b] = ast;
-        node = IL.prop(recur(a), astName_string(b));
+        let [a, name] = ast;
+        node = IL.prop(recur(a), astName_string(name));
     } else if (T == "Index") {
         let [a, b] = ast;
         node = IL.send(recur(a), "@[]", recur(b));
