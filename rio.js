@@ -51,19 +51,24 @@ let astBreakdowns = {
 };
 
 // Convert n to 3-digit decimal representation
-let dec3 = (n) => ("000" + n).slice(-3);
+let zpad = (length, n) => {
+    return ("0").repeat(Math.max(length - String(n).length, 0)) + n;
+};
+
+eq("01", zpad(2,1));
+eq("123", zpad(2, 123));
 
 // Display a result's value and breakdown (recursively)
 let showResult = (fileName, text, ev, result) => {
     let recur = (prefix, result) => {
         if (!(result && result.ast)) return;
-
         let {ast, value} = result;
         let f = astBreakdowns[ast.T];
         let [template, children] = (f ? f(...ast) : []);
 
         let [line, col, lineText] = getLineInfo(text, ast.pos);
-        let here = fileName + ":" + dec3(line) + ":" + dec3(col) + ":";
+        let colHere = zpad(2, col) + "-" + zpad(2, col + ast.end - ast.pos);
+        let here = "@" + zpad(3, line) + ":" + colHere + ":";
 
         printf("%s%s%s\n", here, prefix, (value ? valueFmt(value) : "<undefined>"));
         let p2 = prefix.replace(/./g, " ");
