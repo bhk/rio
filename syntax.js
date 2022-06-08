@@ -136,18 +136,19 @@ let p2dInitialState = {
 let NonNL = NS("\n");
 
 // Construct an AST node
-function Node(typ, pos, ...args) {
+function Node(typ, pos, end, ...args) {
     let node = [...args];
     node.pos = pos;
+    node.end = end;
     node.T = typ;
     return node;
 }
 
 // returns: match `patterns` and construct a Node from its captures
 //
-function M(typ, ...patterns) {
-    return and(cpos, ...patterns).F( caps => [ Node(typ, ...caps) ]);
-}
+let M = (typ, ...patterns) =>
+    and(cpos, and(...patterns).A, cpos).F(
+        ([pos, a, end]) => [ Node(typ, pos, end, ...a) ]);
 
 // returns: match pat and append its captures to state.oob
 function Coob(pat) {
@@ -270,36 +271,30 @@ let atom = or(
     M("Block", nlBlock.A, ss),
     M("Match", T("match"), needExpr, T(":"), needBlock));
 
-function binop(op, pos, a, b) {
-    return Node("Binop", pos, op, a, b);
-}
+let binop = (op, a, b) => Node("Binop", a.pos, b.end, op, a, b);
+
+let binopMerge = (a, op, b) => binop(op, a, b);
+
+let sufMerge = (a, typ, b, end) => Node(typ, a.pos, end, a, b);
 
 // left-associative operators
 let joinLTR = mergeOp => captures => {
     let [e, ...others] = captures;
-    // others = (pos op expr)*
-    for (let ii = 0; ii < others.length; ii += 3) {
-        let pos = others[ii];
-        let op = others[ii+1];
-        let expr = others[ii+2];
-        e = mergeOp(op, pos, e, expr)
+    for (let other of others) {
+        e = mergeOp(e, ...other);
     }
     return [e];
 }
 
-function matchLTR(e, pat) {
-    return and(e, and(cpos, pat, e).X0).F(joinLTR(binop));
-}
+let matchLTR = (e, pat) => and(e, and(pat, e).A.X0).F(joinLTR(binopMerge));
 
-function matchSuf(e, pat) {
-    return and(e , and(cpos, pat).X0).F(joinLTR(Node));
-}
+let matchSuf = (e, pat) => and(e, and(pat, cpos).A.X0).F(joinLTR(sufMerge));
 
 // right-associative binary operators
 function joinRTL(captures) {
     let [a, pos, op, ...others] = captures;
     if (op) {
-        return [binop(op, pos, a, ...joinRTL(others))];
+        return [binop(op, a, ...joinRTL(others))];
     }
     return [a];
 }
@@ -312,14 +307,15 @@ function matchRTL(e, pat) {
 function joinPre(captures) {
     let [pos, op, ...others] = captures;
     if (op) {
-        return [ Node("Unop", pos, op, ...joinPre(others)) ];
+        let expr = joinPre(others);
+        return Node("Unop", pos, expr.end, op, expr);
     }
     // final capture is the expression
-    return [pos];
+    return pos;
 }
 
 function matchPre(e, pat) {
-    return and(and(cpos, pat).X0, e).F(joinPre);
+    return and(and(cpos, pat).X0, e).F(caps => [joinPre(caps)]);
 }
 
 function joinRel(captures) {
@@ -327,11 +323,11 @@ function joinRel(captures) {
     if (pos == undefined) {
         return [e1];
     }
-    let rel = binop(op, pos, e1, e2);
+    let rel = binop(op, e1, e2);
     if (pos2 == undefined) {
         return [rel];
     }
-    return [binop("and", pos, rel, ...joinRel([e2, pos2, ...others]))];
+    return [binop("and", rel, ...joinRel([e2, pos2, ...others]))];
 }
 
 function matchRel(e, pat) {
@@ -341,20 +337,22 @@ function matchRel(e, pat) {
 function joinIIf(captures) {
     let [e1, pos, e2, e3, ...others] = captures;
     if (pos == undefined) {
-        return [e1];
+        return e1;
     }
-    return [Node("IIf", pos, e1, e2, ...joinIIf([e3, ...others]))];
+    let k = joinIIf([e3, ...others]);
+    return Node("IIf", pos, k.end, e1, e2, k);
 }
 
 function joinFn(captures) {
     let [pos, params, ...others] = captures;
     if (params == undefined) {
-        return [pos];
+        return pos;
     }
-    return [Node("Fn", pos, params, ...joinFn(others))];
+    let body = joinFn(others);
+    return Node("Fn", pos, body.end, params, body);
 }
 
-// Each suffix captures two values: nodeType & expr
+// Each suffix captures two values: nodeType & expr/arglist
 let callSuffix =
     and(T("("), CC("Call"), cseq(expr), or(T(")"), E("CloseParen")));
 let memberSuffix =
@@ -374,9 +372,9 @@ function addOperations(e) {
     e = matchLTR(e, O("and"));
     e = matchLTR(e, O("or"));
     e = and(e, and(cpos, T("?"), needExpr, or(T(":"), E("CloseIIf")), e).X0)
-        .F(joinIIf);
+        .F(caps => [joinIIf(caps)]);
     e = matchRTL(e, O("$"));
-    e = and(and(cpos, params, T("->")).X0, e).F(joinFn);
+    e = and(and(cpos, params, T("->")).X0, e).F(caps => [joinFn(caps)]);
     return e;
 }
 
@@ -533,9 +531,14 @@ testG(txt, blockBody,
 // Inline Parsing Tests
 //==============================
 
-test.eq(astFmt(Node("Foo", 5, "x")), '(Foo "x")');
-test.eq(astFmt(Node("Name", 5, "x")), 'x');
-test.eq(astFmt(Node("Number", 5, "9")), '9');
+test.eq(astFmt(Node("Foo", 5, 6, "x")), '(Foo "x")');
+test.eq(astFmt(Node("Name", 5, 6, "x")), 'x');
+test.eq(astFmt(Node("Number", 5, 6, "9")), '9');
+
+{
+    test.eq(M("Foo", P("b").C).match("abc", 1, {}, {}),
+            [2, {}, [Node("Foo", 1, 2, "b")]]);
+}
 
 test.eq([1, p2dInitialState, []],
         ss.match(" \nx", 0, p2dInitialState, {Comment: fail}));
