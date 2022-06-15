@@ -473,6 +473,11 @@ let group = name => captures =>
 
 let text = NonNL.X1.C;
 
+// This minimal grammar for 2D parsing begins blocks only at "if ..." or
+// "NAME = ...", and allows logical lines to contain any sequence of
+// arbitrary text and/or nested blocks.   Blocks and lines are captured
+// as ["B", ...] and ["L", ...].
+//
 let testGrammar = {
     AtBlock: or(T("if"), and(name, ss, T("="))),
     Comment: and("#", NonNL.X0),
@@ -480,8 +485,7 @@ let testGrammar = {
         .F(group("L")),
 };
 
-// Match `subj` using `pattern` in a grammar that supplies minimal "inline"
-// expressions.
+// Match `subj` using `pattern` with a minimal grammar.
 //
 function testG(subj, pattern, ecaptures, eoob, epos) {
     let results = pattern.match(subj, 0, p2dInitialState, testGrammar);

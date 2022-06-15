@@ -97,6 +97,7 @@ let astBlock = (lines, vars)  => N("Block", lines, vars);
 let astBinop = (op, a, b)     => N("Binop", op, a, b);
 let astIIf   = (cond, a, b)   => N("IIf", cond, a, b);
 let astAssert = (cond)        => N("S-Assert", cond);
+let astError = (desc)         => N("Error", desc);
 
 let astLet = (target, value, body) =>
     astCall( astFn([target], body), [value]);
@@ -223,29 +224,17 @@ let dsIf = (c, a, b, env) =>
                    dsFun(b, [], env)), []);
 
 // Construct an IL "let" construct from AST variable name, value, and body.
-let dsLet = (target, value, body, env) =>
-    IL.App( dsFun(body, [target], env), [env.desugar(value)]);
+let dsLet = (targets, value, body, env) =>
+    IL.App( dsFun(body, targets, env), [env.desugar(value)]);
 
-// Construct an IL expression for a block
+// Construct an IL expression for a block, given a sequence of AST block lines.
+//
 let dsBlock = (lines, loopVars, env) => {
     let [ast, ...rest] = lines;
-
-    // Desugar a sequence of AST block lines.  All lines should be statements
-    // except for the last line, which should be an expression.
-
-    if (rest.length == 0) {
-        if (loopVars && ast.T == "Name") {
-            let [name] = ast;
-            if (name == "repeat") {
-                ast = astCall(bodyName, [bodyName, ...loopVars]);
-            } else if (name == "break") {
-                ast = astCall(postName, loopVars);
-            }
-        }
-        return env.desugar(ast);
-    }
     let T = ast.T;
-    let k = astBlock(rest, loopVars);
+    let kf = () => (rest.length > 0
+                    ? astBlock(rest, loopVars)
+                    : astError("nonExprAtEndOfBlock"));
     let node;
 
     if (T == "S-If") {
@@ -258,7 +247,7 @@ let dsBlock = (lines, loopVars, env) => {
                 then = astBlock([then], loopVars);
             }
         }
-        node = dsIf(cond, then, k, env);
+        node = dsIf(cond, then, kf(), env);
     } else if (T == "S-Let") {
         let [target, aop, value] = ast;
         if (aop != "=" && aop != ":=") {
@@ -273,7 +262,7 @@ let dsBlock = (lines, loopVars, env) => {
         } else if (aop != "=" && !isBound) {
             return IL.Err("Undefined:" + astName_string(target));
         }
-        node = dsLet(target, value, k, env);
+        node = dsLet([target], value, kf(), env);
     } else if (T == "S-Loop") {
         let [lines] = ast;
         let lastStmt = lines[lines.length - 1];
@@ -284,20 +273,35 @@ let dsBlock = (lines, loopVars, env) => {
         }
         let body = astBlock(lines);
         let vars = getLoopVars(body).filter(n => env.find(astName_string(n)));
-        let simple = xlatLoop(astBlock(lines, vars), k, vars);
+        let simple = xlatLoop(astBlock(lines, vars), kf(), vars);
         node = env.desugar(simple);
     } else if (T == "S-While") {
         let [cond] = ast;
-        node = dsIf(cond, k, astBlock([astName("break")], loopVars), env);
+        node = dsIf(cond, kf(), astBlock([astName("break")], loopVars), env);
     } else if (T == "S-LoopWhile") {
         let [cond, block] = ast;
         let loop = N("S-Loop", [N("S-While", cond), ...block])
         node = dsBlock([loop, ...rest], loopVars, env);
     } else if (T == "S-Assert") {
         let [cond] = ast;
-        node = dsIf(cond, k, astCall(astName(".stop"), []), env);
+        node = dsIf(cond, kf(), astCall(astName(".stop"), []), env);
     } else {
-        node = IL.Err("unknown statement");
+        // Expression | break | repeat
+        if (rest.length == 0) {
+            // terminating expression/break/repeat
+            if (loopVars && ast.T == "Name") {
+                let [name] = ast;
+                if (name == "repeat") {
+                    ast = astCall(bodyName, [bodyName, ...loopVars]);
+                } else if (name == "break") {
+                    ast = astCall(postName, loopVars);
+                }
+            }
+            return env.desugar(ast);
+        } else {
+            // mid-block expression
+            node = dsLet([], ast, kf(), env);
+        }
     }
 
     return IL.Tag(ast, node);
@@ -387,7 +391,7 @@ let desugar = (ast, env) => {
         let [desc] = ast;
         node = IL.Err(desc);
     } else {
-        node = IL.Err("unknown");
+        node = IL.Err("unknownExpr:" + T);
     }
 
     // AST nodes without pos are "synthetic" products of desugaring
