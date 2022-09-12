@@ -10,9 +10,9 @@ import {astFmt, parseModule} from "./syntax.js";
 
 // Inner Language nodes (IExpr's)
 //   IL.Val(type, args)      // constant/literal/runtime value
-//   IL.Arg(index)           // argument reference
+//   IL.Arg(ups, pos)        // argument reference
 //   IL.Fun(body)            // function construction (lambda)
-//   IL.App(fn, arg)         // function application
+//   IL.App(fn, args)        // function application
 //   IL.Err(desc)            // syntax/compilation error
 //   IL.Tag(ast, il)         // identify source code expression
 //
