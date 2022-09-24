@@ -97,7 +97,6 @@ let unknownProperty = (value, name) => {
                 : "BadPropertyType:" + name.T);
 };
 
-
 //--------------------------------
 // Object System: Types and Properties
 //--------------------------------
@@ -529,22 +528,20 @@ eq(send(send(tm, "set", "b", 3),
         "@[]", "b"),
    3);
 
-// host integration with eval
+// test Host.call, Host.ILVal("Lib", ...), Host.ILVal("String", ...)
 
 import {ilEval} from "./eval.js";
-import {Op} from "./desugar.js";
+import {Op, IL} from "./desugar.js";
 
 let eh = ilEval(Host);
-
-let e = eh([
-    Op.Val("Lib", "getProp"),  // Host.ILVal("Lib", ...)
-    Op.Val("String", "abc"),
-    Op.Val("String", "@++"),
-    Op.App(2),                 // Host.call
-    Op.Val("String", "def"),   // Host.ILVal("String", ...)
-    Op.App(1),
-    Op.Tag("TOP", 6),
-], {}, {});
+let e = eh(IL.Tag("TOP",
+                  IL.App(
+                      IL.App(IL.Val("Lib", "getProp"), [
+                          IL.Val("String", "abc"),
+                          IL.Val("String", "@++"),
+                      ]),
+                      [ IL.Val("String", "def") ])),
+           {}, {});
 
 e.sync();
 eq(e.getResult().value, wrap("abcdef"));

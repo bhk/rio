@@ -1,24 +1,21 @@
 // desugar: Convert AST to IL
 
-import {assert, eq, eqAt} from "./test.js";
-import {L, N, sexprFormatter} from "./misc.js";
+import {assert, eq, eqAt, printf} from "./test.js";
+import {L, N} from "./misc.js";
 import {astFmt, parseModule} from "./syntax.js";
 
 //==============================================================
 // Inner Language
 //==============================================================
 
-// An IL expression is an array of Ops in RPN order.  Each op produces one
-// value; `App` consumes one or more previously-produced values; `Tag`
-// produces the value it consumes.
+// An IL expression is an array of IL ops in RPN order.  Each op produces
+// one value; `App` consumes one or more previously-produced values (the
+// function + the arguments); `Tag` produces the value it consumes.
 //
-// Generally, a non-empty array of ops produces one or more values.
-// Expressions are represented by arrays that produce one value.
+// Generally, a non-empty array of ops produces one or more values.  An
+// expression is an arrays that produces one value.
 //
 // Tag.n is the number of preceding ops that are enclosed by the tag.
-// App.nargs is the number of arguments to be applied to the function.
-//   App consumes nargs+1 values from the stack: the arguments, followed by
-//   the function itself at the top of the stack.
 //
 let Op = {
     Val: (type, arg) => ({T:"Val", type, arg}),
@@ -29,8 +26,8 @@ let Op = {
     Tag: (ast, n)    => ({T:"Tag", ast, n}),
 };
 
-
-// Tree-based IL constructors (IExpr's)  [TODO: construct as sequence of Ops]
+// IL expression constructors
+//
 //   IL.Val(type, args)      // constant/literal/runtime value
 //   IL.Arg(ups, pos)        // argument reference
 //   IL.Fun(body)            // function construction (lambda)
@@ -46,29 +43,34 @@ let Op = {
 // il : IL node
 // all others : IExpr || [IExpr]
 //
-// A given AST node may expand to a tree of many IL nodes.  Instead of
-// annotating every IL node with its originiating AST node, we use IL Tag
-// nodes to associate an AST node with the IL node that computes its value.
-// Tag nodes do not affect the value computed by the IL tree.
+// A given AST node may expand to a tree of many IL nodes.  Tag nodes
+// associate an AST node with the IL node that computes its value.
 
 let IL = {
-    Val: (type, arg) => N("IVal", type, arg),
-    Arg: (ups, pos) => N("IArg", ups, pos),
-    Fun: (body) => N("IFun", body),
-    App: (fn, args) => N("IApp", fn, args),
-    Err: (desc) => N("IErr", desc),
-    Tag: (ast, il) => N("ITag", ast, il),
+    Val: (type, arg) => [Op.Val(type, arg)],
+    Arg: (ups, pos) => [Op.Arg(ups, pos)],
+    Fun: (body) => [Op.Fun(body)],
+    App: (fn, args) => [...fn, ...args.flat(), Op.App(args.length)],
+    Err: (name) => [Op.Err(name)],
+    Tag: (ast, il) => [...il, Op.Tag(ast, il.length)],
 };
 
-IL.fmt = sexprFormatter({
-    // $0 = argument to this function; $1 = argument to parent, ...
-    IArg: (e) => "$" + e[0] + ":" + e[1],
-    // number, string
-    IVal: (e) => (e[0] == "Number" ? String(e[1]) :
-                  e[0] == "String" ? '"' + e[1] + '"' :
-                  e[1]),
-    ITag: (e, f) => f(e[1]),
-});
+IL.fmtOp = op => op.T + " "
+    + (op.T == "Val" ? op.type + "/" + op.arg :
+       op.T == "Arg" ? op.ups + ":" + op.pos :
+       op.T == "Fun" ? "[" + op.body.map(IL.fmtOp).join(", ") + "]" :
+       op.T == "App" ? op.nargs :
+       op.T == "Err" ? op.name :
+       op.T == "Tag" ? op.n + " " +"@" + op.ast.pos :
+       "?");
+
+IL.fmt = il => il.map(IL.fmtOp).join("; ");
+
+IL.detag = il =>
+    il.map(op => (op.T == "Tag" ? [] :
+                  op.T == "Fun" ? IL.Fun(IL.detag(op.body)) :
+                  [op]))
+    .flat();
 
 IL.str = str  => IL.Val("String", str);
 IL.num = num  => IL.Val("Number", String(num));
@@ -78,47 +80,6 @@ IL.prop = (target, name) => IL.App(IL.getProp, [target, IL.str(name)]);
 IL.send = (target, name, ...args) => IL.App( IL.prop(target, name), args);
 // Note: a & b will be wrapped in IL.Fun without adjusting their 'ups'
 IL.iif = (cond, a, b) => IL.App(IL.send(cond, "switch", IL.Fun(a), IL.Fun(b)), []);
-
-//================================================================
-// IL tree -> Op[]
-//================================================================
-
-// Flatten IL expression to sequence of ops
-//
-let flatten = (il) => {
-    let out = [];
-
-    let append = (il) =>  {
-        let op;
-        if (il.T == "IVal") {
-            let [type, arg] = il;
-            op = Op.Val(type, arg);
-        } else if (il.T == "IArg") {
-            let [ups, pos] = il;
-            op = Op.Arg(ups, pos);
-        } else if (il.T == "IFun") {
-            let [body] = il;
-            op = Op.Fun(flatten(body));
-        } else if (il.T == "IErr") {
-            let [name] = il;
-            op = Op.Err(name);
-        } else if (il.T == "IApp") {
-            let [fn, args] = il;
-            append(fn);
-            args.forEach(a => append(a));
-            op = Op.App(args.length);
-        } else if (il.T == "ITag") {
-            let [ast, subIL] = il;
-            let len0 = out.length;
-            append(subIL);
-            op = Op.Tag(ast, out.length - len0);
-        }
-        out.push(op);
-    };
-
-    append(il);
-    return out;
-};
 
 //==============================
 // Env object
@@ -146,10 +107,6 @@ class Env {
 
     desugar(ast) {
         return desugar(ast, this);
-    }
-
-    fromAST(ast) {
-        return flatten(desugar(ast, this));
     }
 }
 
@@ -469,22 +426,6 @@ let desugar = (ast, env) => {
 // desugar Tests
 //==============================================================
 
-eq(flatten(
-    IL.Tag("AST",
-           IL.App(
-               IL.Fun(
-                   IL.Val("Lib", "f")),
-               [IL.Arg(1, 2)]))),
-   [
-       Op.Fun([
-           Op.Val("Lib", "f"),
-       ]),
-       Op.Arg(1, 2),
-       Op.App(1),
-       Op.Tag("AST", 3),
-   ]);
-
-
 let parseToAST = (src) => parseModule(src)[0];
 
 let astEQ = (a, b) => eqAt(2, astFmt(a), astFmt(b));
@@ -498,8 +439,9 @@ let $a = IL.Arg(1, 0);  // 'a' in testEnv
 let $b = IL.Arg(1, 1);  // 'b' in testEnv
 
 let serializeIL = input =>
-        IL.fmt(input.T ? input :                         // IL
-               desugar(parseToAST(L(input)), testEnv));  // source
+    IL.fmt(IL.detag(input instanceof Array && input[0].T
+                    ? input // IL
+                    : desugar(parseToAST(L(input)), testEnv)));  // source
 
 let ilEQ = (a, b) => eqAt(2, serializeIL(a), serializeIL(b));
 
@@ -699,7 +641,6 @@ ilEQ([
 // Block: S-Assert
 ilEQ([ 'assert x', '1' ],
      IL.iif($x, $1, IL.App( IL.lib("stop"), [])));
-
 
 //==============================================================
 // exports

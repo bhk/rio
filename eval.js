@@ -315,7 +315,6 @@ let testHost = {
 let VStr = (v) => ({T:"VStr", v});
 let VHFn = fn => ({T:"VHFn", fn});
 
-
 let hfnCat = (vx, vy) => [null, VStr(vx.v + vy.v)];
 let hfnTypeof = (v) => [null, VStr(v.T)];
 let hfnErr = () => ["hfnErr"];

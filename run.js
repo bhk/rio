@@ -24,14 +24,6 @@ let showIL = (expr, where, trace) => {
         let depth = 0;
 
         let showOp = (op, extra) => {
-            let desc =
-                op.T == "Tag" ? ( "(" + op.n + ") " + op.ast.T + "@" + op.ast.pos
-                                  + " = " + formatTagResult(op.ast)) :
-                op.T == "Val" ? " " + op.type + "/" + op.arg :
-                op.T == "App" ? "(" + op.nargs + ")" :
-                op.T == "Arg" ? "(" + op.ops + "," + op.pos + ")" :
-                "";
-
             depth += 1 - (op.T == "App" ? op.nargs + 1 :
                           op.T == "Tag" ? 1 : 0);
 
@@ -39,7 +31,9 @@ let showIL = (expr, where, trace) => {
                 showExpr(op.body, prefix + "   ");
             }
 
-            let line = prefix + "[" + depth + "] " + op.T + desc;
+            let line = prefix + "[" + depth + "] "
+                + (op.T == "Fun" ? "Fun ^" : IL.fmtOp(op))
+                + (op.T == "Tag" ? " = " + formatTagResult(op.ast) : "");
             let pad = Math.max(36 - line.length, 4);
 
             printf("%s\n", (extra
@@ -195,7 +189,7 @@ let runText = (text, fileName) => {
     }
 
     // evaluate program
-    let programIL = manifestDSEnv.fromAST(ast);
+    let programIL = manifestDSEnv.desugar(ast);
     let ev = ilEval(Host)(programIL, {}, manifestEvalEnv);
     ev.sync();
     let result = ev.getResult();
@@ -252,7 +246,6 @@ eq(argMap(["x", "y"]), {a0: "x", a1: "y"});
 
 eq("01", zpad(2,1));
 eq("123", zpad(2, 123));
-
 
 //--------------------------------
 // Main
