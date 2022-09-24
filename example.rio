@@ -3,4 +3,4 @@
 f = n -> n*2
 x = 3
 assert 7 == f(x)
-f(f)
+f(x)

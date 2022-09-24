@@ -1,5 +1,8 @@
 export NODE_PATH = .
-run: ;	node interp.js
 
-example: ; node rio.js example.rio
+example: ; node run.js example.rio
+
+desugar: ; node desugar.js
+
+host:	; node host.js
 
