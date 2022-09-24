@@ -323,11 +323,12 @@ let testEnv = envBind(null, [VHFn(hfnTypeof), VHFn(hfnCat), VHFn(hfnErr)]);
 let typeofArg = ups => Op.Arg(ups, 0);
 let catArg = ups => Op.Arg(ups, 1);
 let errArg = ups => Op.Arg(ups, 2);
-let args = [ VStr("Hello"), VStr(" ") ];
+
+let testArgs = [ VStr("Hello"), VStr(" ") ];
 let helloArg = Op.Arg(0, 0);
 let spaceArg = Op.Arg(0, 1);
 
-let testEval = (expr) => ilEval(testHost)(expr, testEnv, args);
+let testEval = (expr) => ilEval(testHost)(expr, testEnv, testArgs);
 
 // eval of  Val, Arg, Tag, App/VHFn
 

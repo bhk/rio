@@ -8,9 +8,9 @@ import {eq, assert, sprintf, printf} from "./test.js";
 // Render IL to terminal
 //================================================================
 
-let showIL = (expr, where, trace) => {
+let printIL = (expr, where, trace) => {
 
-    let formatTagResult = (ast) => {
+    let getTagResult = (ast) => {
         for (let t of trace) {
             let op = t.frame.expr[t.ii];
             if (op.ast == ast) {
@@ -20,44 +20,41 @@ let showIL = (expr, where, trace) => {
         return "?";
     };
 
-    let showExpr = (expr, prefix) => {
+    let printExpr = (expr, prefix) => {
         let depth = 0;
 
-        let showOp = (op, extra) => {
+        let printOp = (op, ii) => {
             depth += 1 - (op.T == "App" ? op.nargs + 1 :
                           op.T == "Tag" ? 1 : 0);
 
             if (op.T == "Fun") {
-                showExpr(op.body, prefix + "   ");
+                printExpr(op.body, prefix + "   ");
             }
 
             let line = prefix + "[" + depth + "] "
                 + (op.T == "Fun" ? "Fun ^" : IL.fmtOp(op))
-                + (op.T == "Tag" ? " = " + formatTagResult(op.ast) : "");
-            let pad = Math.max(36 - line.length, 4);
+                + (op.T == "Tag" ? " = " + getTagResult(op.ast) : "");
 
-            printf("%s\n", (extra
-                            ? "*** " + line + (" ").repeat(pad) + extra
-                            : "    " + line));
+            let isHere = ii == where.ii && expr == where.frame.expr;
+
+            printf("%s %s%s\n",
+                   isHere ? "***" : "   ",
+                   line,
+                   (isHere && where.errorName
+                    ? (" ").repeat(12) + "*** Error: " + where.errorName
+                    : ""));
         };
 
-        for (let ii = 0; ii < expr.length; ++ii) {
-            let op = expr[ii];
-            showOp(op, (ii == where.ii
-                        && expr == where.frame.expr
-                        && (where.errorName
-                            ? sprintf("Error: %q", where.errorName)
-                            : "(here)")));
-        }
+        expr.forEach(printOp);
     };
-    showExpr(expr, "");
+    printExpr(expr, "");
 };
 
-let showProgram = (topExpr, ev) => {
+let printProgram = (topExpr, ev) => {
     let r = ev.getResult();
     let st = ev.getState();
     let pos = r.errorName ? st.error : r;
-    showIL(topExpr, pos, st.trace);
+    printIL(topExpr, pos, st.trace);
 };
 
 //================================================================
@@ -115,7 +112,7 @@ let zpad = (length, n) => {
 };
 
 // Display a result's value and breakdown (recursively)
-let showResult = (fileName, text, ev, result) => {
+let printResult = (fileName, text, ev, result) => {
     let recur = (prefix, result) => {
         if (!result) {
             printf("[result = %q]\n", result);
@@ -125,8 +122,8 @@ let showResult = (fileName, text, ev, result) => {
         let ast = result.getAST();
         let value = result.value;
         let f = astBreakdowns[ast.T];
-        let [template, children] = (f ? f(...ast) : []);
-        let here = lineAndCol(text, ast);
+        let [template, childASTs] = (f ? f(...ast) : []);
+        let here = lineAndCol(text, ast) + ":";
 
         printf("%s%s%s\n", here, prefix,
                (value ? valueFmt(value) : "<undefined>"));
@@ -135,8 +132,14 @@ let showResult = (fileName, text, ev, result) => {
         if (template) {
             printf("%s%s%s\n", here, p2, template);
         }
-        for (let child in children) {
-            recur(p2 + child + ": ", ev.getResult(result, children[child]));
+        if (!childASTs) {
+            // printf("** No breakdown for %q\n", ast);
+            return;
+        }
+        for (let [name, ast] of Object.entries(childASTs)) {
+            // printf("result child: %q\n", name);
+            let r = findChildResult(result, ast);
+            recur(p2 + name + ": ", r);
         }
     };
     recur(" ", result);
@@ -197,7 +200,7 @@ let runText = (text, fileName) => {
     assert(result);
 
     if (process.env["DUMP"]) {
-        showProgram(programIL, ev);
+        printProgram(programIL, ev);
     }
 
     // display value
@@ -215,10 +218,10 @@ let runText = (text, fileName) => {
         printf("%s:%s:%s: Assertion failed\n", fileName, line, col);
         printf(" | %s\n", lineText);
         let [cond] = ra;
-        showResult(fileName, text, ev, findChildResult(result, cond));
+        printResult(fileName, text, ev, findChildResult(result, cond));
     } else {
         printf("%s:%s:%s: Error: %q\n", fileName, line, col, result.errorName);
-        showResult(fileName, text, ev, result);
+        printResult(fileName, text, ev, result);
     }
     return 1;
 };
