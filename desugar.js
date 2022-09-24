@@ -8,7 +8,29 @@ import {astFmt, parseModule} from "./syntax.js";
 // Inner Language
 //==============================================================
 
-// Inner Language nodes (IExpr's)
+// An IL expression is an array of Ops in RPN order.  Each op produces one
+// value; `App` consumes one or more previously-produced values; `Tag`
+// produces the value it consumes.
+//
+// Generally, a non-empty array of ops produces one or more values.
+// Expressions are represented by arrays that produce one value.
+//
+// Tag.n is the number of preceding ops that are enclosed by the tag.
+// App.nargs is the number of arguments to be applied to the function.
+//   App consumes nargs+1 values from the stack: the arguments, followed by
+//   the function itself at the top of the stack.
+//
+let Op = {
+    Val: (type, arg) => ({T:"Val", type, arg}),
+    Arg: (ups, pos)  => ({T:"Arg", ups, pos}),
+    Fun: (body)      => ({T:"Fun", body}),
+    App: (nargs)     => ({T:"App", nargs}),
+    Err: (name)      => ({T:"Err", name}),
+    Tag: (ast, n)    => ({T:"Tag", ast, n}),
+};
+
+
+// Tree-based IL constructors (IExpr's)  [TODO: construct as sequence of Ops]
 //   IL.Val(type, args)      // constant/literal/runtime value
 //   IL.Arg(ups, pos)        // argument reference
 //   IL.Fun(body)            // function construction (lambda)
@@ -57,6 +79,47 @@ IL.send = (target, name, ...args) => IL.App( IL.prop(target, name), args);
 // Note: a & b will be wrapped in IL.Fun without adjusting their 'ups'
 IL.iif = (cond, a, b) => IL.App(IL.send(cond, "switch", IL.Fun(a), IL.Fun(b)), []);
 
+//================================================================
+// IL tree -> Op[]
+//================================================================
+
+// Flatten IL expression to sequence of ops
+//
+let flatten = (il) => {
+    let out = [];
+
+    let append = (il) =>  {
+        let op;
+        if (il.T == "IVal") {
+            let [type, arg] = il;
+            op = Op.Val(type, arg);
+        } else if (il.T == "IArg") {
+            let [ups, pos] = il;
+            op = Op.Arg(ups, pos);
+        } else if (il.T == "IFun") {
+            let [body] = il;
+            op = Op.Fun(flatten(body));
+        } else if (il.T == "IErr") {
+            let [name] = il;
+            op = Op.Err(name);
+        } else if (il.T == "IApp") {
+            let [fn, args] = il;
+            append(fn);
+            args.forEach(a => append(a));
+            op = Op.App(args.length);
+        } else if (il.T == "ITag") {
+            let [ast, subIL] = il;
+            let len0 = out.length;
+            append(subIL);
+            op = Op.Tag(ast, out.length - len0);
+        }
+        out.push(op);
+    };
+
+    append(il);
+    return out;
+};
+
 //==============================
 // Env object
 //==============================
@@ -83,6 +146,10 @@ class Env {
 
     desugar(ast) {
         return desugar(ast, this);
+    }
+
+    fromAST(ast) {
+        return flatten(desugar(ast, this));
     }
 }
 
@@ -402,6 +469,22 @@ let desugar = (ast, env) => {
 // desugar Tests
 //==============================================================
 
+eq(flatten(
+    IL.Tag("AST",
+           IL.App(
+               IL.Fun(
+                   IL.Val("Lib", "f")),
+               [IL.Arg(1, 2)]))),
+   [
+       Op.Fun([
+           Op.Val("Lib", "f"),
+       ]),
+       Op.Arg(1, 2),
+       Op.App(1),
+       Op.Tag("AST", 3),
+   ]);
+
+
 let parseToAST = (src) => parseModule(src)[0];
 
 let astEQ = (a, b) => eqAt(2, astFmt(a), astFmt(b));
@@ -622,4 +705,4 @@ ilEQ([ 'assert x', '1' ],
 // exports
 //==============================================================
 
-export {Env, IL};
+export {Env, IL, Op};

@@ -1,47 +1,8 @@
+// run: terminal command to execute a Rio program
+
 import {Env as DSEnv, IL} from "./desugar.js";
-import {ilEval, evalEnvBind, evalEnvGet, Op} from "./eval.js";
+import {ilEval, evalEnvBind, evalEnvGet} from "./eval.js";
 import {eq, assert, sprintf, printf} from "./test.js";
-
-//================================================================
-// IL -> Op
-//================================================================
-
-// Flatten IL expression to sequence of ops
-//
-let flatten = (il) => {
-    let out = [];
-
-    let append = (il) =>  {
-        let op;
-        if (il.T == "IVal") {
-            let [type, arg] = il;
-            op = Op.Val(type, arg);
-        } else if (il.T == "IArg") {
-            let [ups, pos] = il;
-            op = Op.Arg(ups, pos);
-        } else if (il.T == "IFun") {
-            let [body] = il;
-            op = Op.Fun(flatten(body));
-        } else if (il.T == "IErr") {
-            let [name] = il;
-            op = Op.Err(name);
-        } else if (il.T == "IApp") {
-            let [fn, args] = il;
-            append(fn);
-            args.forEach(a => append(a));
-            op = Op.App(args.length);
-        } else if (il.T == "ITag") {
-            let [ast, subIL] = il;
-            let len0 = out.length;
-            append(subIL);
-            op = Op.Tag(ast, out.length - len0);
-        }
-        out.push(op);
-    };
-
-    append(il);
-    return out;
-};
 
 //================================================================
 // Render IL to terminal
@@ -234,8 +195,7 @@ let runText = (text, fileName) => {
     }
 
     // evaluate program
-    let programDS = manifestDSEnv.desugar(ast);
-    let programIL = flatten(programDS);
+    let programIL = manifestDSEnv.fromAST(ast);
     let ev = ilEval(Host)(programIL, {}, manifestEvalEnv);
     ev.sync();
     let result = ev.getResult();
@@ -284,21 +244,6 @@ let main = () => {
 //--------------------------------
 // Tests
 //--------------------------------
-
-eq(flatten(
-    IL.Tag("AST",
-           IL.App(
-               IL.Fun(
-                   IL.Val("Lib", "f")),
-               [IL.Arg(1, 2)]))),
-   [
-       Op.Fun([
-           Op.Val("Lib", "f"),
-       ]),
-       Op.Arg(1, 2),
-       Op.App(1),
-       Op.Tag("AST", 3),
-   ]);
 
 eq(getLineInfo("a\nb\nthi*s is a test\n", 7),
    [3, 4, "thi*s is a test"]);

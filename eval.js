@@ -1,8 +1,7 @@
-//==============================================================
-// Eval of RPN-style IL
-//==============================================================
+// eval: Evaluation of IL expressions
 
 import {assert, eq, fail, printf} from "./test.js";
+import {Op} from "./desugar.js";
 
 // Pop `count` elements from array and return them.
 let popN = (array, count) => {
@@ -27,27 +26,6 @@ let envGet = (env, ups, pos) => {
     let b = env.bindings;
     assert(b[pos] !== undefined);
     return b[pos];
-};
-
-// An IL expression is an array of Ops in RPN order.  Each op produces one
-// value; `App` consumes one or more previously-produced values; `Tag`
-// produces the value it consumes.
-//
-// Generally, a non-empty array of ops produces one or more values.
-// Expressions are represented by arrays that produce one value.
-//
-// Tag.n is the number of preceding ops that are enclosed by the tag.
-// App.nargs is the number of arguments to be applied to the function.
-//   App consumes nargs+1 values from the stack: the arguments, followed by
-//   the function itself at the top of the stack.
-//
-let Op = {
-    Val: (type, arg) => ({T:"Val", type, arg}),
-    Arg: (ups, pos)  => ({T:"Arg", ups, pos}),
-    Fun: (body)      => ({T:"Fun", body}),
-    App: (nargs)     => ({T:"App", nargs}),
-    Err: (name)      => ({T:"Err", name}),
-    Tag: (ast, n)    => ({T:"Tag", ast, n}),
 };
 
 // Find the location of the Tag enclosing an op.
@@ -277,7 +255,6 @@ export {
     ilEval,
     envBind as evalEnvBind,
     envGet as evalEnvGet,
-    Op,
 };
 
 //--------------------------------

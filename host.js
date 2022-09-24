@@ -1,6 +1,4 @@
-//==============================================================
-// Host functions and types for evaluation
-//==============================================================
+// host: host functions and types for evaluation
 
 import {assert, eq, fail, printf} from "./test.js";
 import {set} from "./misc.js";
@@ -533,7 +531,8 @@ eq(send(send(tm, "set", "b", 3),
 
 // host integration with eval
 
-import {ilEval, Op} from "./eval.js";
+import {ilEval} from "./eval.js";
+import {Op} from "./desugar.js";
 
 let eh = ilEval(Host);
 
