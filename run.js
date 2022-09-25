@@ -61,6 +61,20 @@ let printProgram = (topExpr, ev) => {
 // Terminal-based source-level diagnostics and inspection
 //================================================================
 
+let argNames = (args) => args.map((_,n) => "a" + (n+1));
+
+let argList = (args) =>
+    argNames(args).map(name => "<" + name + ">").join(", ");
+
+// Convert array [<e0>, <e1>, ...] to {a0: <e0>, a1: <e0>, ...}
+let argMap = (args) => {
+    let obj = {};
+    argNames(args).forEach((name, n) => {
+        obj[name] = args[n];
+    });
+    return obj;
+};
+
 // astBreakdowns[ast.T](...ast) -->  [template, childNamesAndValues]
 //
 let astBreakdowns = {
@@ -69,11 +83,13 @@ let astBreakdowns = {
     Dot: (a, name) =>    ["<a>." + astName_string(name), {a}],
     Index: (a, b) =>     ["a[b]", {a, b}],
     IIf: (c, a, b) =>    ["<c> ? <a> : <b>", {c, a}],
-    Call: (f, args) =>   ["<f>(<aN>...)", {f, ...argMap(args)}],
+    Call: (f, args) =>   ["<f>(" + argList(args) + ")",
+                          {f, ...argMap(args)}],
     Vector: (elems) =>   ["{<aN>...}", argMap(elems)],
 
-    Number: (n) => [],
-    String: (str) => [],
+    Number: (n) =>       [false],
+    Name: (s) =>         [false],
+    String: (str) =>     [],
 
     Map: (rpairs) =>  [],
     Match: (value, cases) =>  [],
@@ -95,15 +111,6 @@ let lineAndCol = (text, ast) => {
     let [line, col, lineText] = getLineInfo(text, ast.pos);
     let colHere = zpad(2, col) + "-" + zpad(2, col + ast.end - ast.pos);
     return zpad(3, line) + ":" + colHere;
-};
-
-// Convert array [<e0>, <e1>, ...] to {a0: <e0>, a1: <e0>, ...}
-let argMap = (args) => {
-    let obj = {};
-    for (let n = 0; n < args.length; ++n) {
-        obj["a" + n] = args[n];
-    }
-    return obj;
 };
 
 // Convert n to 3-digit decimal representation
@@ -143,9 +150,10 @@ let printResult = (fileName, text, ev, result) => {
 
             // print template
 
-            if (!template) {
+            if (template === false) {
                 break;
             }
+            template = template || "[" + ast.T + "]";
             printf("%s%s= %s\n", here, p2, template);
 
             // print members
@@ -154,7 +162,7 @@ let printResult = (fileName, text, ev, result) => {
             for (let r of result.getChildren()) {
                 cmap.set(r.getAST(), r);
             }
-            for (let [name, ast] of Object.entries(childASTs)) {
+            for (let [name, ast] of Object.entries(childASTs || [])) {
                 let r = cmap.get(ast);
                 if (r) {
                     cmap.delete(ast);
@@ -164,9 +172,18 @@ let printResult = (fileName, text, ev, result) => {
                 }
             }
 
-            // if a child result if left over, it is the function body
+            // if a child result is left over (not one of the children in
+            // the breakdown) and it has the same value, we treat it as the
+            // 'body' of the current result, and show its breakdown below.
 
-            result = cmap.values().next().value;
+            // result = cmap.values().next().value;
+            result = null;
+            for (let r of cmap.values()) {
+                if (r.value === value) {
+                    result = r;
+                    break;
+                }
+            }
 
         } while (result);
     };
@@ -273,7 +290,7 @@ let main = () => {
 eq(getLineInfo("a\nb\nthi*s is a test\n", 7),
    [3, 4, "thi*s is a test"]);
 
-eq(argMap(["x", "y"]), {a0: "x", a1: "y"});
+eq(argMap(["x", "y"]), {a1: "x", a2: "y"});
 
 eq("01", zpad(2,1));
 eq("123", zpad(2, 123));
