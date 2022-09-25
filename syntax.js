@@ -1,41 +1,9 @@
-// Rio syntax parser
-//
-// The result of parsing a module is a Block, which is an array of logical
-// lines, each of which is an expression or a statement.
-//
-// Block: [ (expr | stmt)... ]
-//
-// Expression:
-//   (Name str)
-//   (Missing)
-//   (Number str)
-//   (String str)
-//   (Vector [expr...])
-//   (Map [str expr ...])
-//   (Fn [param...] body)
-//   (Op op a b)
-//   (Unop op a)
-//   (Call fn args)
-//   (Dot a name)
-//   (Index a b)
-//   (IIf a b c)
-//   (Match value cases)
-//   (Block block)
-//
-// Statement:
-//   (S-Let name op value)
-//   (S-Act params act)
-//   (S-Case pattern body)
-//   (S-If cond then)
-//   (S-Loop block)
-//   (S-For name seq body)
-//   (S-LoopWhile cond body)
-//   (S-While cond)
-//
+// syntax: parse Rio source code
 
 import * as test from "./test.js";
-import {append, override, set, sexprFormatter} from "./misc.js";
+import {append, set} from "./misc.js";
 import {P, S, NS, R, V, and, or, CC, cpos, fail, NoCaptures} from "./peg.js";
+import {AST, astFmt, astFmtV} from "./ast.js";
 
 // returns: match 0 or 1 occurrence of `p`
 function opt(p) {
@@ -135,12 +103,13 @@ let p2dInitialState = {
 
 let NonNL = NS("\n");
 
-// Construct an AST node
 function Node(typ, pos, end, ...args) {
-    let node = [...args];
+    if (!AST[typ]) {
+        fail("no AST[%q]!\n", typ);
+    }
+    let node = AST[typ](...args);
     node.pos = pos;
     node.end = end;
-    node.T = typ;
     return node;
 }
 
@@ -395,15 +364,15 @@ let pattern = or(
     M("VecPattern", T("["), cseq(V("Pattern")), T("]")));
 
 let statement = or(
-    M("S-Let", letTarget, letOp, needExpr),
-    M("S-Act", params, T("<-"), needExpr),
-    M("S-Case", pattern, T("=>"), needExpr),
-    M("S-If", T("if"), expr, T(":"), expr),
-    M("S-Loop", T("loop"), T(":"), needBlock),
-    M("S-LoopWhile", T("loop"), T("while"), expr, T(":"), needBlock),
-    M("S-While", T("while"), needExpr),
-    M("S-For", T("for"), variable, T("in"), expr, T(":"), expr),
-    M("S-Assert", T("assert"), needExpr));
+    M("SLet", letTarget, letOp, needExpr),
+    M("SAct", params, T("<-"), needExpr),
+    M("SCase", pattern, T("=>"), needExpr),
+    M("SIf", T("if"), expr, T(":"), expr),
+    M("SLoop", T("loop"), T(":"), needBlock),
+    M("SLoopWhile", T("loop"), T("while"), expr, T(":"), needBlock),
+    M("SWhile", T("while"), needExpr),
+    M("SFor", T("for"), variable, T("in"), expr, T(":"), expr),
+    M("SAssert", T("assert"), needExpr));
 
 let atBlock = or(
     stmtKeywords,
@@ -436,29 +405,15 @@ let rioG = {
 //   node = an AST node describing an expression
 //   oob = an array of "out of band" captures (errors, comments)
 //
+// The result of parsing a module is a Block, which is an array of logical
+// lines, each of which is an expression or a statement.
+//
 function parseModule(subj) {
     let [_, state, captures] = rioModule.match(subj, 0, p2dInitialState, rioG);
     return [captures[0], state.oob];
 }
 
-//==============================
-// Create SEXPR summary of AST
-//==============================
-
-let astFmt = sexprFormatter({
-    Name: v => v[0],
-    Number: v => v[0],
-});
-
-function astFmtV(nodes) {
-    if (nodes instanceof Array) {
-        return nodes.map(astFmt).join(" ");
-    } else {
-        return String(nodes);
-    }
-}
-
-export {parseModule, astFmtV, astFmt};
+export {parseModule};
 
 //==============================================================
 // Tests
@@ -535,13 +490,12 @@ testG(txt, blockBody,
 // Inline Parsing Tests
 //==============================
 
-test.eq(astFmt(Node("Foo", 5, 6, "x")), '(Foo "x")');
 test.eq(astFmt(Node("Name", 5, 6, "x")), 'x');
 test.eq(astFmt(Node("Number", 5, 6, "9")), '9');
 
 {
-    test.eq(M("Foo", P("b").C).match("abc", 1, {}, {}),
-            [2, {}, [Node("Foo", 1, 2, "b")]]);
+    test.eq(M("Name", P("b").C).match("abc", 1, {}, {}),
+            [2, {}, [Node("Name", 1, 2, "b")]]);
 }
 
 test.eq([1, p2dInitialState, []],
@@ -575,39 +529,39 @@ testG('"a\\\\\\t\\nb"   ', qstring, ["a\\\t\nb"], null, 13);
 testG('"\\a"', qstring, ["\\a"], '(Error "StringBS")');
 testG('"abc', qstring, ["abc"], '(Error "StringEnd")');
 
-// Test a pattern.
+// Test a pattern.  eser = expected serialization
 //
-function testPat(pattern, subj, esexpr, eoob, level) {
+function testPat(pattern, subj, eser, eoob, level) {
     level = (level || 1) + 1;
     let r = pattern.match(subj, 0, p2dInitialState, rioG);
     let [pos, state, captures] = r ?? [-1, {}, "--failed--"];
-    test.eqAt(level, esexpr, astFmtV(captures));
+    test.eqAt(level, eser, astFmtV(captures));
     test.eqAt(level, eoob || '', astFmtV(state.oob));
 }
 
 // Match `subj` using `atom`; avoid dependencies on syntax defined after
 // atom.
 //
-function testAtom(subj, esexpr, eoob) {
+function testAtom(subj, eser, eoob) {
     let g = {
         Expr: atom,
         Comment: fail,
         AtBlock: fail,
     };
-    testPat(atom.G(g), subj, esexpr, eoob, 2);
+    testPat(atom.G(g), subj, eser, eoob, 2);
 }
 
 // Match `subj` using LogLine.
 //
-function testL(subj, esexpr, eoob) {
-    testPat(logLine, subj, esexpr, eoob, 2);
+function testL(subj, eser, eoob) {
+    testPat(logLine, subj, eser, eoob, 2);
 }
 
 // Match `subj` using Module.
 //
-function testM(subj, esexpr, eoob) {
+function testM(subj, eser, eoob) {
     let [node, oob] = parseModule(subj);
-    test.eqAt(2, esexpr, astFmt(node));
+    test.eqAt(2, eser, astFmt(node));
     if (eoob) {
         test.eqAt(2, eoob, astFmtV(oob));
     }

@@ -1,8 +1,8 @@
 // desugar: Convert AST to IL
 
 import {assert, eq, eqAt, printf} from "./test.js";
-import {L, N} from "./misc.js";
-import {astFmt, parseModule} from "./syntax.js";
+import {L} from "./misc.js";
+import {AST, astFmt, astFmtV} from "./ast.js";
 
 //==============================================================
 // Inner Language
@@ -114,53 +114,67 @@ class Env {
 // AST constructors
 //==============================================================
 
-let astName  = (str)          => N("Name", str);
-let astCall  = (fn, args)     => N("Call", fn, args);
-let astFn    = (params, body) => N("Fn", params, body);
-let astBlock = (lines, vars)  => N("Block", lines, vars);
-let astBinop = (op, a, b)     => N("Binop", op, a, b);
-let astIIf   = (cond, a, b)   => N("IIf", cond, a, b);
-let astAssert = (cond)        => N("S-Assert", cond);
-let astError = (desc)         => N("Error", desc);
+// Construct a "fake" Block AST nodes with additional context, loopVars,
+// which is produced and consumed only by this module.
+//
+let astBlock = (block, loopVars) => {
+    let ast = AST.Block(block);
+    ast.loopVars = loopVars;
+    return ast;
+};
 
 let astLet = (target, value, body) =>
-    astCall( astFn([target], body), [value]);
+    AST.Call( AST.Fn([target], body), [value]);
 
 let astSend = (expr, name, ...args) =>
-    astCall( N("Dot", expr, astName(name)), args);
+    AST.Call( AST.Dot(expr, AST.Name(name)), args);
 
-let astIndex = (vec, index) => N("Index", vec, index);
-
-let astNum = (num) => N("Number", String(num));
-
-let astName_string = (ast) => {
+let stringFromName = (ast) => {
     assert(ast.T == "Name");
-    return ast[0];
+    return ast.str;
 };
 
 //==============================================================
 // Desugar logic
 //==============================================================
 
+// Desugar a complex assignment target by transforming its value (AST -> AST)
+//
+//    x.a = y     -->  x = x.setProp("a", y)
+//    x.a[1] = 2  -->  x = x.setProp("a", x.a.set(1, 2))
+//
+let unwrapTarget = (target, value) => {
+    if (target.T == "Name") {
+        return [target, value];
+    } else if (target.T == "Index") {
+        let {a, b} = target;
+        return unwrapTarget(a, astSend(a, "set", b, value));
+    } else if (target.T == "Dot") {
+        let {a, name} = target;
+        let str = AST.String(stringFromName(name));
+        return unwrapTarget(a, astSend(a, "setProp", str, value));
+    } else {
+        fail("bad target");
+    }
+};
+
 // Construct an IL "case" construct from AST parameters.
 let xlatCase = (value, pattern, onMatch, onFail) => {
-    let typ = pattern.T;
-    if (typ == "Name") {
-        let [name] = pattern;
+    if (pattern.T == "Name") {
         return astLet(pattern, value, onMatch);
-    } else if (typ == "Number" || typ == "String") {
-        let cond = astBinop("==", pattern, value);
-        return astIIf(cond, onMatch, onFail);
-    } else if (typ == "VecPattern") {
+    } else if (pattern.T == "Number" || pattern.T == "String") {
+        let cond = AST.Binop("==", pattern, value);
+        return AST.IIf(cond, onMatch, onFail);
+    } else if (pattern.T == "VecPattern") {
         // Match(V, [P0,P1,...], M, F) -->
         //   Match(V[0], P0, Match(V[1], P1, ... M ... , F), F)
-        let [elems] = pattern;
-        let m = astFn([], onMatch);
-        let f = astName(".fail");
+        let {elems} = pattern;
+        let m = AST.Fn([], onMatch);
+        let f = AST.Name(".fail");
         for (let [index, elem] of elems.entries()) {
-            m = xlatCase(astIndex(value, astNum(index)), elem, m, f);
+            m = xlatCase(AST.Index(value, AST.Number(index)), elem, m, f);
         }
-        return astCall(astLet(f, astFn([], onFail), m), []);
+        return AST.Call(astLet(f, AST.Fn([], onFail), m), []);
     } else {
         return IL.Err("bad case");
     }
@@ -177,22 +191,23 @@ let getLoopVars = (ast) => {
 
     let recur = (ast) => {
         if (ast.T == "Block") {
-            let [stmts] = ast;
-            for (let s of stmts) {
+            let {block} = ast;
+            for (let s of block) {
                 if (s.T == "S-Let") {
-                    let [target] = s;
-                    if (!seen.has(target[0])) {
-                        seen.add(target[0]);
+                    let {target} = s;
+                    let nameStr = stringFromName(target);
+                    if (!seen.has(nameStr)) {
+                        seen.add(nameStr);
                         vars.push(target);
                     }
                 } else if (s.T == "S-Loop") {
-                    let [lines] = s;
-                    recur(astBlock(lines));
+                    let {block} = s;
+                    recur(AST.Block(block));
                 } else if (s.T == "S-LoopWhile") {
-                    let [_, lines] = s;
-                    recur(astBlock(lines));
+                    let {block} = s;
+                    recur(AST.Block(block));
                 } else if (s.T == "S-If") {
-                    let [_, then] = s;
+                    let {then} = s;
                     assert(then.T == "Block");
                     recur(then);
                 }
@@ -203,42 +218,21 @@ let getLoopVars = (ast) => {
     return vars;
 };
 
-let bodyName = astName(".body");
-let postName = astName(".post");
+let bodyName = AST.Name(".body");
+let postName = AST.Name(".post");
 
 // Convert a loop to more primitive AST records.
 //
 let xlatLoop = (body, k, loopVars) => {
     let bodyArgs = [bodyName, ...loopVars];
-    return astLet(postName, astFn(loopVars, k),
-                  astLet(bodyName, astFn(bodyArgs, body),
-                         astCall(bodyName, bodyArgs)));
-};
-
-// Desugar a complex assignment target by transforming its value (AST -> AST)
-//
-//    x.a = y     -->  x = x.setProp("a", y)
-//    x.a[1] = 2  -->  x = x.setProp("a", x.a.set(1, 2))
-//
-let unwrapTarget = (target, value) => {
-    let ast = target;
-    if (target.T == "Name") {
-        return [target, value];
-    } else if (target.T == "Index") {
-        let [array, idx] = target;
-        return unwrapTarget(array, astSend(array, "set", idx, value));
-    } else if (target.T == "Dot") {
-        let [rec, name] = target;
-        let str = N("String", astName_string(name));
-        return unwrapTarget(rec, astSend(rec, "setProp", str, value));
-    } else {
-        return N("Error", "bad target");
-    }
+    return astLet(postName, AST.Fn(loopVars, k),
+                  astLet(bodyName, AST.Fn(bodyArgs, body),
+                         AST.Call(bodyName, bodyArgs)));
 };
 
 // Construct an IL function from AST body & params
 let dsFun = (body, params, env) =>
-    IL.Fun(env.extend(params.map(astName_string)).desugar(body));
+    IL.Fun(env.extend(params.map(stringFromName)).desugar(body));
 
 // Construct an IL "if" construct from AST condition, then, & else
 let dsIf = (c, a, b, env) =>
@@ -258,67 +252,67 @@ let dsBlock = (lines, loopVars, env) => {
     let T = ast.T;
     let kf = () => (rest.length > 0
                     ? astBlock(rest, loopVars)
-                    : astError("nonExprAtEndOfBlock"));
+                    : AST.Error("nonExprAtEndOfBlock"));
     let node;
 
     if (T == "S-If") {
-        let [cond, then] = ast;
+        let {cond, then} = ast;
         if (loopVars) {
             // allow `break` or `repeat` within a THEN clause
             if (then.T == "Block") {
-                then = astBlock(then[0], loopVars);
+                then = astBlock(then.block, loopVars);
             } else {
                 then = astBlock([then], loopVars);
             }
         }
         node = dsIf(cond, then, kf(), env);
     } else if (T == "S-Let") {
-        let [target, aop, value] = ast;
-        if (aop != "=" && aop != ":=") {
+        let {target, op, value} = ast;
+        if (op != "=" && op != ":=") {
             // handle `+=`, `*=`, etc.
-            let op = aop.match(/^[^=]+/);
-            value = astBinop(op, target, value);
+            let binop = op.match(/^[^=]+/);
+            value = AST.Binop(binop, target, value);
         }
         [target, value] = unwrapTarget(target, value);
-        let isBound = env.find(astName_string(target));
-        if (aop == "=" && isBound) {
-            return IL.Err("Shadow:" + astName_string(target));
-        } else if (aop != "=" && !isBound) {
-            return IL.Err("Undefined:" + astName_string(target));
+        let isBound = env.find(stringFromName(target));
+        if (op == "=" && isBound) {
+            return IL.Err("Shadow:" + stringFromName(target));
+        } else if (op != "=" && !isBound) {
+            return IL.Err("Undefined:" + stringFromName(target));
         }
         node = dsLet([target], value, kf(), env);
     } else if (T == "S-Loop") {
-        let [lines] = ast;
-        let lastStmt = lines[lines.length - 1];
+        let {block} = ast;
+        let lastStmt = block[block.length - 1];
         if (!( lastStmt &&
                lastStmt.T == "Name" &&
-               lastStmt[0] == "break")) {
-            lines.push(astName("repeat"));
+               lastStmt.str == "break")) {
+            block = [...block, AST.Name("repeat")];
         }
-        let body = astBlock(lines);
-        let vars = getLoopVars(body).filter(n => env.find(astName_string(n)));
-        let simple = xlatLoop(astBlock(lines, vars), kf(), vars);
+        let body = AST.Block(block);
+        let vars = getLoopVars(body).filter(n => env.find(stringFromName(n)));
+        let simple = xlatLoop(astBlock(block, vars), kf(), vars);
         node = env.desugar(simple);
     } else if (T == "S-While") {
-        let [cond] = ast;
-        node = dsIf(cond, kf(), astBlock([astName("break")], loopVars), env);
+        let {cond} = ast;
+        node = dsIf(cond, kf(), astBlock([AST.Name("break")], loopVars), env);
     } else if (T == "S-LoopWhile") {
-        let [cond, block] = ast;
-        let loop = N("S-Loop", [N("S-While", cond), ...block])
+        let {cond, block} = ast;
+        let loop = AST.SLoop([AST.SWhile(cond), ...block]);
         node = dsBlock([loop, ...rest], loopVars, env);
     } else if (T == "S-Assert") {
-        let [cond] = ast;
-        node = dsIf(cond, kf(), astCall(astName(".stop"), []), env);
+        let {cond} = ast;
+        node = dsIf(cond, kf(), AST.Call(AST.Name(".stop"), []), env);
     } else {
         // Expression | break | repeat
         if (rest.length == 0) {
             // terminating expression/break/repeat
             if (loopVars && ast.T == "Name") {
-                let [name] = ast;
-                if (name == "repeat") {
-                    ast = astCall(bodyName, [bodyName, ...loopVars]);
-                } else if (name == "break") {
-                    ast = astCall(postName, loopVars);
+                let {str} = ast;
+                if (str == "repeat") {
+                    ast = AST.Call(bodyName, [bodyName, ...loopVars]);
+                } else if (str == "break") {
+                    ast = AST.Call(postName, loopVars);
                 }
             }
             return env.desugar(ast);
@@ -333,7 +327,6 @@ let dsBlock = (lines, loopVars, env) => {
 
 // Desugar an AST expression
 let desugar = (ast, env) => {
-    if (!env) todo();
     let recur = expr => desugar(expr, env);
     let T = ast.T;
     let node;
@@ -341,70 +334,71 @@ let desugar = (ast, env) => {
 
     if (T == "Block") {
         // loopVars is present only when Block is constructed by desugaring
-        let [lines, loopVars] = ast;
-        node = dsBlock(lines, loopVars, env);
+        let {block} = ast;
+        let loopVars = ast.loopVars;
+        node = dsBlock(block, loopVars, env);
     } else if (T == "Number") {
-        node = IL.num(ast[0]);
+        node = IL.num(ast.str);
     } else if (T == "String") {
-        node = IL.str(ast[0]);
+        node = IL.str(ast.str);
     } else if (T == "Name") {
-        let [name] = ast;
-        if (name == "repeat" || name == "break") {
-            node = IL.Err("bad " + name);
-        } else if (name == ".stop") {
+        let {str} = ast;
+        if (str == "repeat" || str == "break") {
+            node = IL.Err("bad " + str);
+        } else if (str == ".stop") {
             node = IL.lib("stop");
         } else {
-            let rec = env.find(name);
+            let rec = env.find(str);
             if (!rec) {
-                node = IL.Err("Undefined:" + name);
+                node = IL.Err("Undefined:" + str);
             } else {
                 let [ups, pos] = rec;
                 node = IL.Arg(ups, pos);
             }
         }
     } else if (T == "Fn") {
-        let [params, body] = ast;
+        let {params, body} = ast;
         node = dsFun(body, params, env);
     } else if (T == "Call") {
-        let [fn, args] = ast;
+        let {fn, args} = ast;
         node = IL.App(recur(fn), args.map(recur));
     } else if (T == "Dot") {
-        let [a, name] = ast;
-        node = IL.prop(recur(a), astName_string(name));
+        let {a, name} = ast;
+        node = IL.prop(recur(a), stringFromName(name));
     } else if (T == "Index") {
-        let [a, b] = ast;
+        let {a, b} = ast;
         node = IL.send(recur(a), "@[]", recur(b));
     } else if (T == "Binop") {
-        let [op, a, b] = ast;
+        let {op, a, b} = ast;
         node = op == "$"
             ? IL.App(recur(a), [recur(b)])
             : IL.send(recur(a), "@" + op, recur(b));
     } else if (T == "Unop") {
-        let [op, svalue] = ast;
-        node = IL.prop(recur(svalue), op);
+        let {op, a} = ast;
+        node = IL.prop(recur(a), op);
     } else if (T == "IIf") {
-        let [c, a, b] = ast;
-        node = dsIf(c, a, b, env);
+        let {cond, a, b} = ast;
+        node = dsIf(cond, a, b, env);
     } else if (T == "Vector") {
-        let [elems] = ast;
+        let {elems} = ast;
         node = IL.App(IL.lib("vecNew"), elems.map(recur));
     } else if (T == "Map") {
-        let [rpairs] = ast;
+        let {kvs} = ast;
         let keys = [];
         let values = [];
-        for (let ii = 0; ii < rpairs.length; ii += 2) {
-            keys.push( IL.str(astName_string(rpairs[ii])) );
-            values.push( rpairs[ii+1] );
+        for (let ii = 0; ii < kvs.length; ii += 2) {
+            keys.push( IL.str(stringFromName(kvs[ii])) );
+            values.push( kvs[ii+1] );
         }
         let mapCons = IL.App(IL.lib("mapDef"), keys);
         node = IL.App(mapCons, values.map(recur));
     } else if (T == "Match") {
-        let [value, cases] = ast;
-        let v = astName(".value");
-        let m = astName(".stop");
+        let {value, cases} = ast;
+        let v = AST.Name(".value");
+        let m = AST.Name(".stop");
         for (let c of cases.slice().reverse()) {
             assert(c.T == "S-Case");
-            let [pattern, body] = c;
+            let {pattern, body} = c;
             m = xlatCase(v, pattern, body, m);
         }
         node = recur(astLet(v, value, m));
@@ -412,8 +406,8 @@ let desugar = (ast, env) => {
         node = IL.Err("missing");
     } else if (T == "Error") {
         // constructed only by desugaring
-        let [desc] = ast;
-        node = IL.Err(desc);
+        let {str} = ast;
+        node = IL.Err(str);
     } else {
         node = IL.Err("unknownExpr:" + T);
     }
@@ -422,21 +416,31 @@ let desugar = (ast, env) => {
     return ast.pos != null ? IL.Tag(ast, node) : node;
 };
 
+export {Env, IL, Op};
+
 //==============================================================
-// desugar Tests
+// Tests
 //==============================================================
 
-let parseToAST = (src) => parseModule(src)[0];
-
-let astEQ = (a, b) => eqAt(2, astFmt(a), astFmt(b));
+import {parseModule} from "./syntax.js";
 
 let testEnv = new Env(['a', 'b']).extend(['x', 'y']);
 eq([1,0], testEnv.find('a'));
 eq([0,1], testEnv.find('y'));
 
+let parseToAST = (src) => parseModule(src)[0];
+let parseExpr = (src) => parseToAST(src).block[0];
+
+let anum = (num) => AST.Number(String(num));
+let avar = (str) => AST.Name(str);
+
+let astEQ = (a, b) => eqAt(2, astFmt(a), astFmt(b));
+
 let $x = IL.Arg(0, 0);  // 'x' in testEnv
 let $a = IL.Arg(1, 0);  // 'a' in testEnv
 let $b = IL.Arg(1, 1);  // 'b' in testEnv
+let $1 = IL.num(1);
+let $2 = IL.num(2);
 
 let serializeIL = input =>
     IL.fmt(IL.detag(input instanceof Array && input[0].T
@@ -444,9 +448,6 @@ let serializeIL = input =>
                     : desugar(parseToAST(L(input)), testEnv)));  // source
 
 let ilEQ = (a, b) => eqAt(2, serializeIL(a), serializeIL(b));
-
-let $1 = IL.num(1);
-let $2 = IL.num(2);
 
 // test IL.prop
 eq(IL.prop($a, "p"), IL.App(IL.getProp, [$a, IL.str("p")]));
@@ -457,14 +458,9 @@ eq(IL.send($a, "p", $1), IL.App( IL.prop($a, "p"), [$1]));
 // test unwrapTarget
 
 let test_unwrapTarget = (srcA, srcB) => {
-    let parseLet = (src) => {
-        let block = parseToAST(src);
-        assert(block.T == "Block" && block[0][0].T == "S-Let");
-        return block[0][0];
-    }
-    let [tA, _A, vA] = parseLet(srcA);
-    let [tOut, vOut] = unwrapTarget(tA, vA);
-    astEQ(N("S-Let", tOut, _A, vOut), parseLet(srcB));
+    let a = parseExpr(srcA);
+    let [target, value] = unwrapTarget(a.target, a.value);
+    astEQ(AST.SLet(target, a.op, value), parseExpr(srcB));
 };
 
 test_unwrapTarget('x = 1', 'x = 1');
@@ -472,9 +468,32 @@ test_unwrapTarget('a.x = 1', 'a = a.setProp("x", 1)');
 test_unwrapTarget('a[1] = 2', 'a = a.set(1, 2)');
 test_unwrapTarget('a[1].x = 2', 'a = a.set(1, a[1].setProp("x", 2))');
 
+// xlatCase
+
+//  p => 1
+astEQ(xlatCase(avar("v"), avar("p"), anum(1), anum(2)),
+      astLet(avar("p"), avar("v"), anum(1)));
+
+//  0 => 1
+astEQ(xlatCase(avar("v"), anum(0), anum(1), anum(2)),
+      AST.IIf(AST.Binop("==", anum(0), avar("v")),
+              anum(1),
+              anum(2)));
+
+//  [3,p] => 1
+astEQ(xlatCase(avar("v"), AST.VecPattern([anum(3), avar("p")]),
+               anum(1), anum(2)),
+      AST.Call(astLet(avar(".fail"), AST.Fn([], anum(2)),
+                      astLet(avar("p"), AST.Index(avar("v"), anum(1)),
+                             AST.IIf(AST.Binop("==", anum(3),
+                                               AST.Index(avar("v"), anum(0))),
+                                     AST.Fn([], anum(1)),
+                                     avar(".fail")))),
+               []));
+
 // test getLoopVars
 
-astEQ([astName("foo"), astName("bar"), astName("baz"), astName("qux")],
+astEQ([avar("foo"), avar("bar"), avar("baz"), avar("qux")],
       getLoopVars(parseToAST(L([
           "foo := a",
           "loop:",
@@ -492,35 +511,12 @@ astEQ([astName("foo"), astName("bar"), astName("baz"), astName("qux")],
 // test xlatLoop
 
 astEQ(
-    xlatLoop(astName("x"), astName("y"), [ astName("x") ]),
+    xlatLoop(avar("x"), avar("y"), [ avar("x") ]),
 
-    astLet( astName(".post"), astFn([astName("x")], astName("y")),
-            astLet( astName(".body"), astFn([astName(".body"), astName("x")],
-                                            astName("x")),
-                    astCall( astName(".body"), [astName(".body"), astName("x")]))));
-
-// xlatCase
-
-//  p => 1
-astEQ(xlatCase(astName("v"), astName("p"), astNum(1), astNum(2)),
-      astLet(astName("p"), astName("v"), astNum(1)));
-
-//  0 => 1
-astEQ(xlatCase(astName("v"), astNum(0), astNum(1), astNum(2)),
-      astIIf(astBinop("==", astNum(0), astName("v")),
-             astNum(1),
-             astNum(2)));
-
-//  [3,p] => 1
-astEQ(xlatCase(astName("v"), N("VecPattern", [astNum(3), astName("p")]),
-             astNum(1), astNum(2)),
-      astCall(astLet(astName(".fail"), astFn([], astNum(2)),
-                     astLet(astName("p"), astIndex(astName("v"), astNum(1)),
-                            astIIf(astBinop("==", astNum(3),
-                                            astIndex(astName("v"), astNum(0))),
-                                    astFn([], astNum(1)),
-                                    astName(".fail")))),
-              []));
+    astLet( avar(".post"), AST.Fn([avar("x")], avar("y")),
+            astLet( avar(".body"), AST.Fn([avar(".body"), avar("x")],
+                                          avar("x")),
+                    AST.Call( avar(".body"), [avar(".body"), avar("x")]))));
 
 // Number
 ilEQ("1", $1);
@@ -641,9 +637,3 @@ ilEQ([
 // Block: S-Assert
 ilEQ([ 'assert x', '1' ],
      IL.iif($x, $1, IL.App( IL.lib("stop"), [])));
-
-//==============================================================
-// exports
-//==============================================================
-
-export {Env, IL, Op};

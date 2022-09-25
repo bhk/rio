@@ -78,25 +78,24 @@ let argMap = (args) => {
 // astBreakdowns[ast.T](...ast) -->  [template, childNamesAndValues]
 //
 let astBreakdowns = {
-    Binop: (op, a, b) => ["<a> " + op + " <b>", {a, b}],
-    Unop: (op, a) =>     [op + " <a>", {a}],
-    Dot: (a, name) =>    ["<a>." + astName_string(name), {a}],
-    Index: (a, b) =>     ["a[b]", {a, b}],
-    IIf: (c, a, b) =>    ["<c> ? <a> : <b>", {c, a}],
-    Call: (f, args) =>   ["<f>(" + argList(args) + ")",
-                          {f, ...argMap(args)}],
-    Vector: (elems) =>   ["{<aN>...}", argMap(elems)],
+    Binop: ({op, a, b}) => ["<a> " + op + " <b>", {a, b}],
+    Unop: ({op, a}) =>     [op + " <a>", {a}],
+    Dot: ({a, name}) =>    ["<a>." + astName_string(name), {a}],
+    Index: ({a, b}) =>     ["a[b]", {a, b}],
+    IIf: ({cond, a, b}) => ["<cond> ? <a> : <b>", {cond, a}],
+    Call: ({fn, args}) =>  ["<f>(" + argList(args) + ")",
+                            {f: fn, ...argMap(args)}],
+    Vector: ({elems}) =>   ["{<aN>...}", argMap(elems)],
 
-    Number: (n) =>       [false],
-    Name: (s) =>         [false],
-    String: (str) =>     [],
-
-    Map: (rpairs) =>  [],
-    Match: (value, cases) =>  [],
+    Number: ({str}) => [false],
+    Name: ({str}) => [false],
+    String: ({str}) => [false],
+    Map: ({kvs}) => [],
+    Match: ({value, cases}) =>  [],
     Missing: () =>  [],
-    Error: (desc) =>  [],
-    Fn: (params, body) =>  [],
-    Block: (lines, loopVars) => [],
+    Error: ({str}) =>  [],
+    Fn: ({params, body}) =>  [],
+    Block: ({block}) => [],
 };
 
 let getLineInfo = (text, pos) => {
@@ -145,7 +144,7 @@ let printResult = (fileName, text, ev, result) => {
         do {
             let ast = result.getAST();
             let f = astBreakdowns[ast.T];
-            let [template, childASTs] = (f ? f(...ast) : []);
+            let [template, childASTs] = (f ? f(ast) : []);
             let here = lineAndCol(text, ast) + ":";
 
             // print template
@@ -203,7 +202,8 @@ let findChildResult = (result, ast) => {
 //================================================================
 
 import fs from "fs";
-import {astFmt, astFmtV, parseModule} from "./syntax.js";
+import {astFmt, astFmtV} from "./ast.js";
+import {parseModule} from "./syntax.js";
 import {Host, valueFmt} from "./host.js";
 
 // Construct matching desugar env & eval env from {varName -> hostValue}
@@ -221,7 +221,7 @@ let manifestVars = {
 let [manifestDSEnv, manifestEvalEnv] = makeManifest(manifestVars);
 
 let runText = (text, fileName) => {
-    let [ast, oob] = parseModule(text);
+    let [programAST, oob] = parseModule(text);
 
     // Display out-of-band parsing errors (filter out comments)
     oob = oob.filter(e => e.T == "Error");
@@ -237,7 +237,7 @@ let runText = (text, fileName) => {
     }
 
     // evaluate program
-    let programIL = manifestDSEnv.desugar(ast);
+    let programIL = manifestDSEnv.desugar(programAST);
     let ev = ilEval(Host)(programIL, {}, manifestEvalEnv);
     ev.sync();
     let result = ev.getResult();
@@ -255,14 +255,13 @@ let runText = (text, fileName) => {
     }
 
     // describe error
-    let ra = result.getAST();
-    let eop = ev.getState().error;
-    let [line, col, lineText] = getLineInfo(text, ra.pos);
+    let errAST = result.getAST();
+    let [line, col, lineText] = getLineInfo(text, errAST.pos);
 
-    if (result.errorName == "Stop" && ra.T == "S-Assert") {
+    if (result.errorName == "Stop" && errAST.T == "S-Assert") {
         printf("%s:%s:%s: Assertion failed\n", fileName, line, col);
         printf(" | %s\n", lineText);
-        let [cond] = ra;
+        let {cond} = errAST;
         printResult(fileName, text, ev, findChildResult(result, cond));
     } else {
         printf("%s:%s:%s: Error: %q\n", fileName, line, col, result.errorName);

@@ -1,5 +1,9 @@
 TODO
 
+* syntax -> parse
+* syntax: SLoop(block) may be an arry of Expr or aingle MissingBlock() !
+* syntax: test VecPattern
+
 * diagnostics: Trace Value (GUI)
      Display UI for values in context of the expression that generates them
    - Design
