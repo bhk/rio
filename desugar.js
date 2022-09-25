@@ -422,7 +422,7 @@ export {Env, IL, Op};
 // Tests
 //==============================================================
 
-import {parseModule} from "./syntax.js";
+import {parseModule} from "./parse.js";
 
 let testEnv = new Env(['a', 'b']).extend(['x', 'y']);
 eq([1,0], testEnv.find('a'));

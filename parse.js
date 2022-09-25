@@ -1,6 +1,5 @@
-// syntax: parse Rio source code
+// parse: parse Rio source code
 
-import * as test from "./test.js";
 import {append, set} from "./misc.js";
 import {P, S, NS, R, V, and, or, CC, cpos, fail, NoCaptures} from "./peg.js";
 import {AST, astFmt, astFmtV} from "./ast.js";
@@ -419,6 +418,8 @@ export {parseModule};
 // Tests
 //==============================================================
 
+import {eq, eqAt} from "./test.js";
+
 //==============================
 // 2D Parsing Tests
 //==============================
@@ -445,16 +446,16 @@ let testGrammar = {
 function testG(subj, pattern, ecaptures, eoob, epos) {
     let results = pattern.match(subj, 0, p2dInitialState, testGrammar);
     if (ecaptures == null) {
-        test.eqAt(2, false, results);
+        eqAt(2, false, results);
         return;
     }
     let [pos, state, captures] = results;
-    test.eqAt(2, ecaptures, captures);
+    eqAt(2, ecaptures, captures);
     if (eoob != undefined) {
-        test.eqAt(2, eoob, state ? astFmtV(state.oob) : "");
+        eqAt(2, eoob, state ? astFmtV(state.oob) : "");
     }
     if (epos !== undefined) {
-        test.eqAt(2, epos, pos);
+        eqAt(2, epos, pos);
     }
 }
 
@@ -490,16 +491,16 @@ testG(txt, blockBody,
 // Inline Parsing Tests
 //==============================
 
-test.eq(astFmt(Node("Name", 5, 6, "x")), 'x');
-test.eq(astFmt(Node("Number", 5, 6, "9")), '9');
+eq(astFmt(Node("Name", 5, 6, "x")), 'x');
+eq(astFmt(Node("Number", 5, 6, "9")), '9');
 
 {
-    test.eq(M("Name", P("b").C).match("abc", 1, {}, {}),
-            [2, {}, [Node("Name", 1, 2, "b")]]);
+    eq(M("Name", P("b").C).match("abc", 1, {}, {}),
+       [2, {}, [Node("Name", 1, 2, "b")]]);
 }
 
-test.eq([1, p2dInitialState, []],
-        ss.match(" \nx", 0, p2dInitialState, {Comment: fail}));
+eq([1, p2dInitialState, []],
+   ss.match(" \nx", 0, p2dInitialState, {Comment: fail}));
 
 testG(" \nNext", ss, [], null, 1);
 testG(" # c\n  x\n", ss, [], '(Comment "# c")', 7);
@@ -535,8 +536,8 @@ function testPat(pattern, subj, eser, eoob, level) {
     level = (level || 1) + 1;
     let r = pattern.match(subj, 0, p2dInitialState, rioG);
     let [pos, state, captures] = r ?? [-1, {}, "--failed--"];
-    test.eqAt(level, eser, astFmtV(captures));
-    test.eqAt(level, eoob || '', astFmtV(state.oob));
+    eqAt(level, eser, astFmtV(captures));
+    eqAt(level, eoob || '', astFmtV(state.oob));
 }
 
 // Match `subj` using `atom`; avoid dependencies on syntax defined after
@@ -561,9 +562,9 @@ function testL(subj, eser, eoob) {
 //
 function testM(subj, eser, eoob) {
     let [node, oob] = parseModule(subj);
-    test.eqAt(2, eser, astFmt(node));
+    eqAt(2, eser, astFmt(node));
     if (eoob) {
-        test.eqAt(2, eoob, astFmtV(oob));
+        eqAt(2, eoob, astFmtV(oob));
     }
 }
 

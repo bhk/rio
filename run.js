@@ -203,7 +203,7 @@ let findChildResult = (result, ast) => {
 
 import fs from "fs";
 import {astFmt, astFmtV} from "./ast.js";
-import {parseModule} from "./syntax.js";
+import {parseModule} from "./parse.js";
 import {Host, valueFmt} from "./host.js";
 
 // Construct matching desugar env & eval env from {varName -> hostValue}
