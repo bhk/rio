@@ -69,7 +69,7 @@ let astBreakdowns = {
     Dot: (a, name) =>    ["<a>." + astName_string(name), {a}],
     Index: (a, b) =>     ["a[b]", {a, b}],
     IIf: (c, a, b) =>    ["<c> ? <a> : <b>", {c, a}],
-    Call: (fn, args) =>  ["<f>(<aN>...)", argMap(args)],
+    Call: (f, args) =>   ["<f>(<aN>...)", {f, ...argMap(args)}],
     Vector: (elems) =>   ["{<aN>...}", argMap(elems)],
 
     Number: (n) => [],
@@ -112,35 +112,63 @@ let zpad = (length, n) => {
 };
 
 // Display a result's value and breakdown (recursively)
+//
+//        value
+//        = <template>          \
+//          a: <b>               |-- breakdown
+//          b: <b>              /
+//        = <template>         function body continuation
+//          b: <B>
+//        ...
+//
 let printResult = (fileName, text, ev, result) => {
     let recur = (prefix, result) => {
         if (!result) {
-            printf("[result = %q]\n", result);
             return;
         }
 
-        let ast = result.getAST();
         let value = result.value;
-        let f = astBreakdowns[ast.T];
-        let [template, childASTs] = (f ? f(...ast) : []);
-        let here = lineAndCol(text, ast) + ":";
-
+        let here = lineAndCol(text, result.getAST()) + ":";
         printf("%s%s%s\n", here, prefix,
                (value ? valueFmt(value) : "<undefined>"));
         let p2 = prefix.replace(/./g, " ");
 
-        if (template) {
-            printf("%s%s%s\n", here, p2, template);
-        }
-        if (!childASTs) {
-            // printf("** No breakdown for %q\n", ast);
-            return;
-        }
-        for (let [name, ast] of Object.entries(childASTs)) {
-            // printf("result child: %q\n", name);
-            let r = findChildResult(result, ast);
-            recur(p2 + name + ": ", r);
-        }
+        // print breakdowns
+
+        do {
+            let ast = result.getAST();
+            let f = astBreakdowns[ast.T];
+            let [template, childASTs] = (f ? f(...ast) : []);
+            let here = lineAndCol(text, ast) + ":";
+
+            // print template
+
+            if (!template) {
+                break;
+            }
+            printf("%s%s= %s\n", here, p2, template);
+
+            // print members
+
+            let cmap = new Map();
+            for (let r of result.getChildren()) {
+                cmap.set(r.getAST(), r);
+            }
+            for (let [name, ast] of Object.entries(childASTs)) {
+                let r = cmap.get(ast);
+                if (r) {
+                    cmap.delete(ast);
+                    recur(p2 + "  " + name + ": ", r);
+                } else {
+                    printf("Child not found: %q\n", ast);
+                }
+            }
+
+            // if a child result if left over, it is the function body
+
+            result = cmap.values().next().value;
+
+        } while (result);
     };
     recur(" ", result);
 };

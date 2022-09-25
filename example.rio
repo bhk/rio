@@ -1,6 +1,6 @@
 
 # example
 f = n -> n*2
-x = 3
+x = 1 + 2
 assert 7 == f(x)
 f(x)

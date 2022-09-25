@@ -1,7 +1,6 @@
 TODO
 
-* show statement breakdowns (=> tag statement IL's with k somehow)
-* in Call breakdown, descend into fn body
+* handle "statement" ASTs in backtrace
 * diagnostics: Trace Value (GUI)
      Display UI for values in context of the expression that generates them
    - Design
