@@ -147,14 +147,14 @@ The inner language evaluator (`eval` in interp.lua) is summarized here in a
 hypothetical future Rio syntax:
 
     eval = (expr, env) ->
-        ee = newExpr -> eval(newExpr, env)
+        ee = subExpr -> eval(subExpr, env)
 
         match expr:
             IVal(value) -> value
             IArg(name) -> env[name]
             IFun(params, body) -> VFun(env, params, body)
             IApp(fn, args) -> match ee(fn):
-                VNat(name) -> natives[name](args.map(ee))
+                VHFn(fn) -> fn(args.map(ee))
                 VFun(fenv, params, body) ->
                     assert args.count == params.count
                     eval(body, fenv.bind(params, args.map(ee)))
@@ -197,24 +197,23 @@ non-bundled "raw" parameter.  The IL can remain agnostic to *what* the
 single parameter contains, but in generating IL during de-sugaring we need
 to avoid confusing surface language (Rio) functions with internal functions.
 This is easily guaranteed by ensuring internal function values appear only
-as the `fn` value in a IApp.  This is currently the case for native
-functions like vector and record constructors, which always appear in this
-context:
+as the `fn` value in a IApp.  This is currently the case for host functions
+like vector and record constructors, which always appear in this context:
 
-   IApp( IVal(VNat(...)),  ...)
+   IApp( IVal(VHFn(...)),  ...)
 
-This suggests that eliminating `VNat` values and substituting a new `INat`
+This suggests that eliminating `VHFn` values and substituting a new `IHFn`
 IL record would be more directed to our use case.  At the same time, we can
 avoid the bloat (A, below) that follows from the many "curried" function
 calls required to construct an argument list with single-argument functions.
-Retaining the ability to pass multiple values to a *native* function
-(argument count validation is not required there) enables (B).
+Retaining the ability to pass multiple values to a host function (argument
+count validation is not required there) enables (B).
 
     (A)  v0 = IVal(argsEmpty)
-         v1 = IApp(IApp(IVal(VNat("argsAppend")), v0), ITEM1)
-         IApp(IApp(IVal(VNat("argsAppend")), v1), ITEM2)
+         v1 = IApp(IApp(IVal(VHFn("argsAppend")), v0), ITEM1)
+         IApp(IApp(IVal(VHFn("argsAppend")), v1), ITEM2)
 
-    (B)  INat("argsNew", [ITEM1 ITEM2])
+    (B)  IHFn("argsNew", [ITEM1 ITEM2])
 
 That leaves us with:
 
@@ -224,17 +223,17 @@ That leaves us with:
         IFun(body) => VFun(env, body)
         IApp(fn, arg) => match eval(fn, env):
             VFun(fenv, body) => eval(body, fenv.push(eval(arg, env)))
-        INat(name, args) => natives[name](args.map(a -> eval(a, env)))
+        IHFn(name, args) => natives[name](args.map(a -> eval(a, env)))
 
 
 This comes closer to the ideals of elegance and timelessness that we have in
 mind for the IL.
 
-Revisiting booleans in light of these INat/IFun changes, our Boolean values
+Revisiting booleans in light of these IHFn/IFun changes, our Boolean values
 have the following IL definitions:
 
-   true.then_else = VFun(emptyEnv, IApp(INat("argsFirst", [IArg(0)])))
-   false.then_else = VFun(emptyEnv, IApp(INat("argsSecond", [IArg(0)])))
+   true.then_else = VFun(emptyEnv, IApp(IHFn("argsFirst", [IArg(0)])))
+   false.then_else = VFun(emptyEnv, IApp(IHFn("argsSecond", [IArg(0)])))
 
 The code to generate the IL for an `if` expression looks like this:
 
@@ -242,8 +241,8 @@ The code to generate the IL for an `if` expression looks like this:
         ...
         AST.If(cond, then, else) ->
             te = [then, else].map(a -> IFun(desugar(a, env.push([]))))
-            IApp(INat("getProperty", [desugar(cond), "then_else"]),
-                 INat("argsNew", te))
+            IApp(IHFn("getProperty", [desugar(cond), "then_else"]),
+                 IHFn("argsNew", te))
         ...
 
 
@@ -342,3 +341,16 @@ appears in a type constructor.  (Just as with `[a]`, `a -> b` can have a
 different meaning when it appears in a type context.)
 
 Now, `=>` can appear in pattern matching expressions, a la Rust.
+
+
+## RPN-style IL
+
+Instead of representing an IL expression with an object (which in the case
+of App may have references to child nodes), we now use an array of "ops", in
+RPN order, to represent an expression.
+
+This does not change the logical structure of the IL, just the concrete
+representation.  (We could convert from one to the other.)
+
+The reason is to allow for a simpler implementation of `eval` -- and,
+similarly, future eval-like operations like symbolic evaluation.

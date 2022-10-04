@@ -377,7 +377,7 @@ eq(trace[0].ii, 6);
     eq(trace[0].frame.expr[7].ast, "aba");
 }
 
-// eval of native function faulting
+// eval of host function faulting
 
 expr = [
       catArg(1),

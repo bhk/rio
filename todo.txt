@@ -1,6 +1,6 @@
 TODO
 
-* parse: SLoop(block) may be an arry of Expr or aingle MissingBlock() !
+* parse: SLoop(block) may be an arry of Expr or single MissingBlock() !
 * parse: test VecPattern
 
 * diagnostics: Trace Value (GUI)
