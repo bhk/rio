@@ -1,4 +1,4 @@
-TODO
+## TODO
 
 * parse: SLoop(block) may be an arry of Expr or single MissingBlock() !
 * parse: test VecPattern
@@ -65,6 +65,33 @@ TODO
   3. "See also: ..."
   4. Index
   5. Comments
+
+
+## Rio Project Overview
+
+* parse: converts source text to AST.
+
+  AST is a tree data structure that corresponds closely to the surface
+  language syntax description.  AST nodes are annotated with positions in
+  the text.
+
+* desugar: converts AST to IL
+
+  IL is a data type that embodies an expression-based language, similar to
+  AST butmuch simpler than AST.  It is comprised of a small number of
+  expressions that represent:
+
+   - Functions: construction, application, arguments
+   - Primitives: primitive values and primitive functions
+   - Tags: associations between AST nodes and IL subtrees
+   - Errors: errors encountered during parsing or desugaring
+
+* eval: walks the IL tree, computing a final result and a "trace".
+
+  The trace is a log of intermediate results produced by AST expressions.
+  It enables inspection of the history of execution.
+
+* run: load and execute Rio source code from the terminal.
 
 
 ################################################################
