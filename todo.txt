@@ -23,30 +23,22 @@
   - ResultDialog: jump to anchored result
 * diagnostics: Breakpoint/Step Execution?
 
-* check arity
-
-* Unimplemented language features:
+* Language features...
+  - check arity
+  - rest/spread varargs
   - eval VFUN: fall back to "call" method for non-functions
-  - methods: {NAME: FUN, ...}
   - enums
   - match function-like patterns  F(a) => THEN --> F.match(V, (a) -> THEN, E)
   - Class.extend()
-  - rest/spread varargs
-  - arrays (in patterns)
-  - dictionaries (in patterns)
   - recursive definitions (forward declarations)
   - type constructors
   - `where`
-  - For
+  - dictionaries/hashmaps
   - destructuring assignment with "else:" clause
-  - Act
   - short-circuiting `or` & `and`
-  - Vector & record equality
   - String syntax: `\xXX` and `\u{X...}`
   - `'` suffixes in variable names (shadowing avoidance)
-  - dictionaries/hashmaps
-  - named & positional arguments & defaults
-  - f("...") == f"...";  f({...}) == f{...}  [?]
+  - named arguments & defaults
   - `true`, `false` as keywords (not manifest vars)
   - disallow re-binding `true`, `false`, `break`, `repeat`
      a) trap at parse time?
@@ -55,16 +47,22 @@
   - `match VALUE in ENUM: Foo => A` --> `match VALUE: ENUM.Foo => A`
   - allow match cases to `break`, `repeat`, and re-bind loop vars
 
+* Documented-but-unimplemented Features (from concepts.md)
+  - vector patterns (in match)
+  - dictionary patterns (in match)
+  - for loops
+  - action syntax
+  - vector & record equality
+  - Orchestrators
+  - typed structures
+  - profiling
+  - defining objects
+  - introspection
+  - compilation & early evaluation
+
 * Visualize execution
   - collect execution trace
   - capture start & end of elements
-
-* riodoc: concepts.txt --> concepts.md
-  1. [[a b c]]  -->  [a b c](#a-b-c)
-  2. Broken link detection
-  3. "See also: ..."
-  4. Index
-  5. Comments
 
 
 ## Rio Project Overview
@@ -112,6 +110,6 @@
  * Choose native VM: Wasmtime, Wasmer, ?
  * OS (WASI?) bindings
  * Web Server
- * P3+: Richer data structuring, lazy/parallel/etc., ...
+ * P3+: Richer data structuring, parallel, ...
  * IDE
    - display values (or `pending...`) [computed in parallel VM]

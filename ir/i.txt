@@ -1,0 +1,197 @@
+# i.js
+
+`i.js` is a library that enables constructing a JavaScript-hosted analog of
+an [incremental reactive functional programming model](./incremental.md).
+
+TODO...
+
+Cells must be pure functions of inputs.
+ * Equivalence
+ * Memoization
+
+Thunks (another Rio language feature -> JS)
+ - allow dependencies to be abstracted.  Constructing a thunk
+   does not incur the dependency; using it does.
+
+Reactive vs. Imperative Context
+
+  JS code is either executing inside the context of a "current cell" or not.
+  Execution in a cell context is driven by a graph update algorithm that
+  re-evaluates affected cells in the proper order to ensure minimal and
+  consistent updates.  While cells are executed, their use of other cells
+  is observed and tracked.
+
+  Reactive code:
+    - construct cells
+    - use cells
+    - remain pure; do NOT affect other cells, except via results
+
+  Imperative code:
+    - construct root
+    - perform update
+
+  Bridging:
+    - construct input cells
+    - modify state cells
+    - construct side effect cells
+
+
+## Patterns
+
+### Constructing Cells
+
+The `wrap` function transforms a function to a cell constructor.  For
+example, consider this eagerly-evaluated expression and its cell equivalent:
+
+    f(x, y, z)           --> eager
+    wrap(f)(x, y, z)     --> cell
+
+The argument to `wrap` must be a constant function with no variable
+captures.  See [Using Function Values With
+Cells](#using-function-values-with-cells), below, for more details.
+
+
+### Using Cells
+
+The `use(x)` resolves cells to their resulting value.  Non-cell values are
+returned as-is.
+
+    x = I.wrap(f)(7)
+    y = f(9)
+    z = I.use(x) + I.use(y)     // use(y) === y;  use(x) evaluates x
+
+The `useError` function be used to directly examine the error state of a
+cell without re-throwing it.
+
+
+## Imperative Code
+
+Some code must bridge the gap between the reactive world and the imperative
+world, which directly works with mutation and I/O.
+
+
+### State Cells
+
+`newState(initialValue)` constructs a state cell.
+
+`cell.set(newValue)` can be used to modify the value of a state cell.  This
+can be called outside of the reactive comain (that is: outside of the scope
+of a cell recalc).
+
+If `set` is called during an update cycle -- while another cell is being
+recalculated -- this will be detected and a fatal error will be thrown.
+
+
+### Side Effect Cells
+
+TBD
+
+
+### JavaScript Root Context
+
+When JavaScript begins execution, and when JavaScript callbacks fire, code
+is executing outside of the context of any cell's update() method.  Here we
+define how the library's functions behave in this outermost "root" context.
+
+We create a cell called the root cell and treat it as the current cell when
+code is executing in the root context.  The root cell is self-updating,
+using `setTimeout` to trigger its own updates asynchronously whenever it is
+marked dirty.
+
+When any cell is used in the root context, it becomes a dependency of the
+root cell, and thereby is *activated* -- that is, it will be automatically
+updated if it become dirty.  If any of these cells enter an error state, the
+error will be reported, which will terminated program execution in a
+command-line environment.  Likewise, when `use()` is called in the root
+context, cell errors will not be caught.
+
+Cleanup functions that are registered with `onDrop(f)` in the root context
+will generally not ever be called.  This is appropriate for resources that
+have the lifetime of the entire program.
+
+
+## Equivalence
+
+The library must perform equivalence tests on (a) cell results, and (b)
+inputs to memoized functions (including cell construction parameters).
+
+We need to ensure that our functions, including cells, are pure functions,
+and will return the same value every time they operate on the same inputs.
+The challenge is that JavaScript compares composite values like objects and
+arrays by *identity*.  This is appropriate when these values are mutable,
+but as a result, a function that constructs a composite value will always
+return *different* values each time it is called.
+
+
+### Interning
+
+Our solution is to automatically **intern** cell results and cell
+construction parameters. Interning converts an input value to a equivalent
+canonical value unique for that equivalence class.  That is, `intern(a) ===
+intern(b)` if and only if `a` and `b` are equivalent, where "equivalent" is
+defined in terms of the contents of the value, not its identity.
+
+For good measure, interning of arrays and simple objects (those whose
+constructor is `Object`) yields an immutable (frozen) instance.
+
+Interning an inherently immutable value (e.g. string, number, boolean, null)
+is trivial: the result is the same as the input.
+
+Functions and complex objects (those with user-defined constructors) are not
+internable, so `intern(v) === v` in these cases.  Developers must take
+particular care using these values with cells.
+
+
+### Using Function Values With Cells
+
+The onus is on the developer to avoid using "non-constant" functions with
+cells -- that is, in a cell construction parameter or cell result.  Some
+common caveats with [Construcing Cells](#constructing-cells) are discussed
+above.  Similar concerns apply to cell results, and some additional
+elaboration is warranted.  To be a "constant" function...
+
+ - It must take on the same value in each recalculation -- that is, it
+   cannot be the result of a JavaScript "function expression" --
+   e.g. `function (x) { return x*2;}` or `x => x*2` -- that is evaluated
+   during cell recalculation.
+
+ - It must not have any captures that change value over time.
+
+ - It must not have any captures that refer to mutable values, or to
+   non-constant functions.
+
+The following examples show a non-constant function being used to construct
+a cell.  This will result in a cell that computes the correct value, but
+whose results will not be reused if this expression is re-evaluated:
+
+    f(x, 7) + y                       --> eager
+    wrap(() => f(x,7) + y)()          --> BAD cell
+    wrap((a,b) => f(a,7) + b)(x, y)   --> BAD cell
+
+The proper approach here is to extract the logic to a constant function:
+
+    function expr01(a, b) {
+      return f(a, 7) + b;
+    }
+
+    wrap(expr01)(x, y)             --> cell
+
+The same problem arises when attempting to use methods.  The following
+attempts generate new closures every time the expression is evaluated,
+defeating cell reuse:
+
+    obj.method(v)                  --> eager
+    wrap(x => obj.method(x))(v)    --> BAD cell
+    wrap(obj.method.bind(obj))(v)  --> BAD cell
+
+One solution is to re-define the method when an object is constructed:
+
+    this.m1 = this.m1.bind(this);
+        obj.m1(v)                  -->  eager
+        wrap(obj.m1)(v)            -->  cell
+
+    this.m2 = wrap(this.m2.bind(this));
+        obj.m2(v)                  -->  cell
+
+Of course, if the object itself is created every time a cell is
+recalculated, then that is also a problem.
