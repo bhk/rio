@@ -29,7 +29,7 @@ evaluation](#early-evaluation).
 
 ## Syntax Overview
 
-Here is a quick summary of Rio's "inline" syntax:
+Here is Rio's "inline" syntax summarized with some examples:
 
  - Numeric and string constants:  `1`, `1.0e4`, `"hello"`
  - Variables: `x`, `foo_bar`, `FooBar`
@@ -68,7 +68,7 @@ For example:
 Rio syntax supports a "vertical" program structure, so that code reads down
 the page instead of diagonally down-and-to-the-right.  Likewise, data flow
 (during execution) generally progresses down the page, which can help with
-readability of the code.  It also is important for usablity in a
+readability of the code.  It also is important for usability in a
 worksheet-based [live programming](#live-programming) environment.
 
 Assignment expressions consist of a `NAME = EXPR` line followed vertically
@@ -111,10 +111,10 @@ de-structuring aggregates and binding names.
 
 A `Pattern` can be one of the following:
 
- - Name: A name matches any value.  When the corresponding `Expr` is
+ - A name: This will match any value.  When the corresponding `Expr` is
    evaluated, the value is bound to the variable of that name.
 
- - Constant: A literal number or string will match an equivalent value.
+ - A constant: A literal number or string will match only that value.
 
  - `[Pattern, ...]`: A sequence of zero or more comma-delimited patterns
    enclosed in `[` and `]` will match a vector value if it has the same
@@ -164,8 +164,8 @@ by extending the notion of shadowing assignments.
     MEMBER_EXPR := EXPR
 
 In this case, MEMBER_EXPR must consist of a variable name followed by one or
-more property/item references, and *all* of them are "peeled" off and
-converted to set operations.
+more property/item dereferences. All of the dereferences are "peeled" off
+and converted to set operations.
 
 Similarly, other update assignment operators can be used:  `+=`, `-=`, etc.
 
@@ -301,7 +301,7 @@ asynchronously:
         () <- s.connect(addr, port)
         OK(s)
 
-At each `<-` clause, execution of the "rest" of the block is at the
+At each `<-` clause, execution of the remaining lines in the block is at the
 discretion of the action object.  This allows each action object to handle
 failures by short-circuiting the rest of the chain.  This can be used as a
 generic error-handling mechanism.  In the example above, we presume the
@@ -391,7 +391,7 @@ the actual hierarchical structure of the program.  In these cases, we need
 to look at the text, not just its indentation.
 
 In Rio, the solution is to examine the content of the line or lines that
-begin a new indentation level.  Test that introduces a multi-line block --
+begin a new indentation level.  Text that introduces a multi-line block --
 assignments, `if` statements, etc. -- can easily be distinguished from other
 lines.  Such lines begin a new block, and other such lines are treated as
 continuation lines.
@@ -423,7 +423,7 @@ experience.
 
 ## Immutability
 
-Data structutres and variables are immutable in Rio.  There are a number of
+Data structures and variables are immutable in Rio.  There are a number of
 reasons to forbid mutation in a language.
 
 Reasoning about programs with mutation quickly becomes unmanageable.
@@ -439,7 +439,8 @@ Guaranteed immutability of values simplifies many optimizations such as
 Immutability allows us to implement [deterministic garbage
 collection](#deterministic-garbage-collection).  Reference cycles in data
 structures either (a) cannot occur (as in Rio), or (b) can occur but only
-where the language can easily identify the cycles at time of construction.
+where the language can easily identify the cycles at the time of
+construction.
 
 Immutability of variables and data comes with some well-known downsides.
 Some people see it as less intuitive and find things more difficult to
@@ -488,7 +489,7 @@ a set of [properties](#properties).
 
 Here is one illustrative example: `a + b` is defined as invoking the "+"
 [method](#methods) of `a`, passing it `b`.  This contrasts with dynamic
-languages that define "+" as a built-in function that has special cases for
+languages that define "+" as a built-in function with special cases for
 built-in types.
 
 The main benefit of this approach is to maximize the power of user-defined
@@ -711,226 +712,106 @@ faithfully recount them.
 
 ## Intrinsic Reactivity
 
-**Intrinsic reactivity** allows a programmer to deal with time-changing
-values the way ordinary values are dealt with.  Changes to inputs
-automatically trigger recalculation and propagate to outputs.  Instead of
-requiring code, as the [observer pattern](#observer-pattern) does, change is
-treated as a cross-cutting concern that may or may not require any special
-considerations on the part of the programmer.
+**Intrinsic reactivity** refers to Rio's built-in support for [reactive,
+incremental evaluation](incremental.md).  Unlike the conventional
+[callback-based approach](incremental.md#the-notification-problem), change
+is treated as a cross-cutting concern that does not require restructuring
+code, and may or may not require any special considerations on the part of
+the programmer.
 
 A simple example is that of expressions in a Rio module viewed in the Rio
 IDE.  Below `1 + 2` will be displayed the result `3`.  `1 + timeOfDay`,
 however, will display some number that continuously increments.  There is no
 need to implement an object that registers for notifications from a
-timeOfDay object, and supports its own registration for
+timeOfDay object, and in turn supports its own registration mechanism so
+other objects can observe its changes.
 
 Extending this to arbitrarily complex Rio programs takes some imagination.
-Consider the following hypothetical Rio module, which makes use of a
-compiler toolchain written entirely in Rio:
+Consider the following hypothetical Rio commane-line program, which makes
+use of a compiler toolchain written entirely in Rio:
 
     C = load("c-compiler.rio")
     o1 = C.compile("foo.c")
     o2 = C.compile("bar.c")
-    C.link([o1, o2])
+    e = C.link([o1, o2])
+    write(e, "a.out")
 
-When viewed in the Rio IDE, the final result will appear as a "Pending..."
-value until completion of the operation, when it will display the file name
-of the resulting executable.  Any change to the files "foo.c" or "bar.c"
-will immediately trigger a transition back to "Pending..." and again to a
-resulting file.  Likewise, a change to any header file included by those C
-files will also trigger an update of the executable, because included
-headers would have been identified as dependencies when the compiler read
-their contents.
-
-To be clear, these changes do not necessarily result in re-evaluation of the
-entire program.  For example, a change to one of the C files should not
-require recompilcation of both files.  And if a C source is changed in a way
-that does not affect the contents of its object file, then then link
-operation can be sidestepped.  These optimizations can be achieved using
-[incremental evaluation(#incremental-evaluation) techniques.  For the
-programmer writing this hypothetical compiler, optimization would involve
-strategically adding memoization [order annotations](#order-annotations) to
-the code.
+The result of the final expression is an action object that accepts an
+reactive computation whose value will initially be an exception that
+indicates its in-progress status, and will later transition to the compiler
+output, which will complete the action.
 
 Other types of Rio programs perhaps require more imagination.  Long-lived
 servers, for example, are programs that continually consume a stream of
 input events, generating a stream of output events.
 
 
-## Reactive I/O
+## Orchestrators
 
-[Intrinsic reactivity](#intrinsic-reactivity) provides a solution for I/O
-that suits a pure functional language and deals with I/O delays without the
-need for callbacks or "monadic" constructs.
+**Orchestrators** are functions that control when and how expressions are
+evaluated.  Their result has the same value as their argument, but the
+computation of that result might be deferred, parallelized, or cached.
 
-Inputs can be represented as the results of functions, like:
+Since the point of orchestrators is to influence the evaluation of their
+argument, their [names end in "&"](#lazy-expressions) to defer that
+evaluation.
 
-    t = loadURL("http://example.com/test.txt")
+Examples:
 
-This will initially take on a value that indicates the pending status of the
-request, and over time will change to reflect partial results, and finally
-transition to a completed (or error) state.  Expressions that depend on this
-result will be re-evaluated as necessary.  Note how this behavior would
-make it easy to properly reflect status in a user interface.
+ * `&(EXPR)`: Returns its first argument: a deferred computation.
 
-Outputs can be achieved by constructing an action object (cf. monadic I/O)
-around a function that returns a time-changing value that eventually
-transitions to a completion state.  Such action objects can be returned from
-a `main` function, or from event handlers.
+ * `spawn&(EXPR)`: Launches a parallel task to evaluate `EXPR`, returning a
+   deferred computation that waits on the result.
 
+ * `memo&(EXPR)`: A memoized expression, evaluated within a [reactive
+   cell](incremental.md#how-it-works).  The result is a deferred
+   computation.
 
-## Order Annotations
-
-Annotations can control when an expression is evaluated, selecting on-demand
-or parallel execution.
-
-By default, Rio uses [applicative order
-](https://en.wikipedia.org/wiki/Evaluation_strategy).  Function arguments
-are evaluated before the function is called, and an assignment's value is
-evaluated before its body.  (In reality, early evaluation may change the
-*actual* order of evaluation, but the observed behavior will remain
-consistent with that of applicative order.)
+Regarding memoization, `&(EXPR)` and `memo&(EXPR)` differ in a subtle way.
+`&(EXPR)` constructs a deferred computation that will evaluate `EXPR` at
+most once, but multiple evaluations of `&(EXPR)` will construct multiple
+deferred computations, each of which can result in an evaluation of `EXPR`.
+Multiple evaluations of `memo&(EXPR)`, on the other hand, will return the
+*same* deferred computation as long as all the free variables in `EXPR`
+refer to the same values.
 
 
-### `defer EXPR`
+## Lazy Expressions
 
-On-demand evaluation can be specified using the `defer` unary prefix
-operator.  For example:
+Rio's [eagerly evaluates
+expressions](https://en.wikipedia.org/wiki/Evaluation_strategy) by default,
+but when a function whose name ends in "&" is called, its arguments are
+treated as lazy expressions.  The function will receive a deferred
+computation for each argument.  These will be computed at most once, when
+and if needed.  They can be assigned to variables and passed to functions
+without forcing their evaluation.
 
-    z = defer f(x/y)
-    if y == 0: 0
-    g(z)
+Any operations or use of properties or methods will force their evaluation.
+There is no need to explicitly force evaulation, and the deferred nature
+does not affect the type of the value.
 
-Here, when `y` is 0, `f(x/y)` will not be evaluated.  When `y` is non-zero,
-`g` will be called, and then, when (and if) the value of its first parameter
-is needed, `f(x/y)` will be evaluated (at most once).
+Any errors or infinite loops in the expression will not occur if the value
+is never used.  If the value is used and they do occur, they will manifest
+at the point of first use.
 
-To be clear, `defer EXPR` does not specify a lazy evaluation strategy for
-the sub-terms of `EXPR`.  In the above example, `x/y` will still be
-evaluated (if at all) *before* `f` is called.  We could write `defer f(defer
-x/y)` to have `x/y` evaluated on-demand during the call to `f`.
+Note that while evaluation of the lazy expression is deferred, the
+evaluation strategy within the expression does not change, so once
+evaluation is forced, all its subexpressions will be evaluated (unless they
+in turn contain other lazy constructs).
 
-
-### `spawn EXPR`
-
-The `spawn` operator is equivalent to `defer` except in its performance
-characteristics.  It acts as a [hint](#hints) to speculatively begin
-evaluation of `EXPR` on another thread, in parallel.  When and if a spawned
-value is used, the using thread will collect the result from the computing
-thread, waiting on completion if necessary.  If an error has occurred during
-computation of the value, it will resume its cascade from the using
-expression.
-
-As with `defer`, errors or infinite loops in the expression will not be
-observed if the value is never used.
-
-
-### `memo SCOPE EXPR`
-
-The `memo` operator causes the computation of `EXPR` to be cached, so that
-any future re-calculation will be able to re-use the result as long as the
-values used by EXPR have not changed.
-
-`SCOPE` is an object that contains the cached results and determines their
-lifetimes.  Some scopes retain only the most-recently used result, while
-others retain a larger number of results.  Scopes also may or may not store
-results in persistent storage and make them available to future invocations
-of the Rio program or worksheet.
-
-Beyond simply caching the result of `EXPR`, the `memo` construct establishes
-a "cell" boundary between `EXPR` and its containing expression.  During
-execution of Rio code, accesses to time-changing values are detected and
-tracked as data dependencies of the current cell's result.  All of those
-accesses are treated as inputs for the sake of determining cache validity.
-As caching would imply, this does avoid re-computing `EXPR` when its inputs
-have not changed.  But also Rio will avoid re-computing the *containing*
-expression in cases where the only the inner expression's inputs change and
-its result stays the same.
-
-
-## Observer Pattern
-
-Communicating state changes between objects in a software system is a
-commonly-encountered problem, and a thorny one. The [**observer
-pattern**](#https://en.wikipedia.org/wiki/Observer_pattern) addresses the
-problem of tight coupling between the objects, but it leaves us with other
-problems.
-
- 1. Bloated code.  Code must be written to register for various type of
-    changes, and to deregister, and on the notifying side to accept
-    registrations and de-registrations and to deliver notifications at the
-    correct times.  Also, code must be written to receive the notifications
-    (perhaps different kinds of them) and correctly update the component's
-    internal state.
-
- 2. Reference cycles.  Applied naively, this pattern introduces reference
-    cycles into a program (between the observer and the observed) so it
-    requires strategies and techniques for avoiding memory leaks.  Even in
-    languages with garbage collection, this might introduce a resource
-    lifetime management problem.
-
- 3. Inconsistency.  Changes to the state of an object necessarily take time
-    to propagate to downstream objects (notification callbacks must be
-    called, and the notified objects must perform some work to update its
-    state).  Whether an observer updates its state (synchronously *or*
-    asynchronously) it still exists for some time in a state that is out of
-    synch with the object it observes, and likewise, other objects in the
-    system may be in such a state. (Perhaps they have not yet been notified
-    because their callback was further down the list.)  The question arises,
-    then, which methods of an object are "safe" to call in such a state,
-    and, if not *all* of them, how can we ensure that we don't perform an
-    unsafe call?
-
- 4. Performance.  When the graph of objects includes diamond-shaped
-    dependencies, a single notification can multiply as it propagates
-    through the dependency graph.  This can lead to an explosion in
-    computational complexity in a large graph.  Additionally, some
-    programmatic changes to a component, such as processing a bundle of
-    updates from a server, can result in many notifications.  As a result, a
-    single change to the system -- for example, when a user clicks a button
-    -- might require thousands of notifications to be processed.
-
-Some of these costs scale superlinearly with the number of objects, so as
-the system size increases the burden becomes untenable.  We ultimately need
-some form of orchestration that allows notifications can be queued and
-delivered asynchronously while ensuring that each component receives and
-processes its notifications only after all its dependencies have processed
-theirs.
-
-The solution would resemble a [build system](#build-systems) in its
-behavior, and also could be considered a form of [incremental
-evaluation](#incremental-evaluation).  Rio's [intrinsic
-reactivity](#intrinsic-reactivity) provides a solution for Rio programs.
-
-
-## Incremental Evaluation
-
-An incremental algorithm is one that can, after computing a result, compute
-a new result more efficiently when not all of the inputs have changed.
-
-With language support for incremental evaluation, we can avoid the need for
-a programmer to manually write incremental variants of functions.
-
-This idea does not require a magical, universal solution that optimally
-handles arbitrarily complicated algorithms.  In order to be useful and
-relevant, it only needs to be reasonably effective for the kinds of
-functions we most commonly encounter in programming (searching, filtering,
-transformation, etc.).  Even when some programmer involvement is required --
-e.g. via [hints](#hints) that influence the granularity of recalculation --
-it could still reduce the amount of programming work dramatically.
-
-For (hopefully) obvious reasons, [incremental evaluation
-](#incremental-evaluation) is easier to implement in a language with
-[immutable](#immutability) data structures.
+Finally, note that it is the *name* of the variable (or member) used to call
+the function, as it appears in the source code at the call site, that
+controls this behavior.  It is not a property of the function itself.
 
 
 ## Hints
 
 Hints are statements in the code that do not affect the results of the
-program, but may affect optimizations.
+program, but may affect optimizations.  For example, a hint may suggest
+additional optimization, or focus it on specific kinds or ranges of values.
 
-For example, a hint may suggest specializing code for values within a
-numeric range.  E.g.  0 <= n <= 2^32.
+Hints align with Rio's goal of *enabling* programmers, rather than
+second-guessing them.
 
 
 ## Objects
@@ -1013,65 +894,31 @@ performance costs.
 
 ## Early Evaluation of Constructors
 
-An implication of [early evaluation](#early-evaluation) that is fairly
-straightforward but still worth calling attention to is that we can rely on
-constructors to be evaluated early when they are invoked on literals.
+An implication of [early evaluation](#early-evaluation) that has implication
+on language design is the optimization of constructors.  This reduces the
+pressure to complicate the language with grammar for literals of various
+types, or a turing-complete macro facility, or backward-in-time type
+inference.
 
-This reduces the pressure to complicate the language with grammar for
-literals of various types.  For example, regular expressions can be
-constructed from a string:
+For example, regular expressions can be constructed from a string...
 
     regex = RE("a(.*)b+")
 
-This is just as good as a regex literal from a performance perspective.
-Also, any mal-formedness *within* the string will be detected by the `RE`
-constructor statically (in the live environment, *immediately*, as it is
-typed).
+... can be evaluated once -- at "compile time", if you will -- without
+hardcoding the syntax or semantics into the language.
 
-Types derived from [`String`](#strings) can also benefit, without being
-hard-coded into the language with their own syntax (as in Python).
-
-    text = Utf8("abcdef")
-    text = Bin("abcdef")
-
-Perhaps the most important implication of CTE for constructors is the
-construction of complex types involving typed data structures.  For example:
+A couple of general-purpose data structuring features in the syntax --
+heterogeneous arrays and records -- allow for efficient construction of an
+unlimited number of complex data types, some highly performance-oriented.
+For example:
 
     V32 = TypedVector(Uint32)
     v = V32([1, 2, 3])
 
 Here, an untyped vector (a vector of `Any`) is being constructed and then
 passed to the `V32` constructor, which then packs the values into a typed
-vector.  This is performed exactly once, even if the line of code in which
-it appears is "evaluated" multiple times (according to the canonical order
-of evaluation).  At run-time this manifests only as a constant vector of
-32-bit values.
-
-Rio does not need to summon "backwards-in-time" type inference in order to
-achieve this.  Dynamic typing provides a simple mental mental model for
-understanding the result.
-
-Going a bit further, consider the following example:
-
-    a = V32([x, y, z])
-
-Even when the values of `x`, `y`, and `z` are not known statically, the size
-of the vector will be known and the actual existence of the intermediate
-untyped vector will be unnecessary.
-
-One option that may be explored is using an arbitrary precision numeric data
-type for numeric literals, in which ordinary operations (`+`, `-`, `==`,
-...) on the value will first convert it to float64.  This would ensure that
-early evaluation can easily reduce the values to float64 and avoid complex
-representations and heap allocation at run-time, yet preserve the original
-meaning of the literal when it is passed to a constructor for an alternate
-numeric type.
-
-    n = Bignum(123456789012345678901234567890)
-    d = Decimal(1.23)
-
-Such a constructor would extract information from the number using a special
-interface provided for bypassing coercion to float64.
+vector.  At "run time" this manifests only as a constant vector of 32-bit
+values.
 
 
 ## Specialization
@@ -1156,32 +1003,6 @@ point to where optimizations are worthwhile.  Observed data types and values
 can suggest opportunities for [specialization](#specialization).
 
 
-## Build Systems
-
-*Build systems* optimize building large projects by enabling
-[parallel](#order-annotations) and [incremental](#incremental-evaluation)
-compilation of source files.  They allow a project's build to be described
-as a tree, where each node corresponds to a source file or and output file
-with an associated build step (e.g. compilation or linking), and where
-parent-child relationships indicate data dependencies.
-
-The same concept can be applied to problems other than software builds.  For
-example, when processing large amounts of data in multiple stages, a build
-system can be used to ensure up-to-date results while minimizing the amount
-of time spent on needlessly repeating processing steps.
-
-Typically, build steps are denoted by shell commands, and build systems rely
-on the programmer to separately express the dependencies.  Using a build
-system involves writing software in two ways -- the build system level at
-the top, and one or more other languages that perform the individual
-processing steps.
-
-However, given a language that supports [parallel](#order-annotations) and
-[incremental](#incremental-evaluation) evaluation, the benefits of a build
-system can be had without dealing with two semantically mismtached languages
-and paradigms.
-
-
 ## UI Development
 
 Updating parts of the display as system state change typically involves
@@ -1201,9 +1022,8 @@ makes the process of programming easier and more enjoyable.
 In live programming, the user can see immediately the results of code as it
 is typed.
 
-The implementation of such an environment could benefit from [incremental
-evaluation](#incremental-evaluation) and [intrinsic reactivity
-](#intrinsic-reactivity)
+The implementation of such an environment could benefit from [intrinsic
+reactivity](#intrinsic-reactivity).
 
 This works best when the code is written in a language with
 [immutability](#immutability) and [pure functions](#pure-functions).
@@ -1305,16 +1125,16 @@ Enter garbage collection (GC).  Initially considered a hack, it proved
 workable and provided enormous benefits by freeing the programmer from the
 need to manually manage the lifetimes of memory blocks.
 
-Unfortunately, GC does not solve every lifetime management problem, so even
-in languages with GC the programmer ends up writing code to clean up
-resources.  In particular:
+Unfortunately, GC does not solve every lifetime management problem.  For
+example:
 
  - Unless the GC is [deterministic](#deterministic-garbage-collection), we
    cannot rely on it to discard objects that represent non-memory resources.
 
- - Objects that have registered for callbacks from long-lived objects will
-   be considered "live" (reachable) by GC even when they are otherwise
-   un-reachable by the program.
+ - Objects that register for notifications will be referenced by objects
+   other than their "owners", and that will make them considered "live"
+   (reachable) by GC even when their "owners" go away and they serve no
+   useful purpose.
 
  - In a distributed environment, remote object invocation can be used to
    simplify communication between two software environments.  When GC
@@ -1325,19 +1145,21 @@ resources.  In particular:
    be able to clean them up, even when both environments individually
    support GC.
 
-The requirement for lifetime management is contagious.  We must call
-destructors for not only primitive system resource objects, but any object
-that owns a reference to such an object, and so on and so on.  Any data
-structure that takes ownership of values, in order to be fully generic, must
-participate in some lifetime management strategy for the things it contains.
+This often means that programmers are left with the need to perform explicit
+lifetime management.  Unfortunately, this requirement is contagious.  If we
+object's destructor must be called, then all objects who "own" it must
+perform that duty ... which mean they in turn have destructors that must be
+called by any object that owns them ... and so on.  Any data structure that
+takes ownership of values, in order to be fully generic, must participate in
+some lifetime management strategy for the things it contains.
 
 Rio fixes this, through a combination of features:
 
  - [Deterministic garbage collection](#deterministic-garbage-collection).
 
  - [Intrinsic reactivity](#intrinsic-reactivity) avoids the need for
-   reference cycles introduced by the [observer pattern](#observer-pattern).
-
+   reference cycles introduced by the [callback-based
+   notifications](incremental.md#the-notification-problem)
 
 ## Deterministic Garbage Collection
 
@@ -1449,18 +1271,17 @@ can browse down through the evaluation "tree" -- forward or backward in
 execution order -- examining intermediate values.
 
 
-## Top Module == Build
+## Integrated Builds
 
-There should be no need for a separate [build system](#build-systems) or
-language.  If any artifacts are to be produced by the project -- e.g. a
-command-line executable -- their construction would be described in the
-language, in the "top" or "main" module file of the project.
+There should be no need for a separate build system and build language.  Rio
+should suffice as a language for describing what is to be built, and for
+efficiently performing the build.  Since, the key competency of a build
+systems is enablement of parallel and incremental processing, these Rio
+features will be important:
 
-To make this work well, we will want:
-
- * [Easy Parallelization](#order-annotations)
- * [intrinsic reactivity](#intrinsic-reactivity)
- * APIs into the compiler
+ * [Easy Parallelization](#orchestrators)
+ * [Intrinsic reactivity](#intrinsic-reactivity)
+ * APIs exposed by the compiler
 
 
 ## Errors
@@ -1484,8 +1305,8 @@ course of a successful computation.
 Errors will halt execution and record where the execution was halted, so
 that they may be inspected.  At some higher scope, however, execution will
 continue.  The scope of execution that is halted we will call a "cell",
-similarly to the notion of cells in the `memo` [order
-annotation](#order-annotations).  Perhaps a `try EXPR` annotation will
+similarly to the notion of cells in the `memo`
+[orchestrator](#orchestrators).  Perhaps a `try&(EXPR)` orchestrator will
 provide the containing expression with either a "Success(...)` or
 `Error(...)` variant result.
 
@@ -1601,7 +1422,7 @@ and the subset of the Rio language that it implements is also called P1.
 The first Rio-based compiler will be P2: written *in* Rio P1, but
 *implementing* Rio P2.
 
-In order take advantage of a Rio feature that exists in P2, but not in P1,
+In order take to advantage of a Rio feature that exists in P2 but not in P1,
 then we will need to create a P3.  It can be tempting to use a new feature
 that improves the code, and the additional validation it would provide is
 desirable, but the additional phases add a bit of complexity to the project.
@@ -1638,9 +1459,10 @@ There is a certain amount of intellectual effort inherent in any programming
 task that is unavoidable.  This is the "think" part.
 
 However, the task of producing working code -- the "do" part -- inevitably
-involves additional work.  We often have to say the same thing multiple
-times, and solve the same problem again and again.  And the tools,
-libraries, and languages we use introduce their own difficulties.
+involves additional work.  Tools, libraries, and languages bring along
+complexity and bugs, and they often require us to say the same thing
+multiple times, or solve the same problem again and again.  Here are some
+notable challenges:
 
  - [Too Many Languages](#too-many-languages)
  - Complexity
@@ -1650,7 +1472,7 @@ libraries, and languages we use introduce their own difficulties.
    - Macro languages, and/or meta-programming.
    - Frameworks and libraries that require us to "repeat ourselves".
  - Un-hygienic language constructs and libraries.
- - Lack of [incremental evaluation](#incremental-evaluation).
+ - Lack of [intrinsic reactivity](#intrinsic-reactivity).
  - Lack of [zero-cost abstractions](#zero-cost-abstractions).
  - Limited [polymorphism and reflection](#dynamic-typing).
  - Lack of observability.

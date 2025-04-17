@@ -1,0 +1,13 @@
+{
+    "type": "module",
+    "name": "irk",
+    "devDependencies": {
+        "esbuild": "^0.25.0"
+    },
+    "browser": {
+        "./test.js": "./no-test.js"
+    },
+    "dependencies": {
+        "ws": "^8.17.1"
+    }
+}

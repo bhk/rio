@@ -1,0 +1,122 @@
+e.js: Element Styling
+####
+
+
+`E` provides utilities for creating and styling DOM elements.
+
+The `derive` and `new` functions are Incremental-aware.  `derive` uses
+Incremental.js mechanisms to ensure cleanup of resources that it allocates.
+Some values passed to these functions may be "lazy", which means they may be
+provided as thunks (functions that will be invoked to obtain the real
+value).  Specifically:
+
+  - Values in `styleInfo` objects may be lazy.  Changes to their values will
+    not invalidate the result of the `new` or `derive` call, but the changes
+    will take effect on the resulting style or element.  Likewise, style
+    objects derived from the result will not be invalidated, but their
+    behavior will change.
+
+  - Values in `attrs` objects may be lazy, as may members of the `content`
+    array. Changes to these values will not invalidate the `new` call.
+    (Note that elsewhere in your code you must not directly inspect the
+    attributes and style information of the resulting element, since it may
+    change over time and those accesses will not be logged as dependencies.)
+
+
+API
+====
+
+`E.derive([name,] styleInfo)`
+....
+
+    Derive a new element styling object.  Returns an object that implements
+    `derive` and `new` (just as E does).
+
+    The argument `name` is for debugging purposes only.  It gives a name to
+    use as the base for an non-conflicting class name, selected at run time,
+    that will hold the style properties named in `styleInfo`.
+
+    The property names and values in `styleInfo` are treated as style
+    property names and values unless the name contains `?`, in which case it
+    is treated as a *selector pattern* and the corresponding value is
+    another `styleInfo` record.
+
+    Style property names are the JavaScript-style, camel-case keys used in
+    CSSDeclaration objects, without any browser-specific perfixing.  E.g.:
+    "float", not "cssFloat".
+
+    Style property values may be either:
+
+      - Strings.  Substrings matching `#{NAME}` will be replaced with the
+        value of `E.cssName("NAME")`.
+
+      - Numbers.  These are converted to strings and suffixed with "px".  To
+        convey other units or dimensionless numbers, use a string.  For
+        example: `{zIndex: "1"}`.
+
+    Selector patterns allow declaration of more specific CSS rules via
+    compound selectors.  Each `?` character will be replaced with the
+    selector that designates the styling object being constructed.  For
+    example, the following example defines a style in which text is gray
+    except when the mouse hovers over the containing element:
+
+        let MyStyle = E.derive({
+            color: "gray",
+            "?:hover": {
+                color: "black",
+            },
+        });
+
+
+`E.new([tagName,] [attrs])`
+....
+
+    Create and return a new DOM element.  The element will inherit the CSS
+    properties of the styling object used to create it, unless a `class`
+    attribute is provided.
+
+    `tagName`, a string, specifies the type of element.  It defaults to
+    `"div"` if not present.
+
+    `attrs` is an object that maps names, usually HTML attributes, to
+    values, which are usually strings.  The following exceptions apply:
+
+     * `"class"`: value may be a string or a styling object (e.g. the result
+       of E.derive).
+
+     * `"style"`: value may be a string or a `styleInfo` object (as
+       documented for `derive`).
+
+     * `"content"`: value is an array of DOM nodes or strings that will
+       constitute the children of the new element.
+
+     * `"listeners"`: value is an object mapping event names to handler
+       functions.
+
+
+`E.eventStream(elem, typeNames)`
+....
+
+    Get a stream of DOM events targeted to element `elem`.  `typeNames` is
+    an iterable of strings; the stream will deliver only the events whose
+    `type` field matches one of these strings.
+
+
+
+`E.dragStream(elem)`
+....
+
+    Get a stream of "drag events" for an `elem`.  Drag events are objects of
+    the type described below.  A "down" drag event indicates that a DOM
+    mousedown event was delivered to `elem`.  All subsequent mouse events,
+    up to and including the next mouseup, whether they occur within the
+    bounds of `elem` or not, are generate "move" and "up" events,
+    correspondingly.
+
+    The stream's values are objects with the following fields:
+
+      `type` = "down", "move" or "up"
+      `dx`, `dx` = mouse/pointer positions as deltas from the position of
+                   of the "down" event.
+      `isIn` = true when the event was targeted to the original element;
+               this can be used to detect click actions and button state.
