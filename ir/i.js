@@ -7,7 +7,7 @@
 //    isThunk(v)          Return true if `v` is a thunk or cell
 //    wrap(f)(...)        Evaluate f(...) inside a cell (*now*)
 //    wrap(f).cell(...)   Return the cell that evaluates f(...)
-//    useError(c)         Return [succeeded, result/thrownvalue]
+//    tryUse(c)           Return [succeeded, result/thrownvalue]
 //    usePending(c)       Return [done, result/pendingvalue]
 //    Pending             A class describes temporary failures
 //    checkPending(e)     value, if root cause of `e` was `new Pending(value)`
@@ -39,7 +39,8 @@ const cache = (map, key, fn) => {
     return map.has(key) ? map.get(key) : (v = fn(), map.set(key, v), v);
 };
 
-let log = console.log.bind(console);
+//let log = console.log.bind(console);
+let log = () => {};
 
 const setLogger = (f) => {
     const old = log;
@@ -100,11 +101,21 @@ const defer = (f) => new FnThunk(f);
 
 // Force evaluation of a value.
 //
-const unthunk = (value) => {
+const use = (value) => {
     while (value instanceof Thunk) {
         value = value.get();
     }
     return value;
+};
+
+// Return [true, RESULT] or [false, ERROR]
+//
+const tryUse = (value) => {
+    try {
+        return [true, use(value)];
+    } catch (e) {
+        return [false, e];
+    }
 };
 
 const rootCause = (e) => {
@@ -123,36 +134,18 @@ const checkPending = (error) => {
     }
 };
 
-let logRootError;
-
-// Force evaluation and throw if value is in error state.
-//
-const use = (value) => {
-    value = unthunk(value);
-    if (value instanceof CellException) {
-        logRootError(value.error);
-        throw new Error("used error value", {cause: value.error});
-    }
-    return value;
-};
-
-// Return [true, RESULT] or [false, THROWNVALUE]
-//
-const useError = (value) => {
-    const v = unthunk(value);
-    return (v instanceof CellException
-            ? [false, rootCause(v.error)]
-            : [true, v]);
-};
-
 // Return [true, RESULT] or [false, PENDINGVALUE]  (rethrow other errors)
 //
 const usePending = (value) => {
-    const v = unthunk(value);
-    const p = v instanceof CellException && checkPending(v.error);
-    return (p
-            ? [false, p]
-            : [true, use(v)]);
+    try {
+        return [true, use(value)];
+    } catch (e) {
+        let p = checkPending(e);
+        if (p) {
+            return [false, p];
+        }
+        throw new Error("usePending rethrow", { cause: e });
+    }
 };
 
 const isThunk = (value) => {
@@ -240,6 +233,10 @@ class StateCell extends Cell {
     get() {
         const result = this.update();
         currentCell.addInput(this, result);
+        if (result instanceof CellException) {
+            logRootError(result.error);
+            throw new Error("cell error", {cause: result.error});
+        }
         return result;
     }
 }
@@ -252,6 +249,7 @@ const newState = (initial) => new StateCell(initial);
 
 // currentCell holds the cell currently being evaluated.  Initialized below.
 let currentCell;
+let logRootError;
 
 // table for caching cells
 const cellCache = new Map();
@@ -281,6 +279,10 @@ class FunCell extends Cell {
         // weren't memoized, then we don't need to track this dependency.
         if (this.inputs || this.cleanups || this.key) {
             currentCell.addInput(this, result);
+        }
+        if (result instanceof CellException) {
+            logRootError(result.error);
+            throw new Error("cell error", {cause: result.error});
         }
         return result;
     }
@@ -726,7 +728,7 @@ export {
     use,
     isThunk,
     wrap,
-    useError,
+    tryUse,
     usePending,
     checkPending,
     Pending,

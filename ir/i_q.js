@@ -3,7 +3,7 @@ import {flushEvents} from "./mockdom.js";
 let {eq, assert} = test;
 
 import {
-    defer, use, isThunk, wrap, useError, usePending, checkPending, Pending,
+    defer, use, isThunk, wrap, tryUse, usePending, checkPending, Pending,
     rootCause, newState, newCell, onDrop, activate, stream,
     getCurrentCell, setLogger
 } from "./i.js";
@@ -138,37 +138,41 @@ let rootInputsSize = (root.inputs ? root.inputs.size : 0);
     eq(root.isDirty, false);
 }
 
-// test useError, usePending, Pending, rootCause, and exception handling
+// test tryUse, usePending, Pending, rootCause, and exception handling
 // TODO: state.setError
 
 {
+    // ASSERT: tryUse() catches `defer` thunk errors
+    let errFn = defer(_ => { throw "DEFERRED"; });
+    let [succ, v] = tryUse(errFn);
+    eq(succ, false);
+    eq(rootCause(v), "DEFERRED");
+
     // ASSERT: `throw` is caught at cell boundary
     // ASSERT: use() of cell in error state throws an Error()
-    // ASSERT: useError(cell) returns the thrown error/object
+    // ASSERT: tryUse(cell) returns the thrown error/object
     let st = newState("THROWN");
     let errCell = newCell(() => { throw use(st); });
     let cell = newCell(() => use(errCell));
-    let [succ, v] = useError(cell);
+    [succ, v] = tryUse(cell);
     eq(succ, false);
     eq(rootCause(v), "THROWN");   // TODO: rootCause by default
-    [succ, v] = useError(errCell);
+    [succ, v] = tryUse(errCell);
     eq(succ, false);
     eq(rootCause(v), "THROWN");
+
+    // ASSERT: usePending re-throws non-Pending errors
+    try {
+        [succ, v] = usePending(errCell);
+    } catch (e) {
+        [succ, v] = ["caught", e];
+    }
+    eq([succ, v], ["caught", "THROWN"]);
 
     // ASSERT: usePending catches Pending() errors
     st.set(new Pending("st"));
     let [done, result] = usePending(cell);
     eq([done, result], [false, "st"]);
-
-    // ASSERT: usePending re-throws non-Pending errors
-    {
-        st.set("XXX");
-        const pcell = newCell(() => use(cell));
-        let [succ, value] = useError(pcell);
-        eq(succ, false);
-        eq(value, "XXX");
-        pcell.deactivate();
-    }
 
     // ASSERT: root cell auto-update does not catch errors, but does log them
     st.set(new Pending("connecting"));

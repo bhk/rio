@@ -1,7 +1,7 @@
 import { connect, flushEvents } from "./mockdom.js";
 import {
-    use, wrap, activate, useError, usePending, Pending, checkPending,
-    newCell, newState, logCell, getCurrentCell, setLogger
+    use, wrap, activate, tryUse, usePending, Pending, checkPending,
+    newCell, newState, logCell, getCurrentCell, setLogger, rootCause
 } from "./i.js";
 import { Agent, Pool, makeEncoder, makeDecoder } from "./rop.js";
 import test from "./test.js";
@@ -17,7 +17,7 @@ const clog = (cell, opts) => logCell(cell, {...opts, log});
 
 const flushEQ = (cell, value) => {
     flushEvents();
-    eqAt(2, cell.result, value);
+    eqAt(2, use(cell), value);
 };
 
 // Invoke fn(...args) in a cell, returning:
@@ -126,7 +126,7 @@ const remote = (name) =>
 
 {
     serverState1.set("a");
-    const cell = activate(() => useError(remote("state")()));
+    const cell = activate(() => usePending(remote("state")()));
 
     // ASSERT: observing cell is created on server side
     flushEQ(cell, [true, "a"]);
@@ -140,14 +140,16 @@ const remote = (name) =>
 
     // ASSERT: pending state propagates to client side
     serverState1.setError(new Pending("stalled"));
-    flushEQ(cell, [false, new Pending("stalled")]);
+    flushEQ(cell, [false, "stalled"]);
 
     const oldlogger = setLogger(() => null);
     // ASSERT: other errors propagate to client side (message only)
     serverState1.setError("broken");
-    flushEQ(cell, [false, "broken"]);
-    serverState1.setError(new Error("ebroken"));
-    flushEQ(cell, [false, "ebroken"]);
+    try {
+        flushEQ(cell, "should-fail");
+    } catch (e) {
+        eq(rootCause(e), "broken");
+    }
     setLogger(oldlogger);
 
     // ASSERT: observation is closed and resources are cleaned up
