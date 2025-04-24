@@ -4,5 +4,5 @@ f = n ->
    m = n+1
    m * n
 x = 1 + 2
-assert 7 == f(x)
+assert 12 == f(x)
 f(x)
