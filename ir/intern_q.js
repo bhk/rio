@@ -18,6 +18,8 @@ const ti = (v) => {
         const vi = intern(v);
         eq(vi, v);
         eqq(vi, intern(vc));
+        // property order is consistent in JS (de facto)
+        eq(Object.keys(vi), Object.keys(v));
     } else {
         eqq(v, intern(v));
     }
@@ -33,6 +35,8 @@ ti(undefined);
 
 ti([]);
 ti([1, 2, 3]);
+
+let o = {a: 1, b: 2, c: []};
 
 ti({a: 1, b: 2, c: []});
 

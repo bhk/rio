@@ -1,93 +1,99 @@
 // intern.js: find a canonical, immutable, equivalent value
 //
+// intern(value) : Return unique equivalent value.
+//
+//    Immutable values (strings, numbers, ...) are returned unchanged.
+//
+//    Arrays and Objects whose prototype matches that of Object (e.g. object
+//    literals) are converted to a frozen clone whose members are all
+//    interned.
+//
+//    Functions and other types of objects are returned unchanged.
+//
+// memoize(f)(...a) : Evaluate and cache f(...a).
+//
+//    Note that memoize can interact badly with reactive functions.  If
+//    `f(...a)` accesses and reactive (changing) values, the memoized
+//    form will return outdated results.
+//
 // TBO: Interned values accummulate in memory indefinitely.
 //
 
-// this value is different from all other values
-const UNSET = {};
+const interns = new Map();      // interned value -> true
+const stepValues = new Map();   // final step -> interned value
 
-class Step {
-    constructor(elem, prev) {
-        this.elem = elem;
-        this.prev = prev;
-        this.nexts = new Map();
-        this.value = UNSET;
-    }
+const arrayRoot = new Map();
+const objectRoot = new Map();
+const memoRoot = new Map();
 
-    next(elem) {
-        if (this.nexts.has(elem)) {
-            return this.nexts.get(elem);
-        } else {
-            const es = new Step(elem, this);
-            this.nexts.set(elem, es);
-            return es;
-        }
-    }
-}
-
-const interns = new Map();
-const emptyArray = new Step();
-const emptyObject = new Step();
-const memoRoot = new Step();
 const objectProto = Object.getPrototypeOf({});
 
-const internSeq = (root, args, f) => {
-    let step = root;
-    for (const arg of args) {
-        step = step.next(intern(arg));
+const next = (step, value) => {
+    if (step.has(value)) {
+        return step.get(value);
     }
-    if (step.value !== UNSET) {
-        return step.value;
+    const m = new Map();
+    step.set(value, m);
+    return m;
+};
+
+const internSeq = (root, a, f) => {
+    let step = root;
+    for (const arg of a) {
+        step = next(step, intern(arg));
+    }
+    if (stepValues.has(step)) {
+        return stepValues.get(step);
     }
 
     // create `ai` whose elements are all interned
-    let ai = new Array(args.length);
-    let rs = step;
-    for (let i = args.length - 1; i >= 0; --i, rs = rs.prev) {
-        ai[i] = rs.elem;
+    let ai = new Array(a.length);
+    for (let i = 0; i < a.length; ++i) {
+        ai[i] = intern(a[i]);
     }
-    ai = f(ai);
-    interns.set(ai, step);
-    step.value = ai;
+    ai = f(ai);   // f = Object.freeze for arrays...
+
+    stepValues.set(step, ai);
+    interns.set(ai, true);
+
     return ai;
 };
 
 const memoize = f => {
-    let root = memoRoot.next(f);
-    return (...args) => internSeq(root, args, (a) => f(...a));
+    let step = next(memoRoot, f);
+    return (...args) => internSeq(step, args, (a) => f(...a));
 };
 
-const internArray = a => internSeq(emptyArray, a, Object.freeze);
+const internArray = a => internSeq(arrayRoot, a, Object.freeze);
 
-const internObject = (obj) => {
-    let step = emptyObject;
+const internObject = obj => {
+    let step = objectRoot;
     for (const [k,v] of Object.entries(obj)) {
         // k is a string (no need to call intern)
-        step = step.next(k).next(intern(v));
+        step = next(step, k);
+        step = next(step, intern(v));
     }
-    if (step.value !== UNSET) {
-        return step.value;
+    if (stepValues.has(step)) {
+        return stepValues.get(step);
     }
 
     // create `obji` whose properties are all interned
     let obji = {};
-    for (let rs = step; rs !== emptyObject; ) {
-        const v = rs.elem;
-        rs = rs.prev;
-        const k = rs.elem;
-        rs = rs.prev;
-        obji[k] = v;
+    for (const [k,v] of Object.entries(obj)) {
+        obji[k] = intern(v);
     }
-    obji = Object.freeze(obji);
-    interns.set(obji, step);
-    step.value = obji;
+    Object.freeze(obji);
+
+    stepValues.set(step, obji);
+    interns.set(obji, true);
+
     return obji;
 };
 
 // If `value` is an object whose constructor is `Array` or `Object`, return
 // an immutable, canonical equivalent.  Otherwise, return `value`.
 //
-const intern = (value) => {
+const intern = value => {
     return !(value instanceof Object) ? value :
         interns.has(value) ? value :
         value instanceof Array ? internArray(value) :
@@ -98,4 +104,4 @@ const intern = (value) => {
 export {
     intern,
     memoize,
-}
+};
