@@ -9,9 +9,9 @@ programming, eliminating the need to manually handle updates and
 notifications. Consider the difference between a script generating a static
 HTML report from database queries and a browser script rendering a live,
 auto-updating version of the same.  Rio's Incremental Reactive Evaluation
-targets the simplicity of the former with the responsiveness of the latter.
-See [below](#the-notification-problem) for a deeper analysis of how update
-complexity burdens modern software.
+(IRE) targets the simplicity of the former with the responsiveness of the
+latter.  See [below](#the-notification-problem) for a deeper analysis of how
+update complexity burdens modern software.
 
 
 ## How It Works
@@ -66,61 +66,137 @@ updated.  Each update of the root is called a **cycle**.
 
 ## Programming with Cells
 
-We now consider more concretely how it applies to writing programs in Rio.
+We now consider more concretely how IRE applies to programs in Rio.
+
+
+### Lazy Evaluation
+
+Rio uses strict, or applicative order of evaluation by default, but by
+convention, when a function is called and the function name ends in `&`, its
+arguments are passed lazily.  For example, in `f&( g(x) )`, the "lazy"
+expression `g(x)` is not evaluated before `f&` is called.  Instead, `f&`
+receives a lazy computation.
+
+A function named just `&` returns its first argument without performing any
+operation on it, so the result will be a lazy computation defined by that
+argument.
+
+No explicit code is required to force evaluation; any operation on the
+contents of the value will force evaluation.  The lazy aspect does not
+manifest in the type of the value.
+
+Lazy expressions are evaluated at most once.  They are initially evaluated
+whenever the program first operates on the lazy computation.  The result is
+then cached, so if it is needed again the already-computed result will be
+used.  To be clear, this at-most-once characteristic applies per-instance.
+If the expression *constructing* the lazy computation is evaluated more than
+once, multiple instances will result, each of which can be evaluated once.
+
 
 ### Constructing a Cell
 
 The `memo&` function constructs a cell to contain an expression.
 
-       v = memo&(f(x, y, z))
+       v = memo&( f(x, y, z) )
+
+Like lazy computations, cells are interchangeable with ordinary values, and
+evaluation will be performed when-and-if necessary, automatically, without
+any explicit code to that effect, and at most once.  They can be assigned to
+variables and passed to functions without forcing evaluation.
 
 Cell construction is **memoized**.  Instead of a newly constructed cell, it
 might return an identical cell that has already been created, perhaps in an
 earlier update, or earlier in the same update.  This is crucial to retaining
-used cells across a recalculation of their using cell.  See
-[Equivalence](#equivalence), below for details.
-
-Note how the notion of a cell as a function is distinct from the functions
-in your program.  A cell is defined by an *expression*, and while the
-expression might consist of just one function call, those function arguments
-are not necessarily dependencies of the cell.  In the above example, `x`,
-`y`, and `z` are arguments to function `f`, but their values are not
-dependencies of the cell.  Instead, their values are part of the *identity*
-of the cell.  If the `memo(...)` call is evaluated twice with different
-values of `x` in scope, it will return a different cell each time.  The
-inputs of a cell are the cells whose results it consumes as it is computed.
-
-More generally, the shape of the cell dependency graph will not resemble the
-structure of your program.  If a single cell definition -- one sport in the
-source code -- is evaluated multiple times, it might generate multiple
-cells.  You program's structure will be guided by the usual software
-considerations of modularity and readability, whereas the dependency graph
-arises from the dynamics of its execution.
+used cells across a recalculation of their using cell.  An "identical" cell
+is one defined by the same expression and the same captures (bindings for
+variables that are not bound within the expression).  See
+[Equivalence](#equivalence), below, for more details.
 
 
 ### Using a Cell
 
 The act of **using** a cell (obtaining its value) is distinct from
-constructing a cell, just as constructing a closure and evaluating it are
-distinct.
+constructing a cell.
 
-Like lazy expressions, cells are interchangeable with ordinary values, and
-evaluation will be performed when necessary, automatically, without any
-explicit code to that effect.  They can be assigned to variables and passed
-to functions without triggering evaluation.
-
-    x = memo&(f(7))         # construct cell for f(7)
+    x = memo&( f(7) )       # construct cell for f(7)
     y = f(9)                # evaluate f(9) now
     z = x + y               # evaluate x, mark x as a dependency
+
+Whe code executing within one cell uses the value of another cell, the used
+cell is tracked by the system as a dependency of the currently-executing
+cell.  It is *use* of a cell, not construction of a cell, that adds nodes
+and edges to the dependency graph.
+
+From the dependency graph perspective, each cell is, abstractly, a function.
+That is, it produces a result, deterministically, from its inputs.  However,
+don't confuse this with "functions" in the programming language.  For
+example, in the cell expression `memo&( f(x, y) )`, the values of `x` and
+`y` are inputs to the Rio function `f`, but they are not inputs to the cell
+-- they are instead part of the *identity* of the cell, which consists of
+its *expression* and *captures*.  From the dependency graph perspective, the
+only inputs to a cell are the other cells that it used while computing its
+result.
+
+In general, the shape of the dependency graph will not resemble the
+structure of your program.  With IRE, your program's structure can continue
+to be guided by the usual software considerations of modularity and
+readability, whereas the structure of the dependency graph arises from the
+dynamics of its execution.
+
+
+### Lazy Semantics in a Reactive Context
+
+The interaction between lazy expressions and IRE warrants some discussion.
+
+Recall that the initial evaluation cycle of a Rio program is like that of an
+ordinary functional program.  Each subsequent update is essentially the
+same, except that it can skip evaluation of some cells, using their previous
+result *as if* they had been re-evaluated.
+
+As with many other functional programming assumptions, the notion of lazy
+evaluation (and cell evaluation) as happening "at most once" do in fact
+apply to Rio, but only within the scope of an update.
+
+Consider the simple case of lazy computation that is constructed within a
+cell and used only within the same cell.  The conventional semantics apply
+to *each recalculation* of that cell.  During each recalculation, lazy
+instances may be constructed, and each will be evaluated at most once.
+IRE does not complicate things.
+
+Now consider a lazy computation crossing a cell boundary.  Here there is an
+opportunity for a lazy computation instance to outlive the udpate cycle that
+created it.  This would happen, for example, if cell A constructs a lazy
+computation, cell B uses it, and then on a subsequent update only cell B is
+recalculated.  During this update, the lazy computation's previous (and
+cached!) result could be stale (incorrect) if its evaluation involved
+accessing some other cell that has since changed.  The system must track
+dependencies in order to ensure that lazy cached results are discarded in
+these cases, resulting in at-most-once-per-update evaluation.  (If the lazy
+computation does not access any cells, we can have at-most-once-ever
+evaluation.)
+
+While lazy and cell evaluation have similarities, keep in mind the two
+significant differences:
+
+ - Isolation: A cell can isolate its users from dependencies.  Cell
+   boundaries are our firewalls or bulkheads that prevent the spread of
+   recalculation.  By contrast, a lazy computation that touches any external
+   dependencies will expose its user to invalidation and recalculation,
+   regardless of the result of the lazy computation.
+
+ - Memoization: When `memo&(EXPR)` is evaluated more than once with the same
+   expression and the same values bound to free variables, the same cell
+   instance will result.  This remains true *across consecutive updates*, so
+   a cell *can re-use cells that it constructs*.
 
 
 ### Cell Exceptions
 
 Uncaught exceptions that occur during evaluation of a cell halt its
-execution and put the cell in an error state.  Any *use* of a cell that is
-in an error state will re-throw that error from the point of use, not from
-the point of construction.  These errors can be caught by wrapping the use
-in a try block.
+execution and put the cell in an error state.  As with errors in lazy
+computations, errors in cells will propagate up the call stack from where
+the cell is used, not from where it was constructed.  These errors can be
+caught by wrapping the point of use in `try&( ... )`.
 
 
 ### Streams
@@ -175,7 +251,7 @@ satisfy:
    that its dependencies have changed.  By live, we mean that it is in fact
    used in this update, and will remain part of the dependency graph.
 
-2. Consistency: The resulting graph and values must match what would result
+2. Consistency: The resulting graph and values shall match what would result
    from a complete, non-incremental evaluation.  This implies that *all*
    invalid and live nodes are recalculated.
 
@@ -210,7 +286,7 @@ these observations:
    parallelism within a cell, to which an update algorithm would remain
    oblivious.
 
- * Dependencies used in separate threads of execution are not ordered with
+ * Dependencies used in parallel threads of execution are not ordered with
    respect to each other; if prior dependencies remain unchanged, *all* of
    them remain live.  This should result in an update realizing the same
    degree of cell parallelization that the initial evaluation could exhibit.
@@ -275,16 +351,16 @@ may provide options to constructors for cells that differ along these
 dimensions:
 
  * Cache Lifetime
-    - Default: discard when not used within an update
-    - Alternate: discard when not constructed
-    - Grouped: associated with a pool object
+    - Default: discard when not used (at end of update)
+    - Alternate: discard when neither constructed nor used
+    - Grouped: lifetime associated with a pool object
     - Persistent: saved to disk for future program invocations
 
  * Cache Variance
-    - Default: one result per cell
-    - Variant: different results for different input values
+    - Default: store only most recent result
+    - Variant: store different results for different input values
 
- * Memoization scope
+ * Memoization Scope
     - Default: all cells
     - Local: per-constructing cell [optimization potential]
     - None.  Construction always creates a new cell.  [Still useful for
@@ -292,14 +368,14 @@ dimensions:
 
  * Evaluation
     - Default: lazy, on-demand
-    - Parallel: begins on creation, not on use
+    - Parallel: spawn on creation, wait on use
     - Strict (just for completeness, to keep ordering orthogonal to caching)
 
  * Blocking
     - Default: blocking
-    - Non-blocking: evals to Pending prior to completion
+    - Non-blocking: special values convey partial results prior to completion
 
- * Validation strategy
+ * Validation Strategy
     - Default: full comparison
     - Dirty: assume recalc==change [For some cells, invalidation is always
       followed by a new value, so comparison is pointless.]
@@ -325,13 +401,12 @@ Let's start with the immediately visible costs:
    information that is subject to change, and later de-register.  Likewise,
    code is needed to implement registrations (and de-registration).
 
- * Repeating Ourselves: The logic for maintaining an object's state is split
-   between its constructor, which initializes the state based on observed
-   objects, and event handlers, which update the state in response to
-   notifications. The constructor embodies the essential behavior, while
-   handlers redundantly maintain it. A programmer will infer handler logic
-   from the constructor, highlighting that handlers are a workaround for
-   limitations in the programming paradigm.
+ * Repeating Ourselves: The logic for maintaining an object's state involves
+   its constructor, which initializes the state based on observed objects,
+   and event handlers, which update the state in response to
+   notifications. The constructor embodies the internal structure and its
+   meaning, to which handler code attempts to stay true.  One can imagine
+   handler responsibilities being automatically inferred from a constructor.
 
  * Bug Potential: Managing incoming notifications and updating local state,
    as well as producing precise and thorough notifications, is non-trivial
