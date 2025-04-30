@@ -1,10 +1,10 @@
 // ROP/WS client for the brower environment
 
-import {use, activate, rootCause, usePending, Pending} from "./i.js";
+import {use, cell, rootCause, usePending, Pending} from "./i.js";
 import E from "./e.js";
 import {Agent} from "./rop.js";
 
-const activatePending = (fn) => activate(() => {
+const logPending = (fn) => {
     try {
         fn();
     } catch (e) {
@@ -16,7 +16,7 @@ const activatePending = (fn) => activate(() => {
             throw e;
         }
     }
-});
+};
 
 //----------------------------------------------------------------
 
@@ -35,4 +35,4 @@ let main = () => {
       String(str.length), ": ", str);
 };
 
-activatePending(main);
+use(cell(_ => logPending(main)));

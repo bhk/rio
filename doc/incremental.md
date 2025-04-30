@@ -68,6 +68,14 @@ updated.  Each update of the root is called a **cycle**.
 
 We now consider more concretely how IRE applies to programs in Rio.
 
+TODO:
+- **Value**: a fully computed result.
+- **Thunk**: some deferred computation, one of:
+   - **Cell**
+   - **Lazy Thunk**
+- **Term**: what a variable is bound to; either a **value** or a **thunk**.
+
+
 
 ### Lazy Evaluation
 
@@ -323,25 +331,43 @@ not leak memory.
 
 ### Equality
 
-Functions do nat have *identity* in Rio as they do in JavaScript and many
-other imperative languages that incorporate functional concepts.
+Comparison of values is crucial to IRE in a couple of ways:
 
-We will, however, need to compare functions for the purpose of memoization,
-checking dependencies for changes, and serialization.  In these cases, we
-will use some notion of *intensional* equality when comparing functions:
-functions are equal if they share the same internal structure *and* their
-captured variables have equal values.  The definition of "structure" left
-somewhat loose for now, but the key requirements that must be met are: (1)
+ - Validity of a cell is determined by comparing current inputs with their
+   previous values.
+
+ - Memoization of cells (finding an existing, equivalent instance) requires
+   comparing the cell expressions used to construct them (and the values
+   those expressions reference).
+
+However, to be more precise, we are not actually talking of "value" in the
+ordinary functional programming sense, because "thunkness" (lazy-ness and
+cell-ness) matters.  In other words, while `f(x)` and `&(f(x))` and
+`memo&(f(x))` evaluate to the same *value* and *are* the same,
+denotationally, they are not the same thing for IRE purposes.
+
+Cells and lazy computations need to be compared with each other, which
+brings up the question of comparing expressions and functions.  In pure
+functional languages, function comparison is generally not supported,
+because *extensional* equality is not computable.  In many imperative
+languages that incorporate functional concepts like closures, function
+references can be compared, but these deal with instances, and any two
+instances are considered unqeual, which is unhelpful to us.  We need some
+notion of *intensional* equality when comparing functions: functions are
+equal if they share the same internal structure *and* their captured
+variables have equal values.  The definition of "structure" is left somewhat
+loose for now, but the key requirements that must be met are: (1)
 intensional equality must imply extensional equality ("when two functions
 are 'equal', they must behave the same, but not necessarily vice versa"),
 and (2) if the program text has not changed, then two instances of the same
 source expression with the same captured values must be equal.
 
-It is not clear whether function comparison needs to be exposed as a
-user-facing feature.  Perhaps function comparison is available only at a
-"meta-evaluation" level, where code executing "outside" a program deals with
-AST and IL representations and other VM structures, invokes the VM to
-evaluate it, and is invoked by the VM to implement extensions.
+It is not clear whether the ability to compare functions and test thunkness
+needs to be exposed as a user-facing feature.  Perhaps there are only
+available at a "meta-evaluation" level, where code executing "outside" a
+program deals with AST and IL representations and other VM structures,
+invokes the VM to evaluate it, and is invoked by the VM to implement
+extensions.
 
 
 ### Cell Construction Options

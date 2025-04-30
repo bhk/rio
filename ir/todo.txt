@@ -1,8 +1,14 @@
 Current
 =======
 
- - E: replace `activate` with `use`?
+ - I: overhaul
+    - report Pending error cleanly when returned by root cell inputs
+      (simplify client.js)
+    - No error when root deps return non-null; error on invalidate!
+    - usePending -> catchPending?
+ - E: element constructors are not memoizable (cannot appear twice in DOM tree)
  - rop: Open -> Call; Update -> Result; Close -> Drop
+ - rop: place updaters as inputs to "GW" cell, not root
  - rop: use new serialization described in rop.md
  - rop: pass thunks & use remotely
  - do not kill server when WS client disconnects
@@ -18,3 +24,7 @@ Current
  - eventDemo/dragStream: capture vs. document listener
  - Validate "clean" install using "npm update"
  - Revisit comments with TBO (To-Be-Optimized)
+ - I: cell.deactivate() & `use()` in the root context: While effective, it
+   is conceptually ugly.  The code calling `use` cannot be recalced, and the
+   `deactivate` implementation sticks out like a sore thumb.
+- I: drop cell after no users *and* no creator

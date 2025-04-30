@@ -1,6 +1,6 @@
 // demo: Display a web page for demonstrating a JS module.
 
-import {use, wrap, defer, newState} from "./i.js";
+import {use, cell, lazy, state} from "./i.js";
 import E from "./e.js";
 
 // Export for debugging
@@ -40,7 +40,7 @@ const Demo = E.newClass({
 //
 // Log
 //
-let logState = newState([]);
+let logState = state([]);
 let log = (str) => logState.set([...use(logState), str]);
 let LogLine = E.newClass({$tag: "p"});
 
@@ -60,7 +60,7 @@ const demoView = ({subject, controls, frameStyle}) => {
         }, (controls || []).map(c => E({$tag: "li"}, c))),
 
         // log
-        Log(null, defer(_ => {
+        Log(null, lazy(_ => {
             return use(logState).map(e => LogLine(null, e));
         })),
     ]);
@@ -69,11 +69,13 @@ const demoView = ({subject, controls, frameStyle}) => {
 // Evaluate `main` and display its results in the demo context.
 // The results of `main()` are passed to `demoView`.
 //
-const run = wrap((main) => {
-    const opts = main();
-    const top = demoView(opts);
-    E({$element: document.body}, top);
-});
+const run = (main) => {
+    use(cell(_ => {
+        const opts = main();
+        const top = demoView(opts);
+        E({$element: document.body}, top);
+    }));
+};
 
 export {
     run,

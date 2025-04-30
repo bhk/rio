@@ -1,4 +1,4 @@
-import {use, wrap, newState, getCurrentCell} from "./i.js";
+import {use, cell, state, getCurrentCell} from "./i.js";
 import E from "./e.js";
 import {run, log} from "./demo.js";
 import newGrid from "./grid.js";
@@ -6,7 +6,7 @@ import newGrid from "./grid.js";
 // Returns conduit holding input field contents.
 //
 const newInput = (style, text) => {
-    const ivalue = newState("");
+    const ivalue = state("");
     const e = E({
         ...style,
         $tag: "input",
@@ -63,7 +63,7 @@ const columns = [
     {key: "6", width:  24},
 ];
 
-const itemCount = newState(sampleEntries.length);
+const itemCount = state(sampleEntries.length);
 
 run(_ => {
     let rowClicked = (row) => log("Click: row " + row);
@@ -77,7 +77,7 @@ run(_ => {
         "Verify: Click reports row number (and when scrolled)",
     ];
 
-    let db = wrap(_ => {
+    let db = cell(_ => {
         const a = [];
         const k = Number(entries.value() || 30) || 0;
         const kSample = sampleEntries.length;
@@ -86,7 +86,7 @@ run(_ => {
         }
         return a;
     });
-    let subject = newGrid(columns, fields, db.cell(), rowClicked);
+    let subject = newGrid(columns, fields, db, rowClicked);
 
     return {subject, controls};
 });

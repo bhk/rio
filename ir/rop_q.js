@@ -1,7 +1,7 @@
 import { connect, flushEvents } from "./mockdom.js";
 import {
-    use, wrap, activate, tryUse, usePending, Pending, checkPending,
-    newCell, newState, logCell, getCurrentCell, setLogger, rootCause
+    use, wrap, tryUse, usePending, Pending, checkPending,
+    cell, state, logCell, getCurrentCell, setLogger, rootCause
 } from "./i.js";
 import { Agent, Pool, makeEncoder, makeDecoder } from "./rop.js";
 import test from "./test.js";
@@ -24,17 +24,17 @@ const flushEQ = (cell, value) => {
 //   [false, pendingValue] if in progress
 //   [true, result] if complete
 //
-const pcell = (fn, ...args) => {
-    const inner = newCell(fn, ...args);
+const pcell = (fn) => {
+    const inner = cell(fn);
     inner.name = "pcell";
-    return activate(() => usePending(inner));
+    return cell(_ => usePending(inner));
 };
 
 // trap recalc of current cell, logging its state
 const logRecalc = () => {
-    const cell = getCurrentCell();
-    const oldRecalc = cell.recalc.bind(cell);
-    cell.recalc = () => (clog(), oldRecalc());
+    const cc = getCurrentCell();
+    const oldRecalc = cc.recalc.bind(cc);
+    cc.recalc = () => (clog(), oldRecalc());
 };
 
 //----------------------------------------------------------------
@@ -58,11 +58,11 @@ const logRecalc = () => {
     eq(p.countUsed, 0);
 
     // ASSERT: added index is automatically freed when cell is dropped
-    const cell = newCell(() => p.add(9));
-    const ndx = use(cell);
+    const add9 = cell(() => p.add(9));
+    const ndx = use(add9);
     eq(p[ndx], 9);
     eq(p.countUsed, 1);
-    cell.deactivate();
+    add9.deactivate();
     eq(p.countUsed, 0);
 }
 
@@ -73,7 +73,7 @@ const logRecalc = () => {
     const encode = makeEncoder(f => pool.add(f));
     const decode = makeDecoder(n => pool[n]);
 
-    const cell = activate(() => {
+    const base = cell(() => {
         const v = [1, "abc", log, {a:1}];
         const ev = encode(v);
         eq(ev, '[1,"abc",{"%F":0},{"a":1}]');
@@ -82,7 +82,8 @@ const logRecalc = () => {
 
         eq(decode(ev), v);
     });
-    cell.deactivate();
+    use(base);
+    base.deactivate();
     eq(pool.countUsed, 0);
 }
 
@@ -98,7 +99,7 @@ connect(wsServer, wsClient);
 flushEvents();
 
 // we construct the server agent with ws in OPEN state
-const serverState1 = newState();
+const serverState1 = state();
 const serverFuncs = {
     add: (x, y) => x + y,
     state: () => serverState1,
@@ -113,40 +114,40 @@ const remote = (name) =>
 
 {
     const frAdd = remote("add");
-    const cell = pcell(frAdd, 1, 2);
-    eq([false, "opening"], use(cell));
-    flushEQ(cell, [true, 3]);
+    const base = pcell(_ => frAdd(1, 2));
+    eq([false, "opening"], use(base));
+    flushEQ(base, [true, 3]);
     eq(ca.observers.countUsed, 1);
-    cell.deactivate();
+    base.deactivate();
     flushEvents();
     eq(ca.observers.countUsed, 0);
 }
 
 // test: observe remote state cell
-
 {
     serverState1.set("a");
-    const cell = activate(() => usePending(remote("state")()));
+    const base = cell(() => usePending(remote("state")()));
+    use(base);
 
     // ASSERT: observing cell is created on server side
-    flushEQ(cell, [true, "a"]);
+    flushEQ(base, [true, "a"]);
     eq(ca.observers.countUsed, 1);
     eq(sa.updaters[0] == null, false);
     eq(serverState1.outputs.size, 1);
 
     // ASSERT: update propagates
     serverState1.set(7);
-    flushEQ(cell, [true, 7]);
+    flushEQ(base, [true, 7]);
 
     // ASSERT: pending state propagates to client side
     serverState1.setError(new Pending("stalled"));
-    flushEQ(cell, [false, "stalled"]);
+    flushEQ(base, [false, "stalled"]);
 
     const oldlogger = setLogger(() => null);
     // ASSERT: other errors propagate to client side (message only)
     serverState1.setError("broken");
     try {
-        flushEQ(cell, "should-fail");
+        flushEQ(base, "should-fail");
     } catch (e) {
         eq(rootCause(e), "broken");
     }
@@ -154,7 +155,7 @@ const remote = (name) =>
 
     // ASSERT: observation is closed and resources are cleaned up
     serverState1.set("ok");
-    cell.deactivate();
+    base.deactivate();
     flushEvents();
     eq(serverState1.outputs.size, 0);
     eq(ca.observers.countUsed, 0);
@@ -170,7 +171,7 @@ const remote = (name) =>
 
     const localFunc = () => "abc";
 
-    const cell = pcell(() => {
+    const base = pcell(() => {
         const rmtState = remote("state");
         const rmtTest = remote("funcTest");
         const result = use(rmtTest(localFunc, rmtState));
@@ -185,15 +186,14 @@ const remote = (name) =>
         return st;
     });
 
-    eq(use(cell), [false, "opening"]);
-
-    flushEQ(cell, [true, "xyz"]);
+    eq(use(base), [false, "opening"]);
+    flushEQ(base, [true, "xyz"]);
 
     serverState1.set("def");
-    flushEQ(cell, [true, "def"]);
+    flushEQ(base, [true, "def"]);
 
     // ASSERT: observation is closed and resources are freed
-    cell.deactivate();
+    base.deactivate();
     flushEvents();
     eq(sa.caps.countUsed, ncs);
     eq(ca.caps.countUsed, ncc);

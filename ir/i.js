@@ -1,30 +1,4 @@
-// Incremental: incremental evaluation (see incremental.txt)
-//
-// High-level API: Used by functional code
-//
-//    defer(f)            Construct a thunk (lazy value)
-//    use(v)              Extract value from cell or thunk
-//    isThunk(v)          Return true if `v` is a thunk or cell
-//    wrap(f)(...)        Evaluate f(...) inside a cell (*now*)
-//    wrap(f).cell(...)   Return the cell that evaluates f(...)
-//    tryUse(c)           Return [succeeded, result/thrownvalue]
-//    usePending(c)       Return [done, result/pendingvalue]
-//    Pending             A class describes temporary failures
-//    checkPending(e)     value, if root cause of `e` was `new Pending(value)`
-//    rootCause(e)        Dereference `cause` in Error objects, transitively
-//    stream.newStream()
-//    stream.filter(f)(s)
-//    stream.map(f)(s)
-//    stream.fold(f,z)(s)
-//    stream.flatMap(f)(s)
-//
-// Low-level API: Used by imperative code
-//
-//    newState()          Create new state cell
-//    newCell()           Create new function cell
-//    onDrop(f)           Call f() when current cell's value is discarded
-//    activate(f)         Decouple evaluation of f(), without memoizing
-//
+// i.js: See i.md
 
 import {intern} from "./intern.js";
 
@@ -39,8 +13,7 @@ const cache = (map, key, fn) => {
     return map.has(key) ? map.get(key) : (v = fn(), map.set(key, v), v);
 };
 
-//let log = console.log.bind(console);
-let log = () => {};
+let log = console.log.bind(console);
 
 const setLogger = (f) => {
     const old = log;
@@ -49,42 +22,40 @@ const setLogger = (f) => {
 };
 
 //------------------------------------------------------------------------
-// Exceptions
+// Durable functions
 //------------------------------------------------------------------------
 
-// CellException is used to distinguish a cell in error state from all
-// other possible cell values.
+// TBO: caching can (should?) be per-cell
+const bakeRoot = new Map();
+const ebakeRoot = new Map();
 
-class CellException {
-    constructor(error) {
-        this.error = error;
+const memofn = (fnx, caps, isEmpty) => {
+    let map = isEmpty ? ebakeRoot : bakeRoot;
+    caps = intern(caps);
+    map = cache(map, fnx, () => new Map());
+    if (map.has(caps)) {
+        return map.get(caps);
     }
-}
+    const fn = isEmpty ? _ => fnx(...caps) : fnx(...caps);
+    assert(fn instanceof Function);
+    fn.isDurable = true;
+    fn.fnxName = fnx.name;
+    fn.caps = caps;
+    map.set(caps, fn);
+    return fn;
+};
 
-// A Pending object is thrown to indicate that an failure is temporary.
-//
-//  A) throw new Pending("connecting");
-//  B) throw new Error("pending", { cause: Pending("connecting") });
-//  C) stateCell.setError(Pending("connecting"));
-//
-// (B) will generate a stack trace for the `throw` expression, while (A)
-// will not.  (C) will generate an error (and stack trace) when the state
-// cell is used.
-//
-class Pending {
-    constructor(value) {
-        this.value = value;
-    }
-}
+const bake = (fnx, ...caps) => memofn(fnx, caps, false);
+const ebake = (efnx, ...caps) => memofn(efnx, caps, true);
 
 //------------------------------------------------------------------------
-// Thunk & FnThunk
+// Thunk & LazyThunk
 //------------------------------------------------------------------------
 
 class Thunk {
 }
 
-class FnThunk extends Thunk {
+class LazyThunk extends Thunk {
     constructor(f) {
         super();
         this.f = f;
@@ -95,9 +66,7 @@ class FnThunk extends Thunk {
     }
 }
 
-// Create a thunk that will be unwrapped by `use`.
-//
-const defer = (f) => new FnThunk(f);
+const isThunk = (value) => value instanceof Thunk;
 
 // Force evaluation of a value.
 //
@@ -107,6 +76,31 @@ const use = (value) => {
     }
     return value;
 };
+
+const lazyRoot = new Map();
+
+// Create a lazy expression thunk
+//
+const lazy = f =>
+      f.isDurable
+      ? cache(lazyRoot, f, _ => new LazyThunk(f))
+      : new LazyThunk(f);
+
+const defer = fx =>
+      (...caps) => lazy(ebake(fx, ...caps));
+
+// Apply lazily to a thunk, immediately otherwise.
+//
+const lazyApply = (f, v) =>
+      isThunk(v) ? lazy(_ => f(use(v))) : f(v);
+
+const deferApplyX = (f, v) => f(use(v));
+const deferApply = f => v =>
+      isThunk(v) ? defer(deferApplyX)(f, v) : f(v);
+
+//----------------------------------------------------------------
+// Exceptions
+//----------------------------------------------------------------
 
 // Return [true, RESULT] or [false, ERROR]
 //
@@ -125,43 +119,14 @@ const rootCause = (e) => {
     return e;
 };
 
-// Recover `value` if error resulted from `throw new Pending(value)`
-//
-const checkPending = (error) => {
-    const cause = rootCause(error);
-    if (cause instanceof Pending) {
-        return cause.value;
-    }
-};
-
-// Return [true, RESULT] or [false, PENDINGVALUE]  (rethrow other errors)
-//
-const usePending = (value) => {
-    try {
-        return [true, use(value)];
-    } catch (e) {
-        let p = checkPending(e);
-        if (p) {
-            return [false, p];
-        }
-        throw new Error("usePending rethrow", { cause: e });
-    }
-};
-
-const isThunk = (value) => {
-    return value instanceof Thunk;
-};
-
-const softApply = (f, v) => isThunk(v) ? defer(_ => f(use(v))): f(v);
-
 //------------------------------------------------------------------------
 // Cell
 //------------------------------------------------------------------------
 //
-// A `Cell` describes a node in a dependency graph.  Cells may have inputs
+// A `Cell` acts as a node in a dependency graph.  Cells may have inputs
 // (cells they have used) and outputs (cells that use them).  "Function
-// cells" may use other cells and be used.  "State cells" do not use other
-// cells.  "Root cells" are not used by other cells.
+// cells" have inputs and outputs.  "State cells" have only outputs.
+// "Root cells" have only inputs.
 //
 // All cells implement implement the "used cell" interface:
 //    update()
@@ -173,6 +138,23 @@ const softApply = (f, v) => isThunk(v) ? defer(_ => f(use(v))): f(v);
 //    setDirty()
 //    addInput(cell, result)
 //    removeInput()
+//
+// Used cells add edges to the graph: this.get() & currentCell.addInput()
+//
+// Using cells remove edges: this.recalc() & input.removeOutput()
+//
+// Cells are removed from the graph when usingCell calls
+//
+// isDirty can be one of:
+//    false => result is valid
+//    true  => needs update (some ancestor has changed)
+//    "new" => needs recalc (has never been evaluated)
+//
+// TBO: Cells marked as "eager" skip dirtying their outputs and instead add
+//    themselves to the root.dirtyEagers list, which are updated without
+//    ordering concerns at the start of the next update.  If they change on
+//    update, they dirty their outputs.  This repeats until no more eager
+//    cells, then ordinary update proceeds.
 //
 
 class Cell extends Thunk {
@@ -192,21 +174,39 @@ class Cell extends Thunk {
         }
     }
 
-    addOutput(p) {
-        this.outputs.add(p);
+    // Called by a using cell no longer using this
+    removeOutput(o) {
+        this.outputs.delete(o);
+        if (this.outputs.size == 0) {
+            this.drop();
+        }
     }
 
-    removeOutput(p) {
-        this.outputs.delete(p);
+    drop() {}
+
+    get() {
+        const result = this.update();
+        this.outputs.add(currentCell);
+        currentCell.addInput(this, result);
+        if (result instanceof CellException) {
+            logRootError(result.error);
+            throw new Error("cell error", {cause: result.error});
+        }
+        return result;
+    }
+}
+
+// CellException is used to distinguish a cell in error state from all
+// other possible cell values.
+class CellException {
+    constructor(error) {
+        this.error = error;
     }
 }
 
 //------------------------------------------------------------------------
 // StateCell
 //------------------------------------------------------------------------
-//
-// StateCell implements the "used cell" interface.
-//
 
 class StateCell extends Cell {
     constructor(initial) {
@@ -229,84 +229,45 @@ class StateCell extends Cell {
         this.isDirty = false;
         return this.result;
     }
-
-    get() {
-        const result = this.update();
-        currentCell.addInput(this, result);
-        if (result instanceof CellException) {
-            logRootError(result.error);
-            throw new Error("cell error", {cause: result.error});
-        }
-        return result;
-    }
 }
 
-const newState = (initial) => new StateCell(initial);
+const state = initial =>
+      new StateCell(initial);
 
 //------------------------------------------------------------------------
 // FunCell
 //------------------------------------------------------------------------
+//
+// Cell lifetime vs. liveness
+//
+// A cell may be constructed and used in different cells.  It starts as only
+// a potential node in the dependency graph; it becomes live (in the graph)
+// when it is used.  When removed from the graph, it returns to being a
+// potential node, and it could be activated again.  A live cell will have
+// one or more outputs (cells that use it), a result, and a known set of
+// inputs.
 
 // currentCell holds the cell currently being evaluated.  Initialized below.
+let globalRootCell;
 let currentCell;
 let logRootError;
 
-// table for caching cells
-const cellCache = new Map();
-
 class FunCell extends Cell {
-    constructor(f, args, key) {
-        // isDirty is tri-state:
-        //   false => result is valid
-        //   true => may need recalc (validate inputs)
-        //   "new" => needs recalc (has never been evaluated)
+    constructor(f) {
         super(null, "new");
 
-        this.f = f;              // const
-        this.args = args;        // const
-        this.key = key;          // const
+        this.f = f;
         this.inputs = null;
         this.cleanups = null;
         this.result = null;
     }
 
-    // Return result & log this cell and its result as a depedendency of
-    // currentCell.
-    //
-    get() {
-        const result = this.update();
-        // If, after evaluation, we have no resources to clean up and we
-        // weren't memoized, then we don't need to track this dependency.
-        if (this.inputs || this.cleanups || this.key) {
-            currentCell.addInput(this, result);
-        }
-        if (result instanceof CellException) {
-            logRootError(result.error);
-            throw new Error("cell error", {cause: result.error});
-        }
-        return result;
-    }
-
-    // Called after our output has removed us...
-    removeOutput(p) {
-        this.outputs.delete(p);
-        if (this.outputs.size == 0) {
-            this.drop();
-        }
-    }
-
-    // add/removeInput(c) call c.add/removeOutput()
+    // Called by a used cell during this.recalc()
     addInput(input, value) {
         if (this.inputs == null) {
             this.inputs = new Map();
         }
         this.inputs.set(input, value);
-        input.addOutput(this);
-    }
-
-    removeInput(input) {
-        this.inputs.delete(input);
-        input.removeOutput(this);
     }
 
     // Call all registered `onDrop` functions.
@@ -337,24 +298,12 @@ class FunCell extends Cell {
     drop() {
         this.cleanup();
 
-        // remove from memo table
-        if (this.key) {
-            cellCache.delete(this.key);
-        }
-
         // detach from inputs
         if (this.inputs != null) {
             for (const [input, result] of this.inputs) {
                 input.removeOutput(this);
             }
             this.inputs = null;
-        }
-    }
-
-    // Remove cell from all outputs.  This indirectly triggers this.drop().
-    deactivate() {
-        for (const output of [...this.outputs]) {
-            output.removeInput(this);
         }
     }
 
@@ -400,7 +349,7 @@ class FunCell extends Cell {
         const saveCurrentCell = currentCell;
         currentCell = this;
         try {
-            this.result = intern(this.f.apply(null, this.args));
+            this.result = intern(this.f.call(null));
         } catch (e) {
             this.result = new CellException(e);
         }
@@ -417,34 +366,38 @@ class FunCell extends Cell {
             }
         }
     }
-}
 
-// Find a matching cell or create a new one.
-//
-const findCell = (f, args) => {
-    args = intern(args);
-    const key = intern([f, args]);
-    return cache(cellCache, key, () => new FunCell(f, args, key));
+    // Remove cell from root's inputs & call drop() [indirectly].
+    // This should only be called when the root cell is the sole output.
+    deactivate() {
+        let o = this.outputs.entries().next().value[0];
+        assert(o == globalRootCell);
+        o.inputs.delete(this);
+        this.removeOutput(o);
+    }
 }
 
 //----------------------------------------------------------------
 // RootCell
 //----------------------------------------------------------------
-
+//
 // A RootCell has no outputs and is self-updating.
 //
+
 class RootCell extends FunCell {
     constructor() {
         // `f` and `args` are never referenced in RootCell
         super();
         this.isDirty = false;
         // this fake output exists only to trigger updates
-        this.addOutput({
+        this.outputs.add({
             setDirty: () => setTimeout(_ => use(this))
         });
     }
 
-    // override get() to not add any outputs
+    // RootCell.get() does not:
+    //  - add itself to caller's inputs
+    //  - rethrow errors
     get() {
         return this.update();
     }
@@ -459,10 +412,29 @@ class RootCell extends FunCell {
     }
 };
 
-// The globalRoot cell acts as output for all cell evaluations that occur
-// outside of the scope of another cell's update.
-const globalRoot = new RootCell();
-currentCell = globalRoot;
+//----------------------------------------------------------------
+// Cell APIs
+//----------------------------------------------------------------
+
+const cellRoot = new Map();
+
+const cell = (f) =>
+      (f.isDurable
+       ? cache(cellRoot, f, _ => new FunCell(f))
+       : new FunCell(f));
+
+const wrap = (efnx) => (...caps) => cell(ebake(efnx, ...caps));
+
+const memo = (efnx) => (...args) => use(cell(ebake(efnx, ...args)));
+
+const onDrop = (f) => currentCell.onDrop(f);
+
+// globalRootCell acts as output for cells evaluated outside of an udpate.
+globalRootCell = new RootCell();
+currentCell = globalRootCell;
+
+// Return cell that is currently being evaluated (for debuging).
+const getCurrentCell = _ => currentCell;
 
 // Log an error description, including all errors in the cause chain.
 //
@@ -497,51 +469,9 @@ const logError = (e, desc) => {
 // understanding what's going on.
 //
 logRootError = (e) => {
-    if (currentCell == globalRoot) {
+    if (currentCell == globalRootCell) {
         logError(e, "Error caught at root");
     }
-};
-
-//----------------------------------------------------------------
-// Cell-related APIs
-//----------------------------------------------------------------
-
-// Return cell that is currently being evaluated.
-const getCurrentCell = () => currentCell;
-
-// De-couple evaluation of f() without memoizing, returning the result.
-// This prevents propagation of invalidation downstream.  Changes that
-// invalidate `f(...args)` will not invalidate the caller will not
-// necessarily invalidate the caller.  Invalidation of the caller will
-// always re-evaluated `f(...args)`.
-//
-// This is often used to de-couple functions that set external state, which
-// typically will never invalidate their caller.
-//
-
-const newCell = (f, ...args) => new FunCell(f, args);
-
-const activate = (f, ...args) => {
-    const cell = new FunCell(f, args);
-    use(cell);     // make it a dependency
-    return cell;
-};
-
-// Provide a function to be called when the current cell is deleted or
-// re-evaluated.
-//
-const onDrop = (f) => currentCell.onDrop(f);
-
-// Create or locate an existing cell that evaluates f(...args).
-//
-// If `fw = wrap(f)`, then:
-//    `fw(...args)` obtains *and uses* a cell that evaluates f(...args)
-//    `fw.cell(...args)` just returns the cell without calling `use`.
-//
-const wrap = (f) => {
-    const useCell = (...args) => use(findCell(f, args));
-    useCell.cell = (...args) => findCell(f, args);
-    return useCell;
 };
 
 //------------------------------------------------------------------------
@@ -570,7 +500,7 @@ class StreamPos {
 //
 const newStream = () => {
     let tail = new StreamPos();
-    const stream = newState(tail);
+    const stream = state(tail);
 
     stream.emit = (value) => {
         tail = tail.pushEvent(value);
@@ -601,7 +531,7 @@ const fold = (f, z) => xs => {
         return out;
     };
 
-    return new FunCell(xfn, []);
+    return new FunCell(xfn);
 };
 
 // Transform a stream.
@@ -631,6 +561,49 @@ const stream = {
     flatMap,
     filter,
     map,
+};
+
+//------------------------------------------------------------------------
+// Pending errors (experimental)
+//------------------------------------------------------------------------
+
+// A Pending object is thrown to indicate that an failure is temporary.
+//
+//  A) throw new Pending("connecting");
+//  B) throw new Error("pending", { cause: Pending("connecting") });
+//  C) stateCell.setError(Pending("connecting"));
+//
+// (B) will generate a stack trace for the `throw` expression, while (A)
+// will not.  (C) will generate an error (and stack trace) when the state
+// cell is used.
+//
+class Pending {
+    constructor(value) {
+        this.value = value;
+    }
+}
+
+// Recover `value` if error resulted from `throw new Pending(value)`
+//
+const checkPending = error => {
+    const cause = rootCause(error);
+    if (cause instanceof Pending) {
+        return cause.value;
+    }
+};
+
+// Return [true, RESULT] or [false, PENDINGVALUE]  (rethrow other errors)
+//
+const usePending = value => {
+    try {
+        return [true, use(value)];
+    } catch (e) {
+        let p = checkPending(e);
+        if (p) {
+            return [false, p];
+        }
+        throw e;
+    }
 };
 
 //------------------------------------------------------------------------
@@ -691,7 +664,7 @@ const showTree = (start, getInputs, getText, logger) => {
 };
 
 const logCell = (root, options) => {
-    root ??= (root === null ? globalRoot : currentCell);
+    root ??= (root === null ? globalRootCell : currentCell);
     options ??= {};
 
     const getCellText = (cell) => {
@@ -699,12 +672,11 @@ const logCell = (root, options) => {
         const value = valueText(cell.result);
         const dirty = cell.isDirty ? "! " : "";
         const out = [`${name}: ${dirty}${value}`];
-        if (!options.brief && cell.f && cell.args
-            && (cell.f.name || cell.args.length > 0)) {
-            const fname = cell.f.name || "<f>";
-            const fargs = cell.args.map(valueText);
-            const ch = (cell.key ? "&" : "=");
-            out.push(`  ${ch} ${fname}(${fargs})`);
+        const f = cell.f;
+        if (!options.brief && (f.fnxName || f.name)) {
+            const fname = f.fnxName || f.name;
+            const fargs = f.caps ? f.caps.map(valueText).join(",") : "()";
+            out.push(`  = ${fname}(${fargs})`);
         }
         if (cell.cleanups) {
             out.push(`  cleanups: ${cell.cleanups.length}`);
@@ -723,29 +695,32 @@ const logCell = (root, options) => {
 //------------------------------------------------------------------------
 
 export {
-    // High-level
-    defer,
-    use,
+    bake,
+    ebake,
     isThunk,
-    wrap,
+    use,
+    lazy,
+    defer,
+    lazyApply,
+    deferApply,
     tryUse,
-    usePending,
-    checkPending,
-    Pending,
     rootCause,
-    stream,
-    softApply,
-
-    // Low-level API
-    newState,
-    newCell,
+    state,
+    cell,
+    wrap,
+    memo,
     onDrop,
-    activate,
+    stream,
 
-    // for testing & diagnostics
-    getCurrentCell,
+    // experimental
+    Pending,
+    checkPending,
+    usePending,
+
+    // debugging
     logCell,
     valueText,
     setLogger,
     logError,
+    getCurrentCell,
 };

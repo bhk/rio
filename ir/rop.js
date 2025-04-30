@@ -32,10 +32,11 @@
 //
 
 import {
-    use, onDrop, wrap, activate, Pending, rootCause, newState,
+    use, cell, wrap, memo, onDrop, Pending, rootCause, state,
     valueText,
     logError,
 } from "./i.js";
+
 
 // Protect against pollution of global namespace.  This module should work
 // in Node (without MockDom.js) where WebSocket is not a global.
@@ -139,11 +140,11 @@ class Agent {
         // continually recalc, getting a new observation each time.  We can
         // wrap these at construction time, since these lifetime of the
         // wrapped forms exceeds the time when they can be called.
-        this.observe = wrap(this.observe_.bind(this)).cell;
+        this.observe = wrap(this.observe_.bind(this));
 
         // getRemote() returns an ordinary value; there is no PENDING/ERROR
         // state involved to no reason to return a cell.
-        this.getRemote = wrap(this.getRemote_.bind(this));
+        this.getRemote = memo(this.getRemote_.bind(this));
 
         this.encode = makeEncoder(this.toOID.bind(this));
         this.decode = makeDecoder(this.fromOID.bind(this));
@@ -197,7 +198,7 @@ class Agent {
     onOpen(slot, oid, ...args) {
         const fn = this.caps[oid];
         assert(this.updaters[slot] == null);
-        const updater = activate(() => {
+        const updater = cell(_ => {
             let result;
             if (typeof fn == "function") {
                 try {
@@ -219,6 +220,7 @@ class Agent {
             this.send(ropUPDATE, slot, ...result);
         });
         updater.name = "inbound";
+        use(updater);
         this.updaters[slot] = updater;
     }
 
@@ -287,7 +289,7 @@ class Agent {
         // this.log("open ..");
         const slot = this.observers.alloc();
 
-        const observer = newState();
+        const observer = state();
         observer.setError(new Pending("opening"));
         this.observers[slot] = observer;
 

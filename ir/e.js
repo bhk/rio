@@ -93,7 +93,7 @@
 //    to the element directly.
 //
 
-import {activate, use, isThunk, onDrop, softApply} from "./i.js";
+import {use, cell, isThunk, onDrop, lazyApply} from "./i.js";
 import test from "./test.js";
 
 const D = document;
@@ -231,7 +231,7 @@ const deleteRules = (selectorSet) => {
 //
 const setStyleProperty = (style, name, value) => {
     if (isThunk(value)) {
-        activate(_ => setStyleProperty(style, name, use(value)));
+        use(cell(_ => setStyleProperty(style, name, use(value))));
     } else {
         name = cssName(name);
         style[name] = cssValue(value);
@@ -285,7 +285,7 @@ let setListeners = (e, o) => {
 //
 let setAttr = (e, name, value) => {
     if (isThunk(value)) {
-        activate(_ => setAttr(e, name, use(value)));
+        use(cell(_ => setAttr(e, name, use(value))));
     } else if (typeof value == "function") {
         throw Error("bad attribute");
     } else {
@@ -302,7 +302,7 @@ let setAttrs = (e, attrs, autoClass) => {
         if (key == "class") {
             let a = autoClass;
             let prefix = b => a + " " + (b || "");
-            autoClass = softApply(prefix, attrs[key]);
+            autoClass = lazyApply(prefix, attrs[key]);
         } else {
             setAttr(e, key, attrs[key]);
         }
@@ -476,7 +476,7 @@ let createElem = (fstIn, props, content) => {
     if (content[0]) {
         // TBO: don't create cell when values are already computed
         // TBO: don't reparent all children on update
-        activate(_ => setContent(e, content));
+        use(cell(_ => setContent(e, content)));
     }
     return e;
 };

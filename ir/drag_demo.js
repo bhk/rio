@@ -1,5 +1,5 @@
 import E from "./e.js";
-import {newState} from "./i.js";
+import {state} from "./i.js";
 import {run, log} from "./demo.js";
 import {handleDrag, listen} from "./drag.js";
 
@@ -19,8 +19,6 @@ let Box = E.newClass({
     padding: 3,
     backgroundColor: "#ddd",
 
-    "&.state1": { backgroundColor: "#ee8", },    /* being dragged */
-    "&.error": { backgroundColor: "#f00", },     /* invalid state */
 });
 
 let controls = [
@@ -31,7 +29,7 @@ let controls = [
 log("Note: Yellow background => being dragged; red => error");
 
 let newBox = (left) => {
-    let iclass = newState(null);
+    let iclass = state(null);
     let e = Box({
         left: left,
         top: 150,
@@ -40,19 +38,14 @@ let newBox = (left) => {
         },
     }, "Drag me");
     let style = e.style;
-    let state = 0;
 
     // For every "start" there should be exactly one "stop".
     //
-    let checkAndSetState = (expected, newState) => {
-        let old = state;
-        state = newState;
-        if (old != expected) {
-            iclass.set("error");
-            log("Error: state = " + state + ", expected " + expected);
-        } else {
-            iclass.set("state" + state);
+    let testAndSetClass = (expected, newClass) => {
+        if (iclass.result != expected) {
+            log("Error: class = " + iclass.result + ", expected " + expected);
         }
+        iclass.set(newClass);
     };
 
     let dragX = 0;
@@ -65,13 +58,13 @@ let newBox = (left) => {
 
     let dragTarget = {
         dragStart: () => {
-            checkAndSetState(0, 1);
+            testAndSetClass(null, "drag");
             dragX = dragY = 0;
         },
 
         dragStop: (isDrop) => {
             style.transform = "";
-            checkAndSetState(1, 0);
+            testAndSetClass("drag", null);
             if (isDrop) {
                 style.left = pxAdd(style.left, dragX);
                 style.top = pxAdd(style.top, dragY);

@@ -2,7 +2,7 @@
 
 import E from "./e.js";
 import {handleDrag} from "./drag.js";
-import {defer, use, newState, onDrop} from "./i.js";
+import {lazy, use, state, onDrop} from "./i.js";
 
 const MINWIDTH = 40;
 const rowHeight = 22;
@@ -211,7 +211,7 @@ const newColHeader = (fields, colInfo, colIndex) => {
         colWidth = width;
     } else {
         eDivider = DragDivider();
-        colWidth = newState(width);
+        colWidth = state(width);
         let dropWidth = width;
         const dereg = handleDrag(eDivider, {
             dragStart() {},
@@ -231,10 +231,10 @@ const newColHeader = (fields, colInfo, colIndex) => {
               },
           }, label);
 
-    const cell = HdrCell({gridArea: "1 / " + (colIndex+1)},
-                         eLabel, eDivider);
+    const hdrCell = HdrCell({gridArea: "1 / " + (colIndex+1)},
+                            eLabel, eDivider);
 
-    return [cell, colWidth];
+    return [hdrCell, colWidth];
 };
 
 // columns = array of {key, width, sort}
@@ -268,7 +268,7 @@ const newGrid = (columns, fields, db, fnRowClicked, eprops) => {
     }).reverse();
 
     // This value describes the widths of all columns
-    const gtc = defer(_ => widths.map(w => use(w)+"px").join(" ") + " 1fr");
+    const gtc = lazy(_ => widths.map(w => use(w)+"px").join(" ") + " 1fr");
 
     const hdrGrid = HdrGrid({gridTemplateColumns: gtc}, headers);
 
@@ -288,7 +288,7 @@ const newGrid = (columns, fields, db, fnRowClicked, eprops) => {
                 }
             },
         },
-    }, defer(_ => createGridCells(use(db), columns, fields)));
+    }, lazy(_ => createGridCells(use(db), columns, fields)));
 
     return GridTop(eprops, dataGrid, hdrGrid);
 };

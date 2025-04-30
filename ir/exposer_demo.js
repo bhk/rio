@@ -144,20 +144,20 @@ let pxAdd = (px, n) => (toNum(px) + n) + 'px';
 let makeDraggable = (e) => {
     let initialClass = e.className;
     let style = e.style;
-    let state = 0;
+    let dragState = 0;
 
     let label = e.firstElementChild;
 
     // For every "start" there should be exactly one "stop".
     //
-    let checkAndSetState = (expected, newState) => {
-        let old = state;
-        state = newState;
+    let checkAndSetDragState = (expected, newDragState) => {
+        let old = dragState;
+        dragState = newDragState;
         if (old != expected) {
             e.className = initialClass + " box error";
-            console.log("state = " + state + ", expected " + expected);
+            console.log("state = " + dragState + ", expected " + expected);
         } else {
-            e.className = initialClass + " box state" + state;
+            e.className = initialClass + " box state" + dragState;
         }
     };
 
@@ -173,7 +173,7 @@ let makeDraggable = (e) => {
 
     let dragTarget = {
         dragStart: () => {
-            checkAndSetState(0, 1);
+            checkAndSetDragState(0, 1);
             dragX = dragY = 0;
             exposer = Exposer(
                 e, limitRect, 10,
@@ -184,7 +184,7 @@ let makeDraggable = (e) => {
         dragStop: (isDrop) => {
             style.transform = "";
             exposer(false);
-            checkAndSetState(1, 0);
+            checkAndSetDragState(1, 0);
             if (isDrop) {
                 style.left = pxAdd(style.left, dragX);
                 style.top = pxAdd(style.top, dragY);

@@ -6,14 +6,14 @@ import path from "path";
 import http from "http";
 import {WebSocketServer} from "ws";
 import {Agent} from "./rop.js";
-import {use, wrap, onDrop, newState, newCell} from "./i.js";
+import {use, cell, state, onDrop} from "./i.js";
 
 
-const recentKeys = wrap(() => {
+const recentKeys = use(cell(_ => {
     const duration = 3000;
     console.log("Hello!");
 
-    let text = newState([{t: Date.now(), data:"Start!"}]);
+    let text = state([{t: Date.now(), data:"Start!"}]);
     const updateText = (data) => {
         let now = Date.now();
         let old = now - duration;
@@ -38,12 +38,12 @@ const recentKeys = wrap(() => {
     stdin.on("data", kbdata);
     onDrop(() => stdin.off("data", kbdata));
 
-    return newCell(() => {
+    return cell(() => {
         const str = use(text).map(e => e.data).join("");
         process.stdout.write("\r" + str + "   \x08\x08\x08");
         return str;
     });
-});
+}));
 
 
 //----------------------------------------------------------------
