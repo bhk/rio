@@ -433,8 +433,9 @@ associated with mutation, but in doing so it severely restricts the use of
 mutation, and introduces significant complexity (such as the still largely
 undocumented "borrow checker") to the language.
 
-Guaranteed immutability of values simplifies many optimizations such as
-[early evaluation](#early-evaluation).
+Guaranteed immutability of values simplifies implementation of many key
+features such as [intrinsic reactivity](#intrinsic-reactivity) and [early
+evaluation](#early-evaluation).
 
 Immutability allows us to implement [deterministic garbage
 collection](#deterministic-garbage-collection).  Reference cycles in data
@@ -604,110 +605,116 @@ constructors](#early-evaluation-of-constructors) to ensure high performance.
 
 ## Gradual Typing
 
-Gradual typing allows a program to be written with or without static type
-declarations.  Adding type annotations to variables can help identify errors
-statically, improve the maintainability of code, and enable performance
-optimizations.
+Gradual typing allows a program to be written with or without type
+declarations.  Type annotations are not necessary for the code to function;
+they are *constraints* placed on the code.  If one were to strip all of the
+type annotations from a functioning program, the resulting program would
+behave equivalently for all inputs that the annotated program handled
+without errors, and it might properly handle an even broader class of
+inputs.  One does not need to learn a parallel type-specification language
+and predict the outcome of a type inference algorithm in order to understand
+the code.
 
-In the approach to gradual typing envisioned for Rio, type annotations will
-not influence the behavior of a program, other than by restricting the types
-of values that variables or expressions may take on.  To wit, if one were to
-strip all of the type annotations from a program, the resulting program will
-be as functional: it will behave equivalently for all inputs that the
-annotated program handled without errors.
-
-One can learn to use Rio, therefore, first by understanding its data types
-and operations allowed on them.  The concepts of type values, type
-expressions, and static typing may then be introduced to the programmer by
-describing them as run-time assertions.  For example:
+The concept of type annotations can be introduced by describing them as
+run-time assertions.  For example:
 
     sq = (x : Number) -> x * x
 
-Is equivalent to:
+Behaves the same as:
 
     sq = x ->
-        assert type(x) == Number
-        n*n
+        x = x as Number
+        x * x
 
-With [early evaluation](#early-evaluation), the execution and failure of an
-assertion can often be predicted before the code is evaluated.  For example,
-even when the values of certain expressions are not known until run-time,
-the types of those expressions may be known and run-time error may be
-deduced in advance.  In these cases, Rio will report the error immediately
-(e.g. at "compile time").
+The `x as Number` expression throws an error if `x` does not implement the
+Number interface.  The `as` operator does not "reinterpret" values or
+produce unexpected results.  It might perform some inherently safe
+conversions (e.g. between numeric types without overflow or loss of
+precision), but its primary role is to select an **interface** for use.
 
-An exhaustive set of unit tests (integrated into the program) will help
-ensure that run-time errors are either triggered by evaluation or predicted
-at compile time.  However, run-time errors may remain unpredicted, and this
-mode of analysis (typing as assertions) provides no guarantee of soundness.
 
-We then introduce a means for a programmer to identify a function as
-"sound".  This alters what the compiler will treat as an error, flipping the
-burden of proof.  Instead of raising errors when it can prove that the
-function will be called and encounter a type error at run-time, it will
-raise errors it *cannot* prove that the function will *not* be encounter a
-type error, *if* called.
+### Soundness
 
-This form of static analysis does not need to be limited to assertions about
-the *types* of values.  Predicting failures of other kinds of assertion
-failures (or proving them impossible) would be much more powerful than
-simply checking types, and is an intriguing possibility to explore.
+Now consider the case of function type annotations:
 
-These gradual typing objectives influence language design in the following
-ways (among others):
+    sq : (Number -> Number) = x -> x * x
 
-The language must adhere to a simple model of execution. Types are a
-mechanism for making assertions about the program, not something that
-dictates the meaning of the program.  We do not have overloading in the
-sense of multiple alternative definitions of a variable bound at different
-places.  We do not have "backwards-in-time" type inference, so when one
-writes `x : BigNum = sum(vec)`, the type of `x` does not change the meaning
-of `sum(vec)`; it just makes an assertion about its result.  (If we want to
-a function to behave differently, we specify that in its inputs, as in `x =
-sum(vec, BigNum)`.)
+This ensures that `sq` will reject non-Number arguments, and *also* that
+when passed a Number, the result from `sq` will always be a Number, and its
+execution will not trigger any assertions.  If the language cannot deduce
+that this guarantee is met, then the assignment to `sq` will generate an
+error.  The deduction required is a subset of the deduction performed for
+[early evaluation](#early-evaluation).  Type annotations can force this
+analysis to be performed deeply at the time of assignment, rather than later
+in program execution as code paths are JIT'ed.
 
-Methods and properties of the built-in data types should work well with the
-type system.  They should enable the compiler to infer types easily, and
-they should be easily describable in the type system, in order to minimize
-the number of type declarations required to achieve soundness.
+This **soundness** guarantee will generally require that the functions used
+by a function also provide soundness guarantees, and in turn the functions
+they use, and so on.  However, with explicit type checking a function could
+safely manipulate a value of unknown type -- such as the result of an
+untyped function, or a result typed `Any`.
 
-In order to increase opportunities for finding errors statically, and to
-maximize the knowledge that can be propagated during [early
-evaluation](#early-evaluation), Rio semantics will often be "tighter" than
-those of other dynamic languages.  For example, mismatches between formal
-and actual argument counts generate a run-time error, as do accesses of
-undefined vector or map members.  There are fewer [implicit type
-conversions](#implicit-type-conversions), and no "null" value.
+This form of "static" analysis does not need to be limited to assertions
+about the *types* of values.  Predicting other kinds of assertion failures
+(or proving them impossible) is much more powerful than simply checking
+types.
+
+
+### Implications of Gradual Typing
+
+Gradual typing requires or synergizes with other aspects of Rio:
+
+ * Rio does not have overloading in the sense of multiple alternative
+   definitions of the same name visible at the same place in the code.
+
+ * Rio does not have backward-in-time type inference, where a type
+   declaration affects earlier computations.  For example, in `x : BigNum =
+   sum(map(vec))`, the `BigNum` type annotation only asserts the type of the
+   resulting value and does not alter the behavior of `sum` or `map`.  For
+   different behavior in Rio we could use different functions or pass
+   different arguments.  [Reified types](#reified-types) can help here by
+   allowing us to pass types as inputs.
+
+ * Methods and properties of the built-in data types should accept and
+   return values with predictable types.  They should enable early
+   evaluation to reliably infer types, and they should be easily describable
+   in the type system.
+
+ * Rio semantics are often less forgiving than those of other dynamic
+   languages.  For example, mismatches between formal and actual argument
+   counts are errors, as are accesses of undefined vector or map members.
+   There are fewer [implicit type conversions](#implicit-type-conversions),
+   and no use of "null" values to indicate exceptional conditions.
 
 
 ## Implicit Type Conversions
 
-Most dynamic languages support a rich set of implicit conversions or
-coercions.  While Rio generally has a dynamic "feel", it differs in this
-respect.
+Most dynamic languages support a rich set of implicit conversions, but Rio
+is more restrained.  Elaborate rules for implicit conversion can present an
+additional cognitive burden for programmers, and implicit conversions can
+make the intent of the author less clear.
 
-* Implicit conversions require the programmer to know the conversion rules
-  implemented by the languages and/or the data type involved.  This is an
-  additional cognitive burden for programmers.
+Among the related language design mistakes we hope not to repeat:
 
-* Implicit conversions can make the intent of the author less clear.
-  Without them, the programmer would have to be more explicit, which can
-  help someone reading the code to see exactly what kind of conversion is
-  anticipated, and can help the development environment automatically
-  [detect errors statically](#early-evaluation).
+ - In JavaScript there are values that are *equal* but have different
+   truthiness.  This is perhaps the worst case of problems stemming from
+   inconsistencies in implicit conversion.  Others include:
 
-Particularly problematic are the cases of implicit conversions of a
-condition to a truth value, and implicit conversions performed when testing
-equality.  Some dynamic languages, like Lisp & Lua, use very simple rules,
-but others have rules that are so elaborate that most programmers who
-regularly use the language would be unable to accurately describe them.
-[JavaScript, perhaps the worst, even has rules for truthiness that are not
-consistent with its own rules for equality.  Even when `x == y`, `if (x)
-...` might not do the same thing as `if (y) ...`.]
+    - `x==y && typeof x == "number"` does *not* imply `x == Number(y)`.
+    - `x==y` does *not* imply `String(x) == String(y)`.
+    - `x==y` and `y==z` does *not* imply `x==z`.
 
-The implicit numeric conversions in the C language are another example of a
-set of rules so complex that working programmers will often be unable to
-faithfully recount them.
+ - C's rules for implicit numeric "promotion" are so complex very few
+   working C programmers are able to faithfully recount them.  The unsafe
+   and unguarded nature of some of these conversions can lead to bugs.
+
+ - JavaScript implicitly converts between numbers and strings even though
+   the `+` operator behaves profoundly differently for these types.  More
+   generally, implicit conversion between types that have conflicting
+   interfaces should be avoided.  [Unifiying numbers and strings with a
+   common interface, wherein addition and concatenation are not conflated,
+   would have been one acceptable solution.  Not blurring the difference
+   between numbers and strings would have been the other.]
 
 
 ## Intrinsic Reactivity
@@ -750,22 +757,21 @@ input events, generating a stream of output events.
 
 **Orchestrators** are functions that control when and how expressions are
 evaluated.  Their result has the same value as their argument, but the
-computation of that result might be deferred, parallelized, or cached.
+computation of that result might be parallelized or cached.
 
 Since the point of orchestrators is to influence the evaluation of their
-argument, their [names end in "&"](#lazy-expressions) to defer that
+argument, their [names end in "&"](#lazy-evaluation) to defer that
 evaluation.
 
 Examples:
 
- * `&(EXPR)`: Returns its first argument: a deferred computation.
+ * `&(EXPR)`: Returns its first argument: a thunk.
 
  * `spawn&(EXPR)`: Launches a parallel task to evaluate `EXPR`, returning a
-   deferred computation that waits on the result.
+   thunk that waits on the result.
 
  * `memo&(EXPR)`: A memoized expression, evaluated within a [reactive
-   cell](incremental.md#how-it-works).  The result is a deferred
-   computation.
+   cell](incremental.md#how-it-works).  The result is a thunk.
 
 Regarding memoization, `&(EXPR)` and `memo&(EXPR)` differ in a subtle way.
 `&(EXPR)` constructs a deferred computation that will evaluate `EXPR` at
@@ -776,19 +782,20 @@ Multiple evaluations of `memo&(EXPR)`, on the other hand, will return the
 refer to the same values.
 
 
-## Lazy Expressions
+## Lazy Evaluation
 
 Rio's [eagerly evaluates
 expressions](https://en.wikipedia.org/wiki/Evaluation_strategy) by default,
 but when a function whose name ends in "&" is called, its arguments are
-treated as lazy expressions.  The function will receive a deferred
-computation for each argument.  These will be computed at most once, when
-and if needed.  They can be assigned to variables and passed to functions
-without forcing their evaluation.
+treated as lazy expressions.  The function will receive a thunk for each
+argument.  These will be computed at most once, when and if needed.  They
+can be assigned to variables and passed to functions without forcing their
+evaluation.
 
-Any operations or use of properties or methods will force their evaluation.
-There is no need to explicitly force evaulation, and the deferred nature
-does not affect the type of the value.
+Any operations on a thunk -- any use of properties or methods -- will force
+its evaluation.  There is no need to explicitly force evaulation.  Thunks
+are indistinguishable from computed values, and do not appear in the type of
+the value.
 
 Any errors or infinite loops in the expression will not occur if the value
 is never used.  If the value is used and they do occur, they will manifest
@@ -814,11 +821,6 @@ Hints align with Rio's goal of *enabling* programmers, rather than
 second-guessing them.
 
 
-## Objects
-
-The syntax or mechanism for defining methods is TBD.
-
-
 ## Interfaces
 
 The set of behaviors that define a data value constitute its interface.
@@ -832,6 +834,11 @@ interfaces.
 
 Wrapper interfaces can also be constructed, adapting objects written for one
 "dialect" to another.
+
+
+## Objects
+
+The syntax or mechanism for defining methods is TBD.
 
 
 ------------------------------------------------------------------------
@@ -1042,13 +1049,9 @@ heights, and more flexible rendering, which are enabled by GUI environments.
    * `x_0` and `x_1` as `x₀` and `x₁`.
 
   Awareness of this tooling capability can inform language design.  For
-  example, specifying operators as Unicode symbols is not necessary when the
-  visual benefits can be achieved simply by rendering ASCII punctuation
-  sequences in the desired manner.
-
-- Display keywords and variable names in a variable-width font.  This
-  directly enhances the readability of the names, and further improves
-  readability by reducing the need for line breaking.
+  example, specifying operators with an extended character set is not
+  necessary when the visual benefits can be achieved simply by rendering
+  ASCII punctuation sequences in the desired manner.
 
 - Display large number literals with a [thin space](
   https://en.wikipedia.org/wiki/Thin_space) separating digit groups.  This
@@ -1062,17 +1065,20 @@ heights, and more flexible rendering, which are enabled by GUI environments.
   ways (e.g. pop-up windows) when using [interactive value
   exporation](#interactive-value-exploration).
 
+- Use a variable-width font.  This directly enhances the readability of the
+  names, and further improves readability by reducing the need for line
+  breaking.
+
 - Allow rich text comments, with some graphing capability.
 
 - "Syntax" within strings: `\\`, `\t`, and `\n`, can be made more visually
   distinct, perhaps shown as boxed `n`, `t`, and `\` characters.
 
-- Show the internal structure of string literals as determined by a parsing
-  function they are later passed to (when that parser returns an object
-  implementing a certain interface).
-
-- Display tabular data (constructors of vector-of-vectors or
-  vector-of-maps) as an actual table, with cell borders.
+- Allow alternate visualizations of literal constructors.  For example,
+  tabular display of a vector of vectors.  This selection could be an
+  ephemeral property (associated with the UI view), or it could manifest in
+  the code as a function that returns its argument unchanged while
+  describing a visualization to the IDE.
 
 
 ## Assertions
@@ -1431,11 +1437,11 @@ the benefit of the P2 code.  Note that *phases* do not denote versions or
 iterations, because P1 itself can change over time.  Instead a phase is just
 a position in this chain of hosting, like phases of booting a computer.
 
-Successive phases may be backwards compatible or not.  When a phase is
-backwards compatible, then its compiler can be called "self-hosting": it can
+Successive phases may be backward compatible or not.  When a phase is
+backward compatible, then its compiler can be called "self-hosting": it can
 compile itself, resulting in a compiler with the same functionality.  When a
-phase is not backwards compatible, then some work will be required to
-convert the previous compiler to the new dialect to create the next "Px".
+phase is not backward compatible, then some work will be required to convert
+the previous compiler to the new dialect to create the next "Px".
 
 Given multiple phases, each with its own compiler version, a complete
 re-build from source would technically require running all the compilers,
