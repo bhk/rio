@@ -94,8 +94,8 @@ const testSet = cell(() => {
     return true;
 });
 
-eq(use(testSet), true);
-testSet.deactivate();
+eq(testSet.update(), true);
+testSet.drop();
 
 // ASSERT: resources are freed on drop
 eq(sheet.cssRules.length, 0);
@@ -165,7 +165,7 @@ eq(sheet.cssRules[0].style.color, "red");
 // Cycle 3: Invalidate base cell
 
 ix.set(1);
-let e3 = use(base);
+let e3 = base.update();
 assert(e3 !== e2);
 eq(e3.textContent, "a<>b");
 // Assert: invalidated base's resources were dropped
@@ -174,5 +174,5 @@ eq(sheet.cssRules[0].selectorText, ".CT");
 // Drop base
 
 // Assert: no leakage of resources
-base.deactivate();
+base.drop();
 eq(sheet.cssRules.length, 0);

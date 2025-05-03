@@ -28,7 +28,7 @@ let main = () => {
     let [done, value] = usePending(recentKeys());
     let str = done ? value : "Pending...";
     E({
-        $element: document.body
+        $element: document.body,
         margin: 20,
         font: "20px 'Avenir Next'",
     },

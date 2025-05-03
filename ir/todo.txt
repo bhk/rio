@@ -7,6 +7,7 @@ Current
     - No error when root deps return non-null; error on invalidate!
     - usePending -> catchPending?
  - E: element constructors are not memoizable (cannot appear twice in DOM tree)
+ - rop: stop using cell.deactivate() & `use()` in the root context
  - rop: Open -> Call; Update -> Result; Close -> Drop
  - rop: place updaters as inputs to "GW" cell, not root
  - rop: use new serialization described in rop.md
@@ -15,7 +16,6 @@ Current
  - rop: protect against malicious peers
  - use button in browser(s) to increment the counter
  - rop: on shutdown, close observers
- - I: deal with leaks (see below)
  - grid: repeating background?
  - grid: demo vertical & horizontal scrolling
  - drag: leverage `listen` from e.js?
@@ -24,7 +24,4 @@ Current
  - eventDemo/dragStream: capture vs. document listener
  - Validate "clean" install using "npm update"
  - Revisit comments with TBO (To-Be-Optimized)
- - I: cell.deactivate() & `use()` in the root context: While effective, it
-   is conceptually ugly.  The code calling `use` cannot be recalced, and the
-   `deactivate` implementation sticks out like a sore thumb.
-- I: drop cell after no users *and* no creator
+ - I: drop cell after no users *and* no creator

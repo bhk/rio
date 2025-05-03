@@ -9,8 +9,6 @@ import {
     getCurrentCell, setLogger
 } from "./i.js";
 
-let root = getCurrentCell();
-
 // bake, ebake
 {
     // ASSERT: bake() result is functioning, indempotent, and stamped
@@ -91,9 +89,26 @@ let root = getCurrentCell();
     eq([succ, v], ["caught", "ERR"]);
 }
 
+// Pattern for testing reactivity
+//
+// When we want a test that constructs one or more cells and repeats
+// evaluations after modifying inputs, we could just call use(cell) to
+// evaluate them, but that would pollute the root cell's input set, and not
+// clean up the cell and its dependencies (calling onDrop-registered
+// handlers).
+//
+// To do this hygenically, avoiding calling use() in the root context:
+//
+//  - Create a base cell whose function calls the other cell(s)
+//  - Call base.update() to evaluate.  Note that update() does not rethrow
+//    cell errors; use cellError() to check for errors.
+//  - Call base.drop() when done
+//
+// The base cell might need to be specially constructed as an "alternate
+// root" when/if we implement some update optimizations.
+//
 
-// state, cell, wrap, memo, onDrop
-// also: IR update algorithm
+// state, cell, wrap, memo, onDrop -- and test IR update algorithm
 {
     let events = [];
     let log = str => events.push(str);
@@ -125,12 +140,11 @@ let root = getCurrentCell();
         return null;  // prevent update of base
     });
 
-    // thunk can be a `newRoot` when/if we implement root-level update logic.
     let trunk = cell(_ => (log("T"), use(c4)));
 
     let update = _ => {
         events = [];
-        eq(null, trunk.get());
+        eq(null, trunk.update());
         log(out);
         return events;
     };
@@ -161,15 +175,14 @@ let root = getCurrentCell();
 
     // ASSERT: onDrop() callbacks fire when cell is no longer live
     events = [];
-    trunk.deactivate();
+    trunk.drop();
     eq(events, ["drop(DC)"]);
-    eq(0, root.inputs.size);
 
     // ASSERT: memo(dcx)("dc") uses same cell as cell(ebake(dcx, "dc"))
-    eq("DC", memo(dcx)("DC"));
-    eq(1, root.inputs.size);
-    dc.deactivate();
-    eq(0, root.inputs.size);
+    let base = cell(_ => memo(dcx)("DC"));
+    eq("DC", base.update());
+    eq(1, base.inputs.size);
+    base.drop();
 }
 
 // stream
@@ -178,13 +191,13 @@ let root = getCurrentCell();
     let smap = stream.map(n => n*2)(s);
     let sfilt = stream.filter(n => n <= 4)(smap);
     let sfold = stream.fold((v, n) => v + ":" + n, "")(sfilt);
-    eq(use(sfold), "");
+    eq(sfold.update(), "");
     s.emit(1);
     s.emit(3);
     s.emit(2);
-    eq(use(sfold), ":2:4");
+    eq(sfold.update(), ":2:4");
 
-    sfold.deactivate();
+    sfold.drop();
 }
 
 // root error handling
@@ -206,6 +219,7 @@ let root = getCurrentCell();
 
     // ASSERT: root cell auto-update does not catch errors, but logs them
     assert(caught);
+    let root = getCurrentCell();
     eq(root.isDirty, false);
     assert(logOutput.match("Error"));
 }

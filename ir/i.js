@@ -61,7 +61,7 @@ class LazyThunk extends Thunk {
         this.f = f;
     }
 
-    get() {
+    use() {
         return this.f.call(null);
     }
 }
@@ -72,7 +72,7 @@ const isThunk = (value) => value instanceof Thunk;
 //
 const use = (value) => {
     while (value instanceof Thunk) {
-        value = value.get();
+        value = value.use();
     }
     return value;
 };
@@ -130,20 +130,16 @@ const rootCause = (e) => {
 //
 // All cells implement implement the "used cell" interface:
 //    update()
-//    get()
-//    addOutput()
-//    removeOutput()
+//    use()
+//    unuse()
 //
 // Cells that depend on other cells implement the "using cell" interface:
 //    setDirty()
-//    addInput(cell, result)
-//    removeInput()
+//    addUsed(cell, result)
 //
-// Used cells add edges to the graph: this.get() & currentCell.addInput()
+// Dependencies are added by: this.use() -> currentCell.addUsed()
 //
-// Using cells remove edges: this.recalc() & input.removeOutput()
-//
-// Cells are removed from the graph when usingCell calls
+// Dependencies are removed by: this.update() -> input.unuse()
 //
 // isDirty can be one of:
 //    false => result is valid
@@ -175,7 +171,7 @@ class Cell extends Thunk {
     }
 
     // Called by a using cell no longer using this
-    removeOutput(o) {
+    unuse(o) {
         this.outputs.delete(o);
         if (this.outputs.size == 0) {
             this.drop();
@@ -184,10 +180,10 @@ class Cell extends Thunk {
 
     drop() {}
 
-    get() {
+    use() {
         const result = this.update();
         this.outputs.add(currentCell);
-        currentCell.addInput(this, result);
+        currentCell.addUsed(this, result);
         if (result instanceof CellException) {
             logRootError(result.error);
             throw new Error("cell error", {cause: result.error});
@@ -203,6 +199,9 @@ class CellException {
         this.error = error;
     }
 }
+
+const cellError = v =>
+      v instanceof CellException && v.error;
 
 //------------------------------------------------------------------------
 // StateCell
@@ -262,8 +261,8 @@ class FunCell extends Cell {
         this.result = null;
     }
 
-    // Called by a used cell during this.recalc()
-    addInput(input, value) {
+    // Called when this cell uses another -- during this.update()
+    addUsed(input, value) {
         if (this.inputs == null) {
             this.inputs = new Map();
         }
@@ -301,48 +300,43 @@ class FunCell extends Cell {
         // detach from inputs
         if (this.inputs != null) {
             for (const [input, result] of this.inputs) {
-                input.removeOutput(this);
+                input.unuse(this);
             }
             this.inputs = null;
         }
     }
 
-    // Update: Recalculate if necessary.
-    update() {
-        if (!this.isDirty) {
-            return this.result;
+    // reset isDirty if valid
+    validate() {
+        // "new" => invalid; false => valid
+        if (this.isDirty != true) {
+            return;
         }
 
-        let isInvalid = false;
-
-        if (this.isDirty == "new") {
-            // node has not been calculated
-            isInvalid = true;
-        } else if (this.inputs) {
+        if (this.inputs) {
             // Validate cells in the order they were first evaluated,
             // to avoid recalculating un-live cells.
             for (const [cell, result] of this.inputs) {
                 const value = cell.update();
                 if (result !== value) {
-                    isInvalid = true;
-                    break;
+                    return;
                 }
             }
         }
-
         this.isDirty = false;
-        if (isInvalid) {
-            this.recalc();
-            assert(this.isDirty == false);
-        }
-        return this.result;
     }
 
-    // Call f(args), watching for use of input cells
-    //
-    recalc() {
-        this.cleanup();
+    // Update: Recalculate if necessary.
+    update() {
+        this.validate();
+        if (!this.isDirty) {
+            return this.result;
+        }
+        this.isDirty = false;
 
+        // Recalculate...
+
+        this.cleanup();
         const oldInputs = this.inputs;
         this.inputs = null;
 
@@ -361,10 +355,14 @@ class FunCell extends Cell {
             assert(this.inputs);
             for (const [input, value] of oldInputs) {
                 if (!this.inputs.has(input)) {
-                    input.removeOutput(this);
+                    input.unuse(this);
                 }
             }
         }
+
+        // invalidations should not happen during update
+        assert(this.isDirty == false);
+        return this.result;
     }
 
     // Remove cell from root's inputs & call drop() [indirectly].
@@ -373,7 +371,7 @@ class FunCell extends Cell {
         let o = this.outputs.entries().next().value[0];
         assert(o == globalRootCell);
         o.inputs.delete(this);
-        this.removeOutput(o);
+        this.unuse(o);
     }
 }
 
@@ -387,26 +385,29 @@ class FunCell extends Cell {
 class RootCell extends FunCell {
     constructor() {
         // `f` and `args` are never referenced in RootCell
-        super();
+        super(null);
         this.isDirty = false;
-        // this fake output exists only to trigger updates
-        this.outputs.add({
-            setDirty: () => setTimeout(_ => use(this))
-        });
     }
 
-    // RootCell.get() does not:
-    //  - add itself to caller's inputs
-    //  - rethrow errors
-    get() {
-        return this.update();
+    setDirty() {
+        if (!this.isDirty) {
+            this.isDirty = true;
+            setTimeout(_ => this.update());
+        }
+    }
+
+    // RootCell.use() not supported
+    use() {
+        assert(false);
     }
 
     // preserve inputs and update them; don't call onDrops
-    recalc() {
+    update() {
+        this.isDirty = false;
         if (this.inputs) {
             for (const [input, _] of this.inputs) {
-                use(input);
+                // TODO:
+                input.use();
             }
         }
     }
@@ -717,7 +718,8 @@ export {
     checkPending,
     usePending,
 
-    // debugging
+    // debugging, testing
+    cellError,
     logCell,
     valueText,
     setLogger,

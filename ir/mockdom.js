@@ -313,7 +313,11 @@ let dispatchEvents = () => {
 };
 
 let flushEvents = () => {
-    while (dispatchEvents()) ;
+    let dispatched = false;
+    while (dispatchEvents()) {
+        dispatched = true;
+    }
+    return dispatched;
 };
 
 const setTimeout = (fn, delay) => {
