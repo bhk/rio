@@ -338,7 +338,9 @@ let setContent = (e, content) => {
         // Allow "holes" in the content array
         child = use(child);
         if (child instanceof Array) {
-            child.forEach(appendContent);
+            for (const item of child) {
+                appendContent(item);
+            }
         } else if (child != null && child !== "") {
             e.appendChild(prepareNode(child));
         }
@@ -476,7 +478,7 @@ let createElem = (fstIn, props, content) => {
     if (content[0]) {
         // TBO: don't create cell when values are already computed
         // TBO: don't reparent all children on update
-        use(cell(_ => setContent(e, content)));
+        use(cell(function setContentX() { return setContent(e, content);}));
     }
     return e;
 };
@@ -495,9 +497,9 @@ let newFactoryState = (fstIn, props) => {
 // Construct a new factory function/object.
 //
 let newFactory = (fst) => {
-    let f = (props, ...content) => createElem(fst, props, content);
-    f.newClass = (props) => newFactory(newFactoryState(fst, props));
-    return f;
+    let E = (props, ...content) => createElem(fst, props, content);
+    E.newClass = (props) => newFactory(newFactoryState(fst, props));
+    return E;
 };
 
 let E = newFactory(rootFactoryState);

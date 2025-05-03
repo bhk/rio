@@ -289,8 +289,7 @@ class Agent {
         // this.log("open ..");
         const slot = this.observers.alloc();
 
-        const observer = state();
-        observer.setError(new Pending("opening"));
+        const observer = state(null, new Pending("opening"));
         this.observers[slot] = observer;
 
         // package args

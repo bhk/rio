@@ -17,6 +17,9 @@
 //    }
 //
 
+// This appears to prevent truncated stack traces in Node & Chrome
+Error.stackTraceLimit = 100;
+
 let idRE = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/;
 
 let isObject = (v) => {

@@ -4,16 +4,15 @@ import url from "url";
 import fs from "fs";
 import path from "path";
 import http from "http";
-import {WebSocketServer} from "ws";
-import {Agent} from "./rop.js";
-import {use, cell, state, onDrop} from "./i.js";
+import { WebSocketServer } from "ws";
+import { exec } from 'child_process';
+import { Agent } from "./rop.js";
+import { use, cell, wrap, state, onDrop } from "./i.js";
 
-
-const recentKeys = use(cell(_ => {
+const recentKeys = wrap(_ => {
     const duration = 3000;
-    console.log("Hello!");
 
-    let text = state([{t: Date.now(), data:"Start!"}]);
+    let text = state([{t: Date.now(), data:"Type something..."}]);
     const updateText = (data) => {
         let now = Date.now();
         let old = now - duration;
@@ -43,7 +42,7 @@ const recentKeys = use(cell(_ => {
         process.stdout.write("\r" + str + "   \x08\x08\x08");
         return str;
     });
-}));
+});
 
 
 //----------------------------------------------------------------
@@ -147,4 +146,12 @@ const addr = process.argv[2] || '127.0.0.1:8002';
 const hostPort = addr.match(/^([^:]*):?(.*)/);
 server.listen(hostPort[2], hostPort[1] || '127.0.0.1');
 
-console.log('Listening on ' + addr + ' ...');
+const serverURL = `http://${addr}/`;
+
+console.log(`Listening on ${serverURL} ...`);
+
+// Launch browser...
+exec(`open '${serverURL}'`, (error, stdout, stderr) => {
+    if (error) console.error(`error: ${error.message}`);
+    if (stderr) console.error(`stderr: ${stderr}`);
+});

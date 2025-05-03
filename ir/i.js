@@ -153,6 +153,14 @@ const rootCause = (e) => {
 //    cells, then ordinary update proceeds.
 //
 
+// CellException is a special type of result (not exposed to client code)
+// that indicates the cell is in error state.
+class CellException {
+    constructor(error) {
+        this.error = error;
+    }
+}
+
 class Cell extends Thunk {
     constructor(value, isDirty) {
         super();
@@ -185,23 +193,16 @@ class Cell extends Thunk {
         this.outputs.add(currentCell);
         currentCell.addUsed(this, result);
         if (result instanceof CellException) {
-            logRootError(result.error);
-            throw new Error("cell error", {cause: result.error});
+            // Generate stack trace in root context; rethrow of Pending
+            // during module loading (e.g. unit tests) is fatal.
+            throw ((result.error instanceof Pending) &&
+                   (currentCell != globalRootCell)
+                   ? result.error
+                   : new Error("cell error", {cause: result.error}));
         }
         return result;
     }
 }
-
-// CellException is used to distinguish a cell in error state from all
-// other possible cell values.
-class CellException {
-    constructor(error) {
-        this.error = error;
-    }
-}
-
-const cellError = v =>
-      v instanceof CellException && v.error;
 
 //------------------------------------------------------------------------
 // StateCell
@@ -230,8 +231,8 @@ class StateCell extends Cell {
     }
 }
 
-const state = initial =>
-      new StateCell(initial);
+const state = (value, error) =>
+      new StateCell(error == null ? value : new CellException(error));
 
 //------------------------------------------------------------------------
 // FunCell
@@ -249,7 +250,6 @@ const state = initial =>
 // currentCell holds the cell currently being evaluated.  Initialized below.
 let globalRootCell;
 let currentCell;
-let logRootError;
 
 class FunCell extends Cell {
     constructor(f) {
@@ -365,13 +365,12 @@ class FunCell extends Cell {
         return this.result;
     }
 
-    // Remove cell from root's inputs & call drop() [indirectly].
-    // This should only be called when the root cell is the sole output.
+    // Remove cell from all its outputs; this triggers drop() indirectly.
     deactivate() {
-        let o = this.outputs.entries().next().value[0];
-        assert(o == globalRootCell);
-        o.inputs.delete(this);
-        this.unuse(o);
+        for (const o of this.outputs) {
+            o.inputs.delete(this);
+            this.unuse(o);
+        }
     }
 }
 
@@ -406,8 +405,7 @@ class RootCell extends FunCell {
         this.isDirty = false;
         if (this.inputs) {
             for (const [input, _] of this.inputs) {
-                // TODO:
-                input.use();
+                ifPending(input, _ => null);
             }
         }
     }
@@ -428,7 +426,10 @@ const wrap = (efnx) => (...caps) => cell(ebake(efnx, ...caps));
 
 const memo = (efnx) => (...args) => use(cell(ebake(efnx, ...args)));
 
-const onDrop = (f) => currentCell.onDrop(f);
+const onDrop = (f) => {
+    assert(f instanceof Function);
+    currentCell.onDrop(f);
+};
 
 // globalRootCell acts as output for cells evaluated outside of an udpate.
 globalRootCell = new RootCell();
@@ -461,17 +462,6 @@ const logError = (e, desc) => {
         log(stack.replace(/\n[^\n]+\/i\.js:[^\n]+/g, ''));
     } else {
         log(e);
-    }
-};
-
-// Log an error if we are outside of any cell.  When an error is not caught,
-// browsers will display an error in the console but most will fail to
-// display the stack traces for the `cause` errors, which are crucial for
-// understanding what's going on.
-//
-logRootError = (e) => {
-    if (currentCell == globalRootCell) {
-        logError(e, "Error caught at root");
     }
 };
 
@@ -569,6 +559,7 @@ const stream = {
 //------------------------------------------------------------------------
 
 // A Pending object is thrown to indicate that an failure is temporary.
+// It can be triggered in these ways:
 //
 //  A) throw new Pending("connecting");
 //  B) throw new Error("pending", { cause: Pending("connecting") });
@@ -593,17 +584,18 @@ const checkPending = error => {
     }
 };
 
-// Return [true, RESULT] or [false, PENDINGVALUE]  (rethrow other errors)
+// Return `value` if it does not throw an error, or then(p) if it threw a
+// pending result.
 //
-const usePending = value => {
+const ifPending = (value, then) => {
     try {
-        return [true, use(value)];
-    } catch (e) {
-        let p = checkPending(e);
-        if (p) {
-            return [false, p];
+        return use(value);
+    } catch (error) {
+        const cause = rootCause(error);
+        if (cause instanceof Pending) {
+            return then(cause.value);
         }
-        throw e;
+        throw error;
     }
 };
 
@@ -716,10 +708,9 @@ export {
     // experimental
     Pending,
     checkPending,
-    usePending,
+    ifPending,
 
     // debugging, testing
-    cellError,
     logCell,
     valueText,
     setLogger,

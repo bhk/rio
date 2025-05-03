@@ -1,27 +1,20 @@
 Current
 =======
 
- - I: overhaul
-    - report Pending error cleanly when returned by root cell inputs
-      (simplify client.js)
-    - No error when root deps return non-null; error on invalidate!
-    - usePending -> catchPending?
+ - I: cell "throw new Error(...)" is not durable => redundant updates
  - E: element constructors are not memoizable (cannot appear twice in DOM tree)
- - rop: stop using cell.deactivate() & `use()` in the root context
  - rop: Open -> Call; Update -> Result; Close -> Drop
  - rop: place updaters as inputs to "GW" cell, not root
  - rop: use new serialization described in rop.md
  - rop: pass thunks & use remotely
- - do not kill server when WS client disconnects
+ - rop: do not kill server when WS client disconnects
  - rop: protect against malicious peers
- - use button in browser(s) to increment the counter
  - rop: on shutdown, close observers
+ - server: use button in browser(s) to increment a counter
  - grid: repeating background?
  - grid: demo vertical & horizontal scrolling
- - drag: leverage `listen` from e.js?
  - demo: Demo needn't/shoudn't be `posn: abs`
  - demo: provide buttons for un-render / re-render
  - eventDemo/dragStream: capture vs. document listener
- - Validate "clean" install using "npm update"
- - Revisit comments with TBO (To-Be-Optimized)
  - I: drop cell after no users *and* no creator
+ - Revisit comments with TBO (To-Be-Optimized)

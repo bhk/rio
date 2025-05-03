@@ -33,6 +33,7 @@
 Alias(default).in = Alias(test)
 Alias(test).in = TestJS@tests TestJSB@demos
 Alias(demo).in = Open(HTMLIndex(JSToHTML@Bundle@demos))
+Alias(server).command = node server.js
 
 tests = @*_q.js
 demos = @*_demo.js
