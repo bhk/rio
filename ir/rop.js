@@ -33,7 +33,7 @@
 
 import {
     use, cell, wrap, memo, onDrop, Pending, rootCause, state,
-    valueText,
+    resultText,
     logError,
 } from "./i.js";
 
@@ -306,7 +306,7 @@ class Agent {
         // Remote functions are per (agent, oid, args)
         // (...args) -> cell
         const fwdr = (...args) => {
-            // this.log && this.log(`evoke _o(${oid},${args.map(valueText)})`);
+            // this.log && this.log(`evoke _o(${oid},${args.map(resultText)})`);
             return this.observe(oid, ...args);
         };
         fwdr.$OID = oid;

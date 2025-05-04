@@ -141,31 +141,21 @@ const rootCause = (e) => {
 //
 // Dependencies are removed by: this.update() -> input.unuse()
 //
-// isDirty can be one of:
-//    false => result is valid
-//    true  => needs update (some ancestor has changed)
-//    "new" => needs recalc (has never been evaluated)
+// isDirty => result may have changed; outputs have been notified
+// !isDirty => result is valid; any change should notify outputs
 //
 // TBO: Cells marked as "eager" skip dirtying their outputs and instead add
-//    themselves to the root.dirtyEagers list, which are updated without
+//    themselves to a root.dirtyEagers list, which are updated without
 //    ordering concerns at the start of the next update.  If they change on
 //    update, they dirty their outputs.  This repeats until no more eager
 //    cells, then ordinary update proceeds.
 //
 
-// CellException is a special type of result (not exposed to client code)
-// that indicates the cell is in error state.
-class CellException {
-    constructor(error) {
-        this.error = error;
-    }
-}
-
 class Cell extends Thunk {
-    constructor(value, isDirty) {
+    constructor() {
         super();
-        this.isDirty = isDirty;
-        this.result = value;
+        this.result = null;
+        this.isDirty = false;
         this.outputs = new Set();
     }
 
@@ -192,15 +182,15 @@ class Cell extends Thunk {
         const result = this.update();
         this.outputs.add(currentCell);
         currentCell.addUsed(this, result);
-        if (result instanceof CellException) {
-            // Generate stack trace in root context; rethrow of Pending
-            // during module loading (e.g. unit tests) is fatal.
-            throw ((result.error instanceof Pending) &&
-                   (currentCell != globalRootCell)
-                   ? result.error
-                   : new Error("cell error", {cause: result.error}));
+        const [succ, value] = result;
+        if (succ) {
+            return value;
         }
-        return result;
+        // Generate stack trace in root context even for Pending; otherwise,
+        // use during module loading (e.g. tests) is fatal and mysterious.
+        throw value instanceof Pending && currentCell != globalRootCell
+            ? value
+            : new Error("used error", {cause: value});
     }
 }
 
@@ -209,20 +199,32 @@ class Cell extends Thunk {
 //------------------------------------------------------------------------
 
 class StateCell extends Cell {
-    constructor(initial) {
-        super(intern(initial), false);
+    constructor(initialResult) {
+        super();
+        this.setResult(initialResult);
     }
 
-    set(value) {
-        value = intern(value);
-        if (value !== this.result) {
-            this.result = value;
+    setResult(result) {
+        result = intern(result);
+        if (result !== this.result) {
+            this.result = result;
             this.setDirty();
         }
     }
 
-    setError(e) {
-        this.set(new CellException(e));
+    set(value) {
+        this.setResult([true, value]);
+    }
+
+    setError(error) {
+        this.setResult([false, error]);
+    }
+
+    // called by imperative code; does not track dependency
+    peek() {
+        const [succ, value] = this.result;
+        assert(succ);
+        return value;
     }
 
     update() {
@@ -232,7 +234,9 @@ class StateCell extends Cell {
 }
 
 const state = (value, error) =>
-      new StateCell(error == null ? value : new CellException(error));
+      new StateCell(error == null
+                    ? [true, value]
+                    : [false, error]);
 
 //------------------------------------------------------------------------
 // FunCell
@@ -253,12 +257,10 @@ let currentCell;
 
 class FunCell extends Cell {
     constructor(f) {
-        super(null, "new");
-
+        super();
         this.f = f;
         this.inputs = null;
         this.cleanups = null;
-        this.result = null;
     }
 
     // Called when this cell uses another -- during this.update()
@@ -308,46 +310,51 @@ class FunCell extends Cell {
 
     // reset isDirty if valid
     validate() {
-        // "new" => invalid; false => valid
-        if (this.isDirty != true) {
-            return;
+        if (this.result == null) {
+            // never computed (inputs don't matter)
+            return false;
         }
-
+        if (!this.isDirty) {
+            return true;
+        }
         if (this.inputs) {
             // Validate cells in the order they were first evaluated,
             // to avoid recalculating un-live cells.
-            for (const [cell, result] of this.inputs) {
-                const value = cell.update();
-                if (result !== value) {
-                    return;
+            for (const [cell, oldResult] of this.inputs) {
+                const currentResult = cell.update();
+                if (oldResult != currentResult) {
+                    return false;
                 }
             }
         }
+        // skip re-validation of inputs on later call
         this.isDirty = false;
+        return true;
     }
 
     // Update: Recalculate if necessary.
     update() {
-        this.validate();
-        if (!this.isDirty) {
+        if (this.validate()) {
             return this.result;
         }
-        this.isDirty = false;
 
         // Recalculate...
 
+        this.isDirty = false;
         this.cleanup();
         const oldInputs = this.inputs;
         this.inputs = null;
 
-        const saveCurrentCell = currentCell;
+        const usingCell = currentCell;
+        let result;
         currentCell = this;
         try {
-            this.result = intern(this.f.call(null));
+            result = [true, this.f.call(null)];
         } catch (e) {
-            this.result = new CellException(e);
+            result = [false, e];
         }
-        currentCell = saveCurrentCell;
+        currentCell = usingCell;
+        this.result = intern(result);
 
         if (oldInputs != null) {
             // A cell cannot transition from some inputs to *none*
@@ -383,9 +390,7 @@ class FunCell extends Cell {
 
 class RootCell extends FunCell {
     constructor() {
-        // `f` and `args` are never referenced in RootCell
-        super(null);
-        this.isDirty = false;
+        super();
     }
 
     setDirty() {
@@ -393,11 +398,6 @@ class RootCell extends FunCell {
             this.isDirty = true;
             setTimeout(_ => this.update());
         }
-    }
-
-    // RootCell.use() not supported
-    use() {
-        assert(false);
     }
 
     // preserve inputs and update them; don't call onDrops
@@ -507,18 +507,15 @@ const newStream = () => {
 //    f: (prevResult, x) -> newResult
 //
 const fold = (f, z) => xs => {
-    let pos;
+    let pos = null;
     const xfn = () => {
-        let out = currentCell.result;
         const oldPos = pos;
         pos = use(xs);
-        if (oldPos == null) {
-            out = z;
-        } else {
-            pos.forEachSince(oldPos, x => {
-                out = f(out, x);
-            });
-        }
+        // TODO: errors?
+        let [succ, out] = currentCell.result || [true, z];
+        pos.forEachSince(oldPos, x => {
+            out = f(out, x);
+        });
         return out;
     };
 
@@ -625,7 +622,6 @@ const valueTextAt = (depth, v, r) =>
       depth > 9 ? "..." :
       v instanceof Object ? (
           (v instanceof Cell ? cellName(v) :
-           v instanceof CellException ? `<Caught ${r(v.error)}>` :
            v instanceof Pending ? `<Pending ${r(v.value)}>` :
            v instanceof Function ? (v.name
                                     ? `${v.name}#${getID(v)}`
@@ -636,9 +632,10 @@ const valueTextAt = (depth, v, r) =>
       typeof v == "string" ? '"' + v.replace(/\n/g, "\\n") + '"' :
       String(v);
 
-const valueText = (v) => {
+const resultText = ([succ, v]) => {
     const rr = depth => v => valueTextAt(depth, v, rr(depth+1));
-    return rr(0)(v);
+    const text = rr(0)(v);
+    return succ ? text : `<Caught ${text}>`;
 };
 
 const showTree = (start, getInputs, getText, logger) => {
@@ -662,7 +659,7 @@ const logCell = (root, options) => {
 
     const getCellText = (cell) => {
         const name = cellName(cell);
-        const value = valueText(cell.result);
+        const value = resultText(cell.result);
         const dirty = cell.isDirty ? "! " : "";
         const out = [`${name}: ${dirty}${value}`];
         const f = cell.f;
@@ -712,7 +709,7 @@ export {
 
     // debugging, testing
     logCell,
-    valueText,
+    resultText,
     setLogger,
     logError,
     getCurrentCell,

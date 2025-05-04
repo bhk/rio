@@ -16,17 +16,9 @@ import {
 // set, which will make it persist (by default) and continue to be updated.
 // In some cases we want to ensure that all `onDrop` handlers are called.
 //
-// There are currently two alternatives:
-//
 //  * Create a "base" cell that consumes the other cells
-//  * Evaluate it using base.update().  Note that update() does not
-//    rethrow cell errors.
-//  * Clean up by calling base.drop() when done.
-//
-// Or, alternatively, after creating your base cell:
-//
-//    * Evaluate it with use(base).
-//    * Clean up with base.deactivate().
+//  * Evaluate it with use(base).
+//  * Clean up with base.deactivate().
 //
 // The base cell might need to be specially constructed as an "alternate
 // root" when/if we implement some update optimizations in the future.
@@ -88,9 +80,9 @@ import {
     assert(dc === cell(ebake(dcx, "X")));
     // ASSERT: wrap(F)(C) uses same cell as cell(ebake(F,C))
     const dw = cell(_ => use(wrap(dcx)("X")));
-    eq("XX", dw.update());
-    eq("XX", dw.inputs.get(dc));
-    dw.drop();
+    eq("XX", use(dw));
+    eq([true,"XX"], dw.inputs.get(dc));
+    dw.deactivate();
 
     // Test update algorithm by tracking cell recalculations
     let events = [];
@@ -151,13 +143,13 @@ import {
     let smap = stream.map(n => n*2)(s);
     let sfilt = stream.filter(n => n <= 4)(smap);
     let sfold = stream.fold((v, n) => v + ":" + n, "")(sfilt);
-    eq(sfold.update(), "");
+    eq(use(sfold), "");
     s.emit(1);
     s.emit(3);
     s.emit(2);
-    eq(sfold.update(), ":2:4");
+    eq(use(sfold), ":2:4");
 
-    sfold.drop();
+    sfold.deactivate();
 }
 
 // tryUse, rootCause, Pending, checkPending, ifPending

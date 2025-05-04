@@ -10,13 +10,13 @@ import { Agent } from "./rop.js";
 import { use, cell, wrap, state, onDrop } from "./i.js";
 
 const recentKeys = wrap(_ => {
-    const duration = 3000;
+    const duration = 5000;
 
     let text = state([{t: Date.now(), data:"Type something..."}]);
     const updateText = (data) => {
         let now = Date.now();
         let old = now - duration;
-        let a = text.result.filter(e => e.t > old);
+        let a = text.peek().filter(e => e.t > old);
         a.push({t: now, data});
         text.set(a);
     };

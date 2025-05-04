@@ -42,8 +42,8 @@ let newBox = (left) => {
     // For every "start" there should be exactly one "stop".
     //
     let testAndSetClass = (expected, newClass) => {
-        if (iclass.result != expected) {
-            log("Error: class = " + iclass.result + ", expected " + expected);
+        if (iclass.peek() != expected) {
+            log("Error: class = " + iclass.peek() + ", expected " + expected);
         }
         iclass.set(newClass);
     };

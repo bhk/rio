@@ -216,7 +216,7 @@ const newColHeader = (fields, colInfo, colIndex) => {
         const dereg = handleDrag(eDivider, {
             dragStart() {},
             dragMove(dx, dy, event) { colWidth.set(dropWidth + dx) },
-            dragStop(isDrop) { if (isDrop) dropWidth = colWidth.result; },
+            dragStop(isDrop) { if (isDrop) dropWidth = colWidth.peek(); },
         });
         onDrop(dereg);
     }
