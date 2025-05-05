@@ -13,15 +13,16 @@ environment using `i.js`.
 
 ROP describes communication across a bi-directional message-based
 communication channel between two **domains**.  In each domain, an **agent*
-is responsible for sending and receiving ROP messages and introducing the
-functionality to the surrounding execution environment.
+is responsible for sending and receiving ROP messages and mating them to the
+mechanisms native to its environment.
 
 Almost all ROP messages occur in the context of a **slot**, which is a
-protocol construct that represents the act of observing a time-varying
-remote value.  Each slot begins with a request (from the **client** side of
-the observation) to call a **function** or evaluate a **thunk** that resides
-in the other domain (the **host** side).  An slot ends when the client, no
-longer interested in the results of the observation, **drops** the slot.
+protocol abstraction that represents the act of observing a time-varying
+remote value.  Each slot comes into existence when named by a request (from
+the **client** side of the observation) to call a **function** or evaluate a
+**thunk** that resides in the other domain (the **host** side).  A slot
+ceases to be when the client, no longer interested in the results of the
+observation, **drops** the slot and the server acknowledges it.
 
   A thunk represents a computation whose result has not yet been evaluated
   or inspected.  Lazy expressions and parallel expressions are examples. A
@@ -62,7 +63,7 @@ the client (C) or host (H) side.
        AckResult slot                // C: acknowledge Result
        Drop      slot                // C: stop observing & release value
        AckDrop   slot                // H: acknowledge Drop
-       Error     msg                 // *: report protocol
+       Error     msg                 // *: report protocol error
 
     Value = one of:
       Data value          // JSON value
@@ -157,11 +158,11 @@ Messages are JS arrays serialized using JSON, after `value` elements are
 transformed to encode references and then encode Value subtypes as JSON
 values.
 
-  thunk      -->  Thunk N    -->  ["C", N]
-  function   -->  Fn N       -->  ["F", N]
-  error      -->  Error S    -->  ["E", S]
-  array      -->  A          -->  ["A", A]
-  other      -->  X          -->  X
+    thunk      -->  Thunk N    -->  ["T", N]
+    function   -->  Fn N       -->  ["F", N]
+    error      -->  Error S    -->  ["E", S]
+    array      -->  A          -->  ["A", A]
+    other      -->  X          -->  X
 
 
 ## Reference Equality
@@ -186,8 +187,33 @@ that does nothing but accept credentials and, on success, return a function
 that provides more functionality.
 
 
-
 ## Notes
+
+
+### Rio Language Binding
+
+ROP function and thunk references identify Rio functions and thunks.  A
+thunk may be a cell or lazy thunk on the host side, but these are not
+distinguished in ROP.  In Rio, cells and lazy thunks are indistinguishable
+from each other (and from computed values).
+
+At the implementation level, host-side thunks and functions will be
+represented by client-side "forwarder" thunks and functions.  When
+evaluated/called, a forwarder initiates a slot and constructs an input cell
+to observe it, marking that cell as a dependency of the user/caller of the
+forwarder.
+
+On the host side, when the ROP agent recieves ths slot initiation (`Use` or
+`Call`) it will construct a cell to handle the operation whether or not the
+invoked reference is a cell, because function calls and thunk evaluations
+can introduce dependencies on other cells.
+
+While `Call` observations can send and receive thunk references, `Use`
+observations have no arguments, and the result will not be a thunk.  The
+result might be an aggregate value that *contains* a thunk, but any "bare"
+thunk will be reduced to a non-thunk value on the host-side before being
+returned to the client.  (That is the objective of `use`, after all.)
+
 
 ### Synchronization
 
@@ -199,39 +225,24 @@ Consider this example:
     t = defer getTime()
     t1 = defer t + 1
     t2 = defer t - 1
-    d = subtract(t1, t2)      # ALWAYS 2
+    d = subtract(t1, t2)            # ALWAYS 2
 
-Over ROP (without further cahnges) we can see this:
+Consider the slots involved in calling `subtract` over ROP:
 
     --> Call 0 SUBTRACT thunkT1 thunkT2
     <-- Use 1 thunkT1
     <-- Use 2 thunkT2
     --> Result 1 1001
     --> Result 2 999
-    <-- Result 0 2                     (eventually settles to this)
+    <-- Result 0 2                  d = 2
 
-After the time changes, the following sequence may happen:
+After the time changes, the following sequence might happen:
 
     --> Result 1 2001
-    <-- Result 0 1002                  Inconsistent result!
+    <-- Result 0 1002               d = 1002  (inconsistent)
     --> Result 2 1999
-    <-- Result 0 2
+    <-- Result 0 2                  d = 2
 
-
-### Example
-
-Mapping map OO interfaces to function calls could result in something like
-the following:
-
-    dbs = Opener.register(credentials, eventSource)
-
-        --> Call 10, 0, "register", credentials, ["O",-1]  # -1=eventSource
-        <-- Result 10 -1            # -1 = dbs
-        --> AckResult 10
-        <-- Watch 20 1 "getEvent"   # 1=eventSource
-        --> Result 20
-        <-- AckResult 20
-        ...
 
 ### Retained References...
 
@@ -241,9 +252,27 @@ a pure reactive system, such an inbound call could not exist except within
 the context of some other observation that *sends* the reference.  So this
 should not happen:
 
-   <-- Call 2 F X            # passes X
-   <-- Drop/AckDrop 1        # releases X
+    <-- Call 2 F X            # passes X
+    <-- Drop/AckDrop 1        # releases X
 
 If we have some stateful operation in the peer domain that is holding on to
 one of our references, it should keep open the slot that provided it with
 that reference, by refraining from sending Drop or AckDrop.
+
+
+## Typing
+
+In future protocol versions, type information could be conveyed along with
+each reference.  In the case of functions, the types would describe
+arguments and results, and in the case of thunks, the results.
+
+This type information could reduce the amount of type information conveyed
+with arguments and results, and could allow some operations to be completed
+without messaging, notably:
+
+ - Type errors.
+ - Type introspection.
+
+As with gradual typing in the host language, this protocol-level typing at
+the protocol level would be optional or, equivalently, allowing for
+`Any`-typed values.
