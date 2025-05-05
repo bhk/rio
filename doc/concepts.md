@@ -823,22 +823,30 @@ second-guessing them.
 
 ## Interfaces
 
-The set of behaviors that define a data value constitute its interface.
-This includes named properties (using the `.` operator), behaviors
-associated with infix operators, and meta-properties (e.g. enumeration of
-named properties).
+Abstractly, an interface is the set of behaviors that are supported by an
+object (aka value).  More concretely, in Rio an interface is a *reified*
+concept that expresses guarantees about an object, such as a set of methods
+that are supported, and (eventually and optionally) type signatures for
+those methods.
 
-A given data value may be accessed via more than one interface.  A mechanism
-like COM's QueryInterface can be used to interrogate values and obtain
-interfaces.
-
-Wrapper interfaces can also be constructed, adapting objects written for one
-"dialect" to another.
+A given data value may be accessed via more than one interface.  The `as`
+operator can be used to obtain an alternative interface to a value, with
+semantics very much like that of `QueryInterface` in COM.  For example,
+interfaces are stateless -- easy requirement to comply with in Rio, given
+that everything is immutable!
 
 
 ## Objects
 
-The syntax or mechanism for defining methods is TBD.
+Constructing an object that supports one or more [reified
+interfaces](#interfaces) will involve bringing together those interfaces and
+a set of method implementations that satisfy them.
+
+A more ad hoc approach will be available for creating one-off instances and
+interfaces.
+
+The precise syntax or mechanism for defining methods is TBD, as is the
+precise mapping of the object model to the core VM constructs.
 
 
 ------------------------------------------------------------------------
@@ -1089,22 +1097,10 @@ is false, execution stops and an error is reported.  Assertions can help
 reasoning about correctness of the subsequent code, either in terms of
 correctness or in terms of meeting some looser requirements (e.g. types).
 
-With [early evaluation](#early-evaluation), many assertion failures can be
-detected statically, before a program processes its time-varying inputs.
-Assertions about the type of a value are particularly amenable to static
-detection, and can be particularly useful for optimization.  Rio's type
-annotations can be thought of as a shorthand for type assertions.
-
-By providing more and more such assertions, we can provide more and more
-assurance about the correctness of our program.  However, this approach
-differs from that of static typing with respect to the handling of
-assertions that cannot be decided statically.  In a strongly-typed static
-language, that would be a typing error, whereas in a dynamic language it
-becomes a run-time assertion.  In order to allow the programmer to assert
-soundness, a [hint](#hints) can specify an expression for which all
-reachable asserts must be statically decided.  Type safety -- and other
-assertions of correctness -- can thereby be gradually and modularly
-implemented.
+With [early evaluation](#early-evaluation), many assertions can be evaluated
+statically, before a program processes its time-varying inputs.  Those that
+are know to always succeed need not be evaluated at "run time", and those
+that fail can be presented to the programmer early.
 
 
 ## Elevated Error Messages
