@@ -101,7 +101,7 @@ const makeEncoder = toOID => {
     const replacer = (k, v) =>
           typeof v == "function" ? {"%F": toOID(v)} : v;
     return value => JSON.stringify(value, replacer);
-};
+}
 
 const makeDecoder = fromOID => {
     const restorer = (k, v) =>
@@ -115,11 +115,11 @@ const makeDecoder = fromOID => {
 // Agent
 //----------------------------------------------------------------
 
-const ropOPEN = "Open";             // slot oid values...
-const ropUPDATE = "Update";         // slot value     [response]
-const ropCLOSE = "Close";           // slot
-const ropACKCLOSE = "AckClose";     // slot           [response]
-const ropACKUPDATE = "AckUpdate";   // slot
+const ropCALL = "Call";             // slot oid values...
+const ropRESULT = "Result";         // slot value     [response]
+const ropDROP = "Drop";             // slot
+const ropACKDROP = "AckDrop";       // slot           [response]
+const ropACKRESULT = "AckResult";   // slot
 const ropERROR = "Error";           // name
 
 class Agent {
@@ -176,11 +176,11 @@ class Agent {
                 return this.shutdown("malformed");
             }
             const [type, slot, ...args] = msg;
-            (type == ropOPEN      ? this.onOpen(slot, ...args) :
-             type == ropUPDATE    ? this.onUpdate(slot, ...args) :
-             type == ropACKUPDATE ? this.onAckUpdate(slot) :
-             type == ropCLOSE     ? this.onClose(slot) :
-             type == ropACKCLOSE  ? this.onAckClose(slot) :
+            (type == ropCALL      ? this.onCall(slot, ...args) :
+             type == ropRESULT    ? this.onResult(slot, ...args) :
+             type == ropACKRESULT ? this.onAckResult(slot) :
+             type == ropDROP      ? this.onDrop(slot) :
+             type == ropACKDROP   ? this.onAckDrop(slot) :
              type == ropERROR     ? this.shutdown("received Error") :
              assert(false, `Unknown message type ${type}`));
         };
@@ -195,7 +195,7 @@ class Agent {
         this.ws.close();
     }
 
-    onOpen(slot, oid, ...args) {
+    onCall(slot, oid, ...args) {
         const fn = this.caps[oid];
         assert(this.updaters[slot] == null);
         const updater = cell(_ => {
@@ -217,21 +217,21 @@ class Agent {
             } else {
                 result = [2, `No such function (${oid})`];
             }
-            this.send(ropUPDATE, slot, ...result);
+            this.send(ropRESULT, slot, ...result);
         });
         updater.name = "inbound";
         use(updater);
         this.updaters[slot] = updater;
     }
 
-    onClose(slot) {
+    onDrop(slot) {
         const updater = this.updaters[slot];
         updater.deactivate();
         this.updaters[slot] = null;
-        this.send(ropACKCLOSE, slot);
+        this.send(ropACKDROP, slot);
     }
 
-    onUpdate(slot, err, value) {
+    onResult(slot, err, value) {
         const observer = this.observers[slot];
         if (observer instanceof Object) {
             // this.log(`r[${slot}] = ${value}`);
@@ -241,19 +241,19 @@ class Agent {
                 observer.setError(err == 1 ? new Pending(value) : value);
             }
         } else if (observer == "ZOMBIE") {
-            // OK: still waiting on Close
+            // OK: still waiting on Drop
         } else {
             // protocol error
             this.reportError("bad slot");
             this.shutdown("bad slot");
         }
-        this.send(ropACKUPDATE, slot);
+        this.send(ropACKRESULT, slot);
     }
 
-    onAckUpdate(slot) {
+    onAckResult(slot) {
     }
 
-    onAckClose(slot) {
+    onAckDrop(slot) {
         assert(this.observers[slot] == "ZOMBIE");
         this.observers.free(slot);
     }
@@ -293,11 +293,11 @@ class Agent {
         this.observers[slot] = observer;
 
         // package args
-        this.send(ropOPEN, slot, oid, ...args);
+        this.send(ropCALL, slot, oid, ...args);
 
         onDrop(() => {
             this.observers[slot] = "ZOMBIE";
-            this.send(ropCLOSE, slot);
+            this.send(ropDROP, slot);
         });
         return observer;
     };

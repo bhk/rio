@@ -1,12 +1,9 @@
 Current
 =======
 
- - I: cell "throw new Error(...)" is not durable => redundant updates
- - E: element constructors are not memoizable (cannot appear twice in DOM tree)
- - rop: Open -> Call; Update -> Result; Close -> Drop
- - rop: place updaters as inputs to "GW" cell, not root
  - rop: use new serialization described in rop.md
- - rop: pass thunks & use remotely
+ - rop: pass thunks & `use` remotely
+ - rop: place updaters as inputs to "GW" cell, not root
  - rop: do not kill server when WS client disconnects
  - rop: protect against malicious peers
  - rop: on shutdown, close observers
@@ -15,6 +12,6 @@ Current
  - grid: demo vertical & horizontal scrolling
  - demo: Demo needn't/shoudn't be `posn: abs`
  - demo: provide buttons for un-render / re-render
- - eventDemo/dragStream: capture vs. document listener
+ - E: element constructors are not memoizable (cannot appear twice in DOM tree)
  - I: drop cell after no users *and* no creator
  - Revisit comments with TBO (To-Be-Optimized)
