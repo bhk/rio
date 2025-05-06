@@ -22,7 +22,7 @@ remote value.  Each slot comes into existence when named by a request (from
 the **client** side of the observation) to call a **function** or evaluate a
 **thunk** that resides in the other domain (the **host** side).  A slot
 ceases to be when the client, no longer interested in the results of the
-observation, **drops** the slot and the server acknowledges it.
+observation, **ends** the slot and the server acknowledges it.
 
   A thunk represents a computation whose result has not yet been evaluated
   or inspected.  Lazy expressions and parallel expressions are examples. A
@@ -40,14 +40,22 @@ References are named by IDs assigned by the agent in their hosting domain.
 Functions and thunks are always passed by reference; other values are
 literal.
 
+Results can be in one of three conditions: Success, Pending, and Error.
+
+ * Success indicates an ordinary result.
+
+ * Error indicates a failure on the host side (e.g. an uncaught exception).
+   By design, ROP agents propagate errors downstream to keep the function
+   call analogy clean and allow remoting to be as unobtrusive as possible.
+
+ * Pending is another "exceptional" state, but one that is commonly
+   encountered and intended to be communicated swiftly and efficiently.
+
 Remote evaluations always return a potentially time-varying (reactive)
-value, due to the inherent potential for communication delays.  Remote
-evaluation of a function call or thunk will initially take on a "pending
-error" result -- an Error value that indicates the temporary lack of a
-result; any **use** of any Error value by the client will result in a Rio
-error or JS exception being thrown.  This pending error will later be
-replaced by the value sent in the response from the other domain, which may
-in turn be replaced again and again (due to changing inputs).
+value, due to the inherent potential for communication delays, as well as
+the potential for reactive evaluation on the host.  A remote function call
+will initially have a Pending result, and later transition to the condition
+indicated by the host.
 
 
 ## Messages
@@ -57,57 +65,60 @@ However, within a given slot, messages are strictly associated with either
 the client (C) or host (H) side.
 
     Messages = one of:
-       Call      slot ref value...   // C: begin function call
-       Use       slot ref            // C: begin thunk reduction
-       Result    slot value          // H: deliver result value
+       Start     slot ref value...   // C: call function/use thunk
+       Result    slot cond value     // H: deliver result value
        AckResult slot                // C: acknowledge Result
-       Drop      slot                // C: stop observing & release value
-       AckDrop   slot                // H: acknowledge Drop
+       End       slot                // C: stop observing & release value
+       AckEnd    slot                // H: acknowledge End
        Error     msg                 // *: report protocol error
 
     Value = one of:
-      Data value          // JSON value
-      Fn ref              // reference to function
-      Thunk ref           // reference to reactive value
-      Error value         // error/exception
+       Data value          // JSON value
+       Fn ref              // reference to function
+       Thunk ref           // reference to reactive value
+
+    Cond = one of:
+       Success             // ordinary result
+       Pending             // result not yet available
+       Error               // error/exception
 
     Slot = integer
 
-      Slots are identified by unique integers allocated by the client agent
-      and identified in the initiating Call or Use message.
-
+       Slots are identified by unique integers allocated by the client agent
+       and identified in the initiating Start message.
 
     Ref = integer
 
-      Reference values use the sign of the integer to indicate the domain
-      hosting the referenced value.  A non-negative value X represents index X
-      into the recipient's reference table.  A negative value -Y represents
-      index Y-1 in the sender's reference table.
+       Reference values use the sign of the integer to indicate the domain
+       hosting the referenced value.  A non-negative value X represents
+       index X into the recipient's reference table.  A negative value -Y
+       represents index Y-1 in the sender's reference table.
 
 
 ### Observations
 
-An observation is initiated with `Call` or `Use` and terminated with `Drop`
-and the peer's `AckDrop`.  In between, one or more `Result` messages may come
-in response.
+Observations either call a function or use a thunk, depending on the type of
+the referenced object.
 
-    --> Call slot ref values
-          ... or ...
-        Use slot ref
+An observation is initiated with `Start` and terminated with `End` and the
+peer's `AckEnd`.  In between, one or more `Result` messages may come in
+response.
+
+    --> Start slot ref values
 
     <-- Result slot value    # these may occur one
     --> AckResult slot       #   or more times
 
-    --> Drop slot
-    <-- AckDrop slot
+    --> End slot
+    <-- AckEnd slot
 
 
-Note that incoming `Result` messages could be received after `Drop` is sent
-and before `AckDrop` is received:
+Note that incoming `Result` messages could be received after `End` is sent
+and before `AckEnd` is received:
 
-    --> Drop slot
+    --> End slot
     <-- Result slot value    # possible, but harmless (ignored)
-    <-- AckDrop slot
+    <-- AckEnd slot
 
 
 ## Details
@@ -127,19 +138,13 @@ finalizers.  (`i.js` uses [liveness to control lifetimes of
 cells](incremental.md#liveness-and-lifetimes).)
 
 Acknowledgement messages are important for managing lifetimes.  When an
-client sends `Drop slot`, it must wait for the host's `AckDrop slot` before
+client sends `End slot`, it must wait for the host's `AckEnd slot` before
 considering the slot reusable.  Likewise, when a host sends `Result` on a
 slot, it must wait for the clients `AckResult` before considering the
 previous value expired.
 
 Note: A given object might appear in more than one live slot at a time; it
 will remain a live reference as long as it is live in any of those slots.
-
-
-### `Error` Values
-
-Exceptions or errors during evaluation of a function call or thunk are
-reported as a result value of type `Error`.
 
 
 ### `Error` Messages
@@ -155,14 +160,11 @@ Provisions for feature detection may be provided in the future.
 ### Serialization
 
 Messages are JS arrays serialized using JSON, after `value` elements are
-transformed to encode references and then encode Value subtypes as JSON
-values.
+transformed to encode references as strings.
 
-    thunk      -->  Thunk N    -->  ["T", N]
-    function   -->  Fn N       -->  ["F", N]
-    error      -->  Error S    -->  ["E", S]
-    array      -->  A          -->  ["A", A]
-    other      -->  X          -->  X
+    thunk     -->  ".T" + REF
+    function  -->  ".F" + REF
+    ".string" -->  "..string"
 
 
 ## Reference Equality
@@ -203,12 +205,12 @@ evaluated/called, a forwarder initiates a slot and constructs an input cell
 to observe it, marking that cell as a dependency of the user/caller of the
 forwarder.
 
-On the host side, when the ROP agent recieves ths slot initiation (`Use` or
-`Call`) it will construct a cell to handle the operation whether or not the
-invoked reference is a cell, because function calls and thunk evaluations
-can introduce dependencies on other cells.
+On the host side, when the ROP agent recieves a `Start` message it will
+construct a cell to handle the operation whether or not the invoked
+reference is a cell, because function calls and thunk evaluations can
+introduce dependencies on other cells.
 
-While `Call` observations can send and receive thunk references, `Use`
+Function call observations can send and receive thunk references.  Thunk
 observations have no arguments, and the result will not be a thunk.  The
 result might be an aggregate value that *contains* a thunk, but any "bare"
 thunk will be reduced to a non-thunk value on the host-side before being
@@ -229,9 +231,9 @@ Consider this example:
 
 Consider the slots involved in calling `subtract` over ROP:
 
-    --> Call 0 SUBTRACT thunkT1 thunkT2
-    <-- Use 1 thunkT1
-    <-- Use 2 thunkT2
+    --> Start 0 SUBTRACT thunkT1 thunkT2
+    <-- Start 1 thunkT1
+    <-- Start 2 thunkT2
     --> Result 1 1001
     --> Result 2 999
     <-- Result 0 2                  d = 2
@@ -246,18 +248,18 @@ After the time changes, the following sequence might happen:
 
 ### Retained References...
 
-Should we consider inbound Call arguments part of the live set, if they
+Should we consider inbound Start arguments part of the live set, if they
 reference local objects?  The reason we would *not* include these is that in
 a pure reactive system, such an inbound call could not exist except within
 the context of some other observation that *sends* the reference.  So this
 should not happen:
 
-    <-- Call 2 F X            # passes X
-    <-- Drop/AckDrop 1        # releases X
+    <-- Start 2 F X            # passes X
+    <-- End/AckEnd 1           # releases X
 
 If we have some stateful operation in the peer domain that is holding on to
 one of our references, it should keep open the slot that provided it with
-that reference, by refraining from sending Drop or AckDrop.
+that reference, by refraining from sending End or AckEnd.
 
 
 ## Typing

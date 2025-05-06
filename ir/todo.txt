@@ -1,17 +1,12 @@
-Current
-=======
+TODO
 
- - rop: use new serialization described in rop.md
- - rop: pass thunks & `use` remotely
  - rop: place updaters as inputs to "GW" cell, not root
- - rop: do not kill server when WS client disconnects
- - rop: protect against malicious peers
- - rop: on shutdown, close observers
+ - rop: gracefully handle client disconnect
  - server: use button in browser(s) to increment a counter
  - grid: repeating background?
  - grid: demo vertical & horizontal scrolling
  - demo: Demo needn't/shoudn't be `posn: abs`
  - demo: provide buttons for un-render / re-render
  - E: element constructors are not memoizable (cannot appear twice in DOM tree)
- - I: drop cell after no users *and* no creator
+ - I: drop cell when there are no creators (vs. no users)
  - Revisit comments with TBO (To-Be-Optimized)

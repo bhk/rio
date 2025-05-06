@@ -50,14 +50,14 @@ const recentKeys = wrap(_ => {
 //----------------------------------------------------------------
 
 const initialFuncs = [
-    () => "Hello, world!",
     recentKeys,
+    () => "Hello, world!",
 ];
 
 const wss = new WebSocketServer({noServer: true});
 // The connection event is sent when WSS is standalone; we emit it ourselves
 // in the `noServer` use case for uniformity.
-wss.on('connection', (ws, req) => new Agent(ws, initialFuncs));
+wss.on('connection', (ws, req) => new Agent(ws, initialFuncs, {}));
 
 const template = [
     "<!DOCTYPE html>",

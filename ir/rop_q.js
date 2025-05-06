@@ -10,26 +10,32 @@ const use = I.use;
 // Utilities
 //----------------------------------------------------------------
 
-// Call fn() and transform errors to make assertions easier.
+// Call fn() and transform pending (and optionally other) errors to ordinary
+// values to make assertions easier.  catchAll => catch non-Pending errors.
 //
-const cleanError = fn => {
+const cleanError = (fn, catchAll) => {
     try {
-        return I.use(fn());
+        return use(fn());
     } catch (e) {
         const pend = I.checkPending(e);
-        return pend
-            ? ["PENDING", pend]
-            : ["ERROR", I.rootCause(e)];
+        if (pend) {
+            return ["PENDING", pend];
+        } else if (catchAll) {
+            return ["ERROR", I.rootCause(e)];
+        }
+        throw e;
     }
 };
 
-// Construct object for evaluation of fn() within a cell update, trapping
-// all errors, flushing events and accumulating results until quiescent.
+// Construct object for evaluation of fn() within a cell update, cleaning
+// error responses, flushing events and accumulating results until quiescent.
 //
 const testCell = fn => {
-    const inner = I.cell(_ => cleanError(fn));
     let results = [];
-    const self = I.cell(_ => void results.push(use(inner)));
+    // use inner cell to intern ["PENDING", ...] values
+    const inner = I.cell(_ => cleanError(fn, self.catchAll));
+    const self = I.cell(_ => results.push(use(inner)));
+    self.catchAll = false;
 
     self.flush = _ => {
         use(self);
@@ -71,51 +77,87 @@ const testCell = fn => {
 // Tests
 //----------------------------------------------------------------
 
-// test Pool
+// test Table
 {
-    const p = new ROP.Pool();
-    eq(p.alloc(), 0);
-    eq(p.alloc(), 1);
-    eq(p.countUsed, 2);
-    p.free(0);
-    p.free(1);
-    eq(p.countUsed, 0);
+    const tbl = new ROP.Table();
 
-    eq(p.alloc(), 1);
-    eq(p.countUsed, 1);
-    p.free(1);
-    eq(p.countUsed, 0);
+    // add elements to grow table
+    eq(0, tbl.alloc("A"));
+    eq(1, tbl.alloc("B"));
+    eq(2, tbl.alloc("C"));
+    eq(["A", "B", "C"], [...tbl]);
+    eq(3, tbl.size);
 
-    // ASSERT: added index is automatically freed when cell is dropped
-    const ndx = testCell(_ => {
-        const ndx = p.add(9);
-        eq(p[ndx], 9);
-        eq(p.countUsed, 1);
-        return ndx;
-    }).stop();
-    eq(ndx, 1);
-    eq(p.countUsed, 0);
+    // remove elements in non-LIFO order
+    tbl.free(1);
+    tbl.free(2);
+    eq(["A", 3, 1], [...tbl]);
+    eq(2, tbl.next);
+    eq(1, tbl.size);
+
+    // add without growing length
+    eq(2, tbl.alloc("D"));
+    eq(["A", 3, "D"], [...tbl]);
+    eq(1, tbl.next);
+    eq(2, tbl.size);
 }
 
-// test encode
+// test ObjTable
 {
-    const pool = new ROP.Pool();
-    const encode = ROP.makeEncoder(f => pool.add(f));
-    const decode = ROP.makeDecoder(n => pool[n]);
-    const values = [1, "abc", x => x, {a:1}];
+    const otbl = new ROP.ObjTable();
+    let oa = {a:1};
 
-    const tc = testCell(_ => {
-        const ev = encode(values);
-        eq(ev, '[1,"abc",{"%F":0},{"a":1}]');
-        eq(pool[0], values[2]);
-        eq(pool.countUsed, 1);
-        return decode(ev);
-    });
-    tc.expect(values);
-    assert(values[2] === tc.get()[2]);
-    eq(pool.countUsed, 1);
-    tc.stop();
-    eq(pool.countUsed, 0);
+    // register new object
+    eq(0, otbl.reg(oa));
+    assert(oa === otbl[0]);
+    eq(1, otbl.counts[0]);
+
+    // register object again => refcount 2
+    eq(0, otbl.reg(oa));
+    eq(2, otbl.counts[0]);
+    eq(1, otbl.counts.size);
+
+    // decrease refcount
+    otbl.dereg(0); // oa
+    assert(oa === otbl[0]);
+    eq(1, otbl.counts.size);
+
+    // decrease refcount to zero
+    otbl.dereg(0); // oa
+    eq(0, otbl.counts.size);
+    assert(undefined === otbl[0]);
+}
+
+// test encoding & decoding
+{
+    // values
+    const f1 = x => x;
+    f1.oid = 1;
+    const fm1 = x => x82;
+    fm1.oid = -1;
+    const t3 = I.lazy(_ => 2);
+    t3.oid = 3;
+
+    eq('{".abc":"..def","x":"y","a":[".F1",".F-1",".T3"]}',
+       ROP.makeEncoder(o => o.oid)({".abc":".def",x:"y",a: [f1,fm1,t3]}));
+
+    eq({".abc":".def",x:"y",a: [["F",1], ["F", -1], ["T", 3]]},
+       ROP.makeDecoder((...a) => a)(
+           '{".abc":"..def","x":"y","a":[".F1",".F-1",".T3"]}'));
+
+    // errors
+    let roundTrip = e =>
+        ROP.decodeError(JSON.parse(JSON.stringify(ROP.encodeError(e))));
+
+    eq("foo", roundTrip("foo"));
+    eq([1,2], roundTrip([1,2]));
+    eq({a:1}, roundTrip({a:1}));
+    const e1 = new Error("msg", {cause: "text"});
+    eq(e1, roundTrip(e1));
+    const e2= new Error("rethrow", {cause: e1});
+    eq(e2, roundTrip(e2));
+
+    eq(I.rootCause(e2), I.rootCause(roundTrip(e2)));
 }
 
 //------------------------------------------------------------------------
@@ -134,104 +176,133 @@ const testCell = fn => {
 const wsClient = new WebSocket();
 const wsServer = new WebSocket();
 
-// Client Agent: constructed with ws in CONNECTING state
-const ca = new ROP.Agent(wsClient);
+const serverX = I.state();
+const serverBoot = {
+    add: (x, y) => use(x) + use(y),
+    X: serverX,
+    readX: () => use(serverX),
+    echo: x => x,
+    apply: (fn, ...args) => fn(...args),
+};
+
+const sa = new ROP.Agent(wsServer, serverBoot, {});
+const ca = new ROP.Agent(wsClient, {}, serverBoot);
 connect(wsServer, wsClient);
 flushEvents();
 
-// Server Agent: constructed with ws in OPEN state
-const serverX = I.state();
-const serverFuncs = {
-    add: (x, y) => x + y,
-    getX: () => serverX,
-    func: (fa, fb) => ["ok", fa, fb, use(fa()) + use(fb())],
-};
-const sa = new ROP.Agent(wsServer, Object.values(serverFuncs));
-const getRemote = (name) =>
-    ca.getRemote(Object.keys(serverFuncs).indexOf(name));
+const SOC = sa.objects.counts.size;
 
-// test: observe simple remote function (simple, non-reactive)
 {
-    const tc = testCell(_ => getRemote("add")(1, 2));
-    tc.expectNew(["PENDING", "opening"], 3);
-    eq(ca.observers.countUsed, 1);
+    // ASSERT: local & remote primordial objects populated
+    eq(5, sa.objects.counts.size);
+    eq(0, ca.objects.counts.size);
+    assert(ca.remotes.add instanceof Function);
+
+    // ASSERT: simple function calls work
+    let tc = testCell(_ => ca.remotes.add(1, 2));
+    tc.expectNew(["PENDING", "ROP observe"], 3);
+    eq(1, ca.observers.size);
     tc.stop();
-    eq(0, ca.observers.countUsed);
-}
+    eq(0, ca.observers.size);
 
-// test: observe remote state cell
-{
+    // ASSERT: remote function dependency changes are propagated
     serverX.set("a");
-    const tc = testCell(_ => use(getRemote("getX")()));
-
-    // ASSERT: observing cell is created on server side
-    tc.expectNew(["PENDING", "opening"], "a");
-    eq(ca.observers.countUsed, 1);
-    eq(sa.updaters[0] == null, false);
-    eq(serverX.outputs.size, 1);
-
-    // ASSERT: update propagates
+    tc = testCell(_ => ca.remotes.readX());
+    tc.catchAll = true;
+    tc.expectNew(["PENDING", "ROP observe"], "a");
+    eq(1, ca.observers.size);
+    eq(1, serverX.outputs.size);
     serverX.set(7);
     tc.expectNew(7);
 
-    // ASSERT: pending state propagates to client side
+    // ASSERT: remote function pending state is observed
     serverX.setError(new I.Pending("stalled"));
     tc.expectNew(["PENDING", "stalled"]);
 
-    // TODO: Agent should propagate observer errors without complaint, since
-    //    it is part of normal operation.  A debugging mode could be set
-    //    to NOT trap errors...  ideally this could be per-cell, and would
-    //    prevent confusing re-throws!
-
-    // Suppress "Error in observer" message...
-    const oldlogger = I.setLogger(_ => null);
     // ASSERT: other errors propagate to client side (message only)
     serverX.setError("broken");
+    sa.silenceErrors = true;
     tc.expectNew(["ERROR", "broken"]);
-    I.setLogger(oldlogger);
+    sa.silenceErrors = false;
+    tc.stop();
+    eq(0, ca.observers.size);
+
+    // ASSERT: simple remote thunk use works
+    assert(I.isThunk(ca.remotes.X));
+    serverX.set("abc");
+    tc = testCell(_ => use(ca.remotes.X));
+    tc.expectNew(["PENDING", "ROP observe"], "abc");
 
     // ASSERT: observation is closed and resources are cleaned up
-    serverX.set("ok");
+    serverX.set("DONE");
     tc.stop();
-    eq(serverX.outputs.size, 0);
-    eq(ca.observers.countUsed, 0);
-    eq(sa.updaters[0], null);
+    eq(0, serverX.outputs.size);
+    eq(0, ca.observers.size);
+    eq(null, sa.updaters[0]);
+    eq(SOC, sa.objects.counts.size);
+
+    // ASSERT: New client should see no "leftover" state in slot
+    serverX.set("NEW");
+    tc = testCell(_ => ca.remotes.readX());
+    tc.expectNew(["PENDING", "ROP observe"], "NEW");
+    tc.stop();
 }
 
-// test: marshaling functions
+// test: marshaling functions and thunks
 {
     serverX.set("123");
     const localVar = I.state("abc");
     const localGet = _ => use(localVar);
+    const R = ca.remotes;
 
-    const tc = testCell(_ => {
-        const remoteGetX = getRemote("getX");
-        const remoteFunc = getRemote("func");
-        const result = use(remoteFunc(localGet, remoteGetX));
+    // ASSERT: functions/thunks local/remote survive transit:
+    //  * local objects retain their identity
+    //  * remote refs retain their identity (not strictly demanded by
+    //    the protocol, but provided by rop.js)
 
-        // ASSERT: localGet is unwrapped on return
-        const [ok, localGetOut, remoteGetXOut, catOut] = result;
-        eq(ok, "ok");
-        assert(localGetOut === localGet);
+    let tc = testCell(_ =>
+        R.echo([localVar, localGet, R.X, R.readX]));
+    let out = tc.getNew();
+    eq(2, out.length);
+    eq(["PENDING", "ROP observe"], out[0]);
+    let [o1, o2, o3, o4] = out[1];
+    assert(o1 === localVar)
+    assert(o2 === localGet);
+    assert(o3 === R.X);
+    assert(o4 === R.readX);
+    tc.stop();
 
-        // ASSERT: remote function is equivalent after round trip
-        eq("123", use(remoteGetXOut()));
-
-        return catOut;
+    // ASSERT: function can directly return a thunk
+    tc = testCell(_ => {
+        let x = R.echo(R.X);
+        assert(I.isThunk(x));
+        assert(x === R.X);
+        return x;
     });
+    // cell results are use'd, so we don't see the thunk outside testCell
+    tc.expect("123");
+    tc.stop();
 
-    // ASSERT: succeeds after repeated pending evaluations
-    tc.expectNew(["PENDING", "opening"], "abc123");
+    // ASSERT: arg recipients can use thunks (local and remote)
+    tc = testCell(_ =>
+        R.add(localVar, R.X));
+    tc.expectNew(["PENDING", "ROP observe"],
+                 "abc123");
+    tc.stop();
 
-    eq(1, ca.caps.countUsed);
-    eq(4, sa.caps.countUsed);  // 3 initial + 1 now
+    // ASSERT: arg recipients can call functions (local and remote)
+    serverX.set(2);
+    let add1 = x => use(x) + 1;
+    tc = testCell(_ =>
+        R.apply(add1, R.X));
+    tc.expect(3);
 
     // ASSERT: no intervening pending result on state change
-    localVar.set("ABC");
-    tc.expectNew("ABC123");
+    serverX.set(4);
+    tc.expectNew(5);
 
     // ASSERT: observation is closed and resources are freed
     tc.stop();
-    eq(0, ca.caps.countUsed);
-    eq(3, sa.caps.countUsed);  // 3 initial + 1 now
+    eq(0, ca.objects.counts.size);
+    eq(SOC, sa.objects.counts.size);
 }
