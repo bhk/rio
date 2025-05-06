@@ -263,7 +263,8 @@ class FunCell extends Cell {
         this.cleanups = null;
     }
 
-    // Called when this cell uses another -- during this.update()
+    // Register a dependency of ours -- called during this.update()
+    //
     addUsed(input, value) {
         if (this.inputs == null) {
             this.inputs = new Map();
@@ -271,7 +272,8 @@ class FunCell extends Cell {
         this.inputs.set(input, value);
     }
 
-    // Call all registered `onDrop` functions.
+    // Call all registered `onDrop` functions.  This is called when the
+    // current result is being discarded.
     //
     cleanup() {
         if (this.cleanups) {
@@ -301,14 +303,20 @@ class FunCell extends Cell {
 
         // detach from inputs
         if (this.inputs != null) {
-            for (const [input, result] of this.inputs) {
+            for (const [input, _] of this.inputs) {
                 input.unuse(this);
             }
             this.inputs = null;
         }
+
+        // All using cells are gone, but `this` may be held by a creating
+        // (but not using) cell or it may be cached in `cellRoot`.  Mark as
+        // not evaluated so any future `use` will revive it.
+        this.result = null;
     }
 
-    // reset isDirty if valid
+    // See if result is up-to-date with inputs.
+    //
     validate() {
         if (this.result == null) {
             // never computed (inputs don't matter)
@@ -332,7 +340,8 @@ class FunCell extends Cell {
         return true;
     }
 
-    // Update: Recalculate if necessary.
+    // Recalculate if necessary.
+    //
     update() {
         if (this.validate()) {
             return this.result;
@@ -340,11 +349,10 @@ class FunCell extends Cell {
 
         // Recalculate...
 
-        this.isDirty = false;
         this.cleanup();
         const oldInputs = this.inputs;
         this.inputs = null;
-
+        this.isDirty = false;
         const usingCell = currentCell;
         let result;
         currentCell = this;
@@ -357,8 +365,7 @@ class FunCell extends Cell {
         this.result = intern(result);
 
         if (oldInputs != null) {
-            // A cell cannot transition from some inputs to *none*
-            // unless there is an untracked dependency.
+            // Sanity check: no transition from some inputs to *none*
             assert(this.inputs);
             for (const [input, value] of oldInputs) {
                 if (!this.inputs.has(input)) {
@@ -367,12 +374,13 @@ class FunCell extends Cell {
             }
         }
 
-        // invalidations should not happen during update
+        // Sanity check: no invalidations during update or input.unuse
         assert(this.isDirty == false);
         return this.result;
     }
 
     // Remove cell from all its outputs; this triggers drop() indirectly.
+    //
     deactivate() {
         for (const o of this.outputs) {
             o.inputs.delete(this);

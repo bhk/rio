@@ -93,11 +93,13 @@ import {
     let c1 = cell(_ => (log(1), use(sx) + 10));
     let c2 = cell(_ => (log(2), use(sx) + (6 & use(sy))));
     let c3 = cell(_ => (log(3), use(c1) + use(c2)));
-    let c4x = a => (log(4), onDrop(_ => log("drop(D)")), a + a);
+    let c4x = a => (log(4), onDrop(_ => log(-4)), a + a);
     let base = cell(_ => {
         log(5);
         const v = use(c3);
-        eq("AA", use(cell(ebake(c4x, "A"))));
+        if (v < 20) {
+            eq("AA", use(cell(ebake(c4x, "A"))));
+        }
         return v;
     });
 
@@ -128,13 +130,17 @@ import {
 
     // ASSERT: c1 eval'ed before c3 (both invalid)
     // ASSERT: c3 recalced only once (though 2 inputs changed)
-    sx.set(3);
-    eq(update(), [1, 3, 2, 5, "out=20"]);
-
     // ASSERT: onDrop() callbacks fire when cell is no longer live
+    sx.set(3);
+    eq(update(), [1, 3, 2, 5, -4, "out=20"]);
+
+    // ASSERT: memoized cell comes back to life
+    sx.set(1);
+    eq(update(), [1, 3, 2, 5, 4, "out=16"]);
+
     events = [];
     base.deactivate();
-    eq(events, ["drop(D)"]);
+    eq(events, [-4]);
 }
 
 // stream
