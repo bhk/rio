@@ -72,7 +72,6 @@ const testCell = fn => {
     return self;
 };
 
-
 //----------------------------------------------------------------
 // Tests
 //----------------------------------------------------------------
@@ -130,7 +129,6 @@ const testCell = fn => {
 
 // test encoding & decoding
 {
-    // values
     const f1 = x => x;
     f1.oid = 1;
     const fm1 = x => x82;
@@ -138,26 +136,42 @@ const testCell = fn => {
     const t3 = I.lazy(_ => 2);
     t3.oid = 3;
 
-    eq('{".abc":"..def","x":"y","a":[".F1",".F-1",".T3"]}',
-       ROP.makeEncoder(o => o.oid)({".abc":".def",x:"y",a: [f1,fm1,t3]}));
+    const ser = ROP.makeSerialize( o => o.oid );
+    const deser = ROP.makeDeserialize( (...a) => a );
 
-    eq({".abc":".def",x:"y",a: [["F",1], ["F", -1], ["T", 3]]},
-       ROP.makeDecoder((...a) => a)(
-           '{".abc":"..def","x":"y","a":[".F1",".F-1",".T3"]}'));
+    // data values, functions, and thunks
+    eq('[null,true,1,{".a":"..B","a":"B"},".F1",".F-1",".T3"]',
+       ser([null, true, 1, {".a":".B", a:"B"}, f1, fm1, t3]));
 
-    // errors
-    let roundTrip = e =>
-        ROP.decodeError(JSON.parse(JSON.stringify(ROP.encodeError(e))));
+    eq([null, true, 1, {".a":".B", a:"B"}, ["F",1], ["F", -1], ["T", 3]],
+       deser('[null,true,1,{".a":"..B","a":"B"},".F1",".F-1",".T3"]'));
 
-    eq("foo", roundTrip("foo"));
-    eq([1,2], roundTrip([1,2]));
-    eq({a:1}, roundTrip({a:1}));
-    const e1 = new Error("msg", {cause: "text"});
-    eq(e1, roundTrip(e1));
-    const e2= new Error("rethrow", {cause: e1});
-    eq(e2, roundTrip(e2));
+    // error object
+    const e1 = new Error("A", {cause: f1});
+    e1.stack = 'S1';
+    const eJ = '".E{\\"message\\":\\"A\\",\\"stack\\":\\"S1\\",' +
+          '\\"cause\\":\\".F1\\"}"';
 
-    eq(I.rootCause(e2), I.rootCause(roundTrip(e2)));
+    eq(eJ, ser(e1));
+    const e1Out = deser(eJ);
+    assert(e1Out instanceof Error);
+    eq("A", e1Out.message);
+
+    // error nesting
+    const e2 = new Error("B", {cause: e1});
+    const e2out = deser(ser(e2));
+    eq(e2out.cause, e1Out);
+
+    // opaque object
+    const bb = new Boolean(true);
+    bb.oid = 7;
+    eq('".O7"', ser(bb));
+    eq(["O",7], deser('".O7"'));
+
+    // unknown serialization
+    eq(new ROP.UnValue(".?xyz"), deser('".?xyz"'));
+    // return to sender marked with "@"
+    eq('".?@xyz"', ser(deser('".?xyz"')));
 }
 
 //------------------------------------------------------------------------

@@ -36,9 +36,8 @@ observation, **ends** the slot and the server acknowledges it.
 
 Messages convey two types of values: **literals** and **references**.
 Literal values are serialized and sent across the link in their entirety.
-References are named by IDs assigned by the agent in their hosting domain.
-Functions and thunks are always passed by reference; other values are
-literal.
+Referenced values are named by **oids**, non-negative integers assigned by
+the hosting agent.  Functions and thunks are always passed by reference.
 
 Results can be in one of three conditions: Success, Pending, and Error.
 
@@ -65,7 +64,7 @@ However, within a given slot, messages are strictly associated with either
 the client (C) or host (H) side.
 
     Messages = one of:
-       Start     slot ref value...   // C: call function/use thunk
+       Start     slot oid value...   // C: call function/use thunk
        Result    slot cond value     // H: deliver result value
        AckResult slot                // C: acknowledge Result
        End       slot                // C: stop observing & release value
@@ -74,8 +73,9 @@ the client (C) or host (H) side.
 
     Value = one of:
        Data value          // JSON value
-       Fn ref              // reference to function
-       Thunk ref           // reference to reactive value
+       Fn soid             // reference to function
+       Thunk soid          // reference to reactive value
+       Opaque soid         // reference to unspecified value
 
     Cond = one of:
        Success             // ordinary result
@@ -87,12 +87,12 @@ the client (C) or host (H) side.
        Slots are identified by unique integers allocated by the client agent
        and identified in the initiating Start message.
 
-    Ref = integer
+    OID = non-negative integer
 
-       Reference values use the sign of the integer to indicate the domain
-       hosting the referenced value.  A non-negative value X represents
-       index X into the recipient's reference table.  A negative value -Y
-       represents index Y-1 in the sender's reference table.
+    SOID = integer
+
+       A non-negative value X represents oid X in the recipient domain.  A
+       negative value -Y represents oid Y-1 in the sender's reference table.
 
 
 ### Observations
@@ -104,7 +104,7 @@ An observation is initiated with `Start` and terminated with `End` and the
 peer's `AckEnd`.  In between, one or more `Result` messages may come in
 response.
 
-    --> Start slot ref values
+    --> Start slot oid values
 
     <-- Result slot value    # these may occur one
     --> AckResult slot       #   or more times
@@ -160,11 +160,20 @@ Provisions for feature detection may be provided in the future.
 ### Serialization
 
 Messages are JS arrays serialized using JSON, after `value` elements are
-transformed to encode references as strings.
+transformed to encode non-JSON values as strings that begin with `.` and a
+character that designates the type of the value.  Actual strings that begin
+with `.` are encoded with an extra `.`.
 
-    thunk     -->  ".T" + REF
-    function  -->  ".F" + REF
+    thunk     -->  ".T" + SOID
+    function  -->  ".F" + SOID
+    opaque    -->  ".O" + SOID
     ".string" -->  "..string"
+
+Other type characters might be used to represent language-specific types in
+the future.  Agents should deserialize strings with unknown type characters
+to some value distinguishable from understood serialization results, so that
+transactions can continue to succeed when clients ignore the value, and so
+that clients can detect lack of support.
 
 
 ## Reference Equality

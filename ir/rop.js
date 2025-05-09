@@ -34,15 +34,18 @@
 //  - updater cells send Result messages as side effects
 //  - observer cells send Call messages as side effects
 
-
 import {
     use, cell, lazy, wrap, memo, onDrop, isThunk,
     Pending, rootCause, state, resultText,
 } from "./i.js";
 
-// Protect against pollution of global namespace.  This module should work
-// in Node (without MockDom.js) where WebSocket is not a global.
+// Avoid the browser-only WebSocket global.  This module should work in Node
+// (without MockDom.js) where WebSocket is not a global.
 const WebSocket = null;
+const wsCONNECTING = 0;
+const wsOPEN = 1;
+const wsCLOSING = 2;
+const wsCLOSED = 3;
 
 const assert = (cond, desc) => {
     if (!cond) {
@@ -56,7 +59,7 @@ const assert = (cond, desc) => {
 //--------------------------------
 
 // Table: A Table is an array that keeps track of used/unused status of
-// elements, efficiently allocating new indices and then releasing them.
+// elements, efficiently allocating and releasing indices.
 
 class Table extends Array {
     constructor() {
@@ -80,9 +83,8 @@ class Table extends Array {
     }
 }
 
-// An ObjTable contains a set of values, assigning them each a small
-// non-negative integer "index".  Each member has a reference count; after
-// it reaches zero the index can be reused.
+// An ObjTable contains a set of values, assigning them each a non-negative
+// integer index, and maintaining a reference count for each.
 
 class ObjTable extends Array {
     constructor() {
@@ -91,6 +93,7 @@ class ObjTable extends Array {
         this.index = new Map();        // object -> index
     }
 
+    // Add object to table or increment its reference count.  Return index.
     reg(obj) {
         assert(obj !== undefined);
         if (this.index.has(obj)) {
@@ -105,6 +108,7 @@ class ObjTable extends Array {
         }
     }
 
+    // Decrease reference count of object at NDX.  Remove if zero.
     dereg(ndx) {
         assert(this[ndx] !== undefined);
         if (--this.counts[ndx] == 0) {
@@ -115,93 +119,75 @@ class ObjTable extends Array {
     }
 }
 
-//--------------------------------
-// Pool
-//--------------------------------
+//----------------------------------------------------------------
+// Serialization:  see rop.md for details; additionally we encode
+//    JavaScript errors using ".E<json>"
+//----------------------------------------------------------------
 
-class Pool extends Array {
-    constructor() {
-        super();
-        this.nextEmpty = null;
-        this.countUsed = 0;
-    }
-
-    alloc() {
-        ++this.countUsed;
-        let ndx = this.length;
-        if (this.nextEmpty != null) {
-            ndx = this.nextEmpty;
-            this.nextEmpty = this[ndx];
-        }
-        this[ndx] = null;
-        return ndx;
-    }
-
-    free(ndx) {
-        --this.countUsed;
-        this[ndx] = this.nextEmpty;
-        this.nextEmpty = ndx;
-    }
-
-    add(value) {
-        const ndx = this.alloc();
-        onDrop(() => {
-            this.free(ndx);
-        });
-        this[ndx] = value;
-        return ndx;
+// Result of deserializing an unsupported serialization
+class UnValue {
+    constructor (string) {
+        this.string = string;
     }
 }
 
-// Avoid WebSocket global (browser-only)
-const wsCONNECTING = 0;
-const wsOPEN = 1;
-const wsCLOSING = 2;
-const wsCLOSED = 3;
-
-//----------------------------------------------------------------
-// Value encoding
-//----------------------------------------------------------------
+// Convert a JavaScript Error object to a JSON-serializable object
 //
-//    function   -->  ".FN"
-//    thunk      -->  ".TN"
-//    ".STR"     -->  "..STR"
+const packError = e => ({
+    message: e.message,
+    stack: e.stack,
+    cause: e.cause
+});
 
-const makeEncoder = toOID => {
-    const P = ".";
-    const replacer = (k, v) =>
-          typeof v == "string" ? (v[0] == P  ? P + v : v) :
-          typeof v == "function" ? P + "F" + toOID(v) :
-          isThunk(v) ? P + "T" + toOID(v) :
-          v;
-    return value => JSON.stringify(value, replacer);
-}
-
-const makeDecoder = fromOID => {
-    const P = ".";
-    const restorer = (k, v) =>
-          typeof v == "string" && v[0] == P
-          ? ( v[1] == P ? v.slice(1) :
-              fromOID(v[1], +v.slice(2)) )
-          : v;
-    return str => JSON.parse(str, restorer);
+// Reconstitute a JavaScript Error object from a serializable object
+//
+const unpackError = obj => {
+    const e = new Error(obj.message, obj);
+    e.stack = obj.stack;
+    return e;
 };
 
-const encodeError = e =>
-      e instanceof Error
-      ? { message: e.message,
-          stack: e.stack,
-          cause: encodeError(e.cause) }
-      : e;
+const objectProto = Object.getPrototypeOf({});
+const P = ".";
 
-const decodeError = obj => {
-    if (obj instanceof Object && "message" in obj) {
-        const cause = decodeError(obj.cause);
-        const e = new Error(obj.message, {cause});
-        e.stack = obj.stack;
-        return e;
-    }
-    return obj;
+// Construct encode function: value => string
+//
+const makeSerialize = toSOID => {
+    const isOtherJSON = v =>
+          v == null ||
+          typeof v == "number" ||
+          typeof v == "boolean" ||
+          Array.isArray(v) ||
+          (v instanceof Object && Object.getPrototypeOf(v) === objectProto);
+
+    const replacer = (k, v) =>
+          (typeof v == "string") ? (v[0] == P ? P + v : v) :
+          isOtherJSON(v)         ? v :
+          typeof v == "function" ? P + "F" + toSOID(v) :
+          isThunk(v)             ? P + "T" + toSOID(v) :
+          v instanceof Error     ? P + "E" + encode(packError(v)) :
+          v instanceof UnValue   ? P + v.string[1] + "@" + v.string.slice(2) :
+          P + "O" + toSOID(v);
+
+    const encode = value => JSON.stringify(value, replacer);
+    return encode;
+};
+
+// Construct decode function: string -> value
+//
+const makeDeserialize = fromSOID => {
+    const isRef = ch =>
+          ch == "T" || ch == "F" || ch == "O";
+
+    const restorer = (k, v) =>
+          ( !(typeof v == "string" && v[0] == P) ? v :
+            v[1] == P ? v.slice(1) :
+            isRef(v[1]) ? fromSOID(v[1], +v.slice(2)) :
+            v[1] == "E" ? unpackError(decode(v.slice(2))) :
+            new UnValue(v) );
+
+    const decode = str => JSON.parse(str, restorer);
+    return decode;
 };
 
 //----------------------------------------------------------------
@@ -252,8 +238,8 @@ class Agent {
         this.log = null;
         this.silenceErrors = false;
 
-        this.encode = makeEncoder(this.toOID.bind(this));
-        this.decode = makeDecoder(this.fromOID.bind(this));
+        this.serialize = makeSerialize(this.toSOID.bind(this));
+        this.deserialize = makeDeserialize(this.fromSOID.bind(this));
 
         this.sendQueue = [];
         this.attach(ws);
@@ -291,7 +277,7 @@ class Agent {
         // onmessage: MessageEvent -> void
         ws.onmessage = (evt) => {
             this.log && this.log(`recv ${evt.data}`);
-            const msg = this.decode(evt.data);
+            const msg = this.deserialize(evt.data);
             if (!(msg instanceof Array)) {
                 return this.shutdown("malformed");
             }
@@ -313,36 +299,27 @@ class Agent {
     }
 
     onStart(slot, oid, ...args) {
-        const obj = this.objects[oid];
-        let fn;
-        if (obj instanceof Function) {
-            fn = obj;
-        } else {
-            fn = use;
-            args = [obj];
-        }
-
-        assert(this.updaters[slot] == null);
+        let obj = this.objects[oid];
         const updater = cell(_ => {
-            let result;
+            let cond = condSUCCESS;
+            let value;
             try {
-                result = [condSUCCESS, fn(...args)];
+                value = typeof(obj) == "function" ? obj(...args) : use(obj);
             } catch (e) {
                 const cause = rootCause(e);
                 if (cause instanceof Pending) {
-                    result = [condPENDING, cause.value];
+                    [cond, value] = [condPENDING, cause.value];
                 } else {
                     if (!this.silenceErrors) {
-                        console.log("** Error in observer:");
-                        console.log(e);
+                        console.log("** Error in up-proxy:", e);
                     }
-                    result = [condERROR, encodeError(e)];
+                    [cond, value] = [condERROR, e];
                 }
             }
-            this.send(msgRESULT, slot, ...result);
+            this.send(msgRESULT, slot, cond, value);
         });
-        updater.name = "inbound";
         use(updater);
+        assert(this.updaters[slot] == null);
         this.updaters[slot] = updater;
     }
 
@@ -375,7 +352,7 @@ class Agent {
     }
 
     send(type, slot, ...args) {
-        const msg = this.encode([type, slot, ...args]);
+        const msg = this.serialize([type, slot, ...args]);
         if (this.ws.readyState == wsOPEN) {
             this.log && this.log(`send ${msg}`);
             this.ws.send(msg);
@@ -387,23 +364,23 @@ class Agent {
         }
     }
 
-    // Used for messages to be sent, so local => negative (sender).
-    toOID(fn) {
+    // Used for messages to be sent, so local => sender (negative).
+    toSOID(obj) {
         // Unwrap if it's one of *our* proxies to a remote OID
-        const oid = this.proxyOIDs.get(fn);
+        const oid = this.proxyOIDs.get(obj);
         if (oid != null) {
             return oid;
         }
-        const ndx = this.objects.reg(fn);
+        const ndx = this.objects.reg(obj);
         onDrop(_ => this.objects.dereg(ndx));
         return -1 - ndx;
     }
 
-    // Used for received messages, so negative (sender) => remote.
-    fromOID(type, oid) {
-        return oid < 0
-            ? this.getProxy(-1 - oid, type)
-            : assert(this.objects[oid]);
+    // Used for received messages, so sender (negative) => remote.
+    fromSOID(type, ref) {
+        return ref >= 0
+            ? assert(this.objects[ref])
+            : this.getProxy(-1 - ref, type);
     }
 
     // Get/retrieve a down proxy for remote function named by OID
@@ -416,7 +393,7 @@ class Agent {
             }
             throw cond == condPENDING ? new Pending(value) :
                 cond != condERROR ? new Error("ROP: bad cond") :
-                new Error("ROP: remote error", {cause: decodeError(value)});
+                new Error("ROP: remote error", {cause: value});
         };
         const fwdr = (type == "F" ? get : lazy(get));
         this.proxyOIDs.set(fwdr, oid);
@@ -439,12 +416,10 @@ class Agent {
 
 export {
     Agent,
-    Pool,
+    UnValue,
+    // for testing
     Table,
     ObjTable,
-    // for testing
-    makeEncoder,
-    makeDecoder,
-    encodeError,
-    decodeError,
+    makeSerialize,
+    makeDeserialize,
 }
