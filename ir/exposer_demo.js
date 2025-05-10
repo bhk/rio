@@ -1,8 +1,8 @@
-import E from "./e.js";
+import { Div, assign } from "./e.js";
 import {handleDrag, listen} from "./drag.js";
 import Exposer from "./exposer.js";
 
-let Top = E.newClass({
+let Top = Div.newClass({
     backgroundColor: "#eee",
     font: "16px Arial",
     height: 1500,
@@ -16,7 +16,8 @@ let Top = E.newClass({
     contain: "content",
 });
 
-let Box = E.newClass({    fontSize: 8,
+let Box = Div.newClass({
+    fontSize: 8,
     touchAction: "manipulate",
     position: "absolute",
     boxSizing: "border",
@@ -32,7 +33,7 @@ let Box = E.newClass({    fontSize: 8,
     "&.error": { backgroundColor: "#f00f" },    /* invalid state */
 });
 
-let StatsTable = E.newClass({
+let StatsTable = Div.newClass({
     /* font: "12px Arial", */
     borderCollapse: "collapse",
     position: "absolute",
@@ -40,13 +41,13 @@ let StatsTable = E.newClass({
     left: 25,
 });
 
-let StatsTH = E.newClass({
-    $tag: "th",
+let StatsTH = Div.newClass({
+    $tagName: "th",
     border: "2px solid #ccc",
 });
 
-let StatsTD = E.newClass({
-    $tag: "td",
+let StatsTD = Div.newClass({
+    $tagName: "td",
     whiteSpace: "nowrap",
     overflow: "hidden",
     width: "4em",
@@ -67,8 +68,8 @@ let pageFromClient = (r) => {
 //----------------------------------------------------------------
 
 let boxes = [
-    Box({left: 100, top: 150, width: 50, height: 50}, E(null, "Drag me")),
-    Box({left: 200, top: 150, width: 200, height: 300}, E(null, "Drag me")),
+    Box({left: 100, top: 150, width: 50, height: 50}, Div(null, "Drag me")),
+    Box({left: 200, top: 150, width: 200, height: 300}, Div(null, "Drag me")),
 ];
 
 let statsShown = false;
@@ -93,7 +94,7 @@ let showStats = () => {
             };
             update();
 
-            let row = E({$tag: "tr"}, [
+            let row = Div({$tagName: "tr"}, [
                 StatsTH(null, desc + "." + key),
                 td,
             ]);
@@ -114,21 +115,24 @@ let showStats = () => {
 
 // This rectangle limits the region to be exposed
 
-let limit = E({
+let limit = Div({
     width: 1400,
     height: 1400,
     border: "2px solid #8cc",
 });
 
-E({$element: document.body},
-  Top(null,
-      E({$tag: "p"}, E({
-          $tag: "input",
-          $attrs: {type: "button", value: "Stats"},
-          $events: {click: showStats},
-      })),
-      limit,
-      boxes))
+assign(
+    document.body,
+    null,
+    Top(null,
+        Div({$tagName: "p"}, Div({
+            $tagName: "input",
+            $type: "button",
+            $value: "Stats",
+            $onclick: showStats,
+        })),
+        limit,
+        boxes));
 
 let limitRect = pageFromClient(limit.getBoundingClientRect());
 

@@ -1,10 +1,12 @@
-import E from "./e.js";
+import { Div, assign } from "./e.js";
 
-let E1 = E.newClass({border: "1px solid #666", margin: 5});
-let E2 = E1.newClass({background: "#eee"});
-let E3 = E2.newClass({$tag: "i"})
+const E1 = Div.newClass({border: "1px solid #666", margin: "10px 0"});
+const Italic = E1.newClass({$tagName: "i"});
+const Gray = E1.newClass({background: "#eee"});
 
-E({$element: document.body},
-  E1(null, "E2 { border: ...}"),
-  E2(null, "E1 { background: #eee }"),
-  E3(null, "This", " is", " an <I> element"));
+assign(
+    document.body,
+    { margin: 20 },
+    E1(null, "E1 = { border: ...}"),
+    Italic(null, "This", " is", " an <I> element"),
+    Gray(null, "Gray = E1 + { background: #eee }"));

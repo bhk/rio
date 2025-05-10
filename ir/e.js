@@ -1,114 +1,123 @@
 // E: DOM Element Factory
 //
-// Overview
+// ## Overview
 //
-//   E : (EProps, ...Content) -> DOMElement
-//   E.newClass : EProps -> E
+// Div : an element factory, which can be used to construct DOM elements or
+//    derived element factories.  Element factories are functions and
+//    objects.  The interface is described below, wherein "E" is an element
+//    factory:
+//
+//    E(EProps, ...Content) : Create an element with specified properties
+//        and content.  Note: Element factories (like E) are functions *and*
+//        objects.
+//
+//    E.newClass(PROPS) : Create a factory (compatible with E) that creates
+//        elements that inherit definitions from PROPS.  PROPS will override
+//        any definitions already associated with the element factory.
+//
+// assign(DOMElement, EProps, ...Content)
+//
+//    Assign attributes, properties, and content to an existing element.  If
+//    one or more content arguments are given, then all children in the
+//    element will be *replaced*; otherwise existing children will be left
+//    intact.  This call is purely for side effects, and is for use by
+//    imperative root-cell code.
+//
+// ## Details
 //
 // Content is one of the following:
 //
 //    - `null`, `undefined`, or "" (these are ignored)
 //    - DOM Node
-//    - string
 //    - Array of Content
+//    - string
+//    - other (converted to string)
 //
 // EProps
 //
 //    EProps objects describe element properties and attributes.  Each entry
 //    is one of the following:
 //
-//     - A CSS declaration        color: "black"
-//     - A sub-rule               "&:hover": { color: "blue" }
-//     - A non-CSS definition     $tag: "br"
+//     - Attribute definition       $value: "OK"
+//     - CSS property declaration   color: "black"
+//     - CSS sub-rule               "&:hover": { color: "blue" }
 //
-//    Any key that does not begin with `$` and does not contain `&` is
-//    treated as a CSS property name written in camel-case form.  These will
-//    be normalized to a potentially browser-specific prefixed form (see
-//    `cssName`).  The corresponding value can be a string or a number
+//    Keys beginning with `$` define element attributes or one of a small
+//    number pseudo-attributes (described below).  Characters following the
+//    `$` provide the attribute name.  Attribute values will be converted to
+//    strings, except for event handlers (described below) and false, null,
+//    or undefined, which specify that the attribute will be absent from the
+//    element.
+//
+//    If the key does not begin with `$` and does not contain `&`, the entry
+//    is a CSS property declaration.  CSS property names are written in
+//    camel-case form; the library translates them to potentially
+//    browser-specific prefixed forms as necessary (see the `cssName`
+//    implementation).  CSS property values can be strings or numbers
 //    (denoting a size in pixels); other values are treated as an empty
 //    string.  Any occurrences of "#{NAME}" will be replaced with
 //    cssName(NAME).
 //
-//    The key of a sub-rule is a CSS selector in which "&" represents the
-//    current element.  Its value is an object that may contain CSS
-//    declarations or nested sub-rules to be applied when the selector
-//    matches the current element.  For example, this will set the element's
-//    color to red when it follows an <h2> element:
+//    Keys containing `&` describe the *selector* of a CSS sub-rule in which
+//    `&` represents the current element.  The entry's value is an object
+//    containing CSS declarations that will apply to elements that are
+//    matched by the selector.  The object may also contain nested
+//    sub-rules. For example, this will set the element's color to red when
+//    it follows an <h2> element: `"h2 + &": { color: "red" }`.
 //
-//        { "h2 + &": { color: "red" } }
+//    Pseudo-attribute keys:
 //
-//    Non-CSS definitions include the following (key -> value):
+//      `$tagName`: element type to be used to create the element
 //
-//      `$tag` -> an element type (tag) name
+//      `$namespaceURI`: an XML namespace used to create the element;
+//         `null` for the default (HTML).
 //
-//      `$ns` -> an XML namespace, or `null` for the default (HTML).
+//    The following attribute keys are handled specially:
 //
-//      `$name` -> a string to be incorporated into the factory-assigned
-//          class name (for debugging purposes).
+//      `$class`: a suggested class name.  The actual class attribute will
+//         incorporate a class name used for styling (based on this value,
+//         perhaps with additional text to guarantee uniqueness), names from
+//         inherited classes, and names listed in `classList`.
 //
-//      `$attrs` -> an object that maps element attribute names to strings.
-//          [Note: the `class` attribute is handled specially: names in the
-//          user-provided value will be *included* in the element's class,
-//          but will not override the factory-assigned name.]
+//      `$classList`: a list of names to be included verbatim in the actual
+//         class attribute.  Any dynamic class names should be specified
+//         here, not in `$class`.
 //
-//      `$events` -> an object that maps event names to handlers.
+//      `$on...`: Keys named `$on<EVENT>` define event handlers that will be
+//         installed using setListener(), not setAttribute().  The
+//         corresponding value must be a function.
 //
 // Reactivity
 //
-//    Content, CSS property values, and element attribute values may be
-//    provided as thunks, in which case the caller will be isolated from
-//    their changes.  These values are evaluated in a separate cell without
-//    affecting the value returned from E() or E.newClass().
+//    Content, CSS property values, and attribute values may be provided as
+//    thunks, in which case the caller will be isolated from their changes.
+//    These values are evaluated in a separate cell without affecting the
+//    value returned from E() or E.newClass().
 //
 //    Any change to one or more content values will result in re-parenting
 //    of all child DOM nodes. [TBO]
 //
-// E(PROPS, ...CONTENT)
+// Implementation Notes
 //
-//    Create an element with specified properties and content.  Note:
-//    Element factories (like E) are functions *and* objects.
-//
-//    If PROPS contains a property named `$element`, then no element will be
-//    created and instead the property value provides a DOM element to which
-//    the rest of PROPS will be applied.  If one or more CONTENT arguments
-//    are given, then all children in the element will be *replaced*;
-//    otherwise existing children will be laft intact.  This call is purely
-//    for side effects, and is for use by imperative root-cell code.
-//
-// E.newClass(PROPS)
-//
-//    Create a factory (compatible with E) that creates elements that
-//    inherit definitions from PROPS.  PROPS will override any definitions
-//    already associated with the element factory.  In the case of
-//    object-valued entries (e.g. $attrs), the object will not override; the
-//    definitions within the object will individually override.
-//
-//    A CSS class will is dynamically created to convey CSS properties in
-//    PROPS by adding declarations to `document.styleSheets`.  For example,
-//    E.newClass(A).newClass(B)(E) creates an element that inherits CSS
-//    properties from A and B based on its class attribute. Properties from
-//    E are applied to the element directly via its style object.
-//
-//    Non-CSS parts of EProps (attributes, tag name, ...) are always applied
-//    to the element directly.
+//    CSS classes are dynamically created to convey CSS properties for
+//    element factories and added to `document.styleSheets`.  For example,
+//    E.newClass(A).newClass(B)(C) creates an element that inherits CSS
+//    properties from A and B based its class attribute. Properties from C
+//    are applied to the element directly via its style object.
 //
 
-import {use, cell, isThunk, onDrop, lazyApply} from "./i.js";
+import { use, cell, isThunk, onDrop, lazyApply } from "./i.js";
 import test from "./test.js";
 
 const D = document;
-const newElement = (tagName, ns) =>
-      ns ? D.createElementNS(ns, tagName) : D.createElement(tagName);
+const newElement = (tag, ns) =>
+      ns ? D.createElementNS(ns, tag) : D.createElement(tag);
 
 //------------------------------------------------------------------------
 // Normalize CSS property names
 //------------------------------------------------------------------------
 
-let throwError = (arg) => {
-    throw Error(arg);
-};
-
-// Memoize a function that accepts a single string argument
+// Memoize a function that accepts a single argument
 //
 let memoize = (fn) => {
     const cache = new Map();
@@ -159,7 +168,7 @@ let cssName = (name) =>
 cssName = memoize(cssName);
 
 // Convert JavaScript values to strings suitable for CSS.  Converts numbers
-// to dimensionts in "px" units.  Within strings, replace "#{NAME}" with
+// to dimensions in "px" units.  Within strings, replace "#{NAME}" with
 // cssName("NAME").
 //
 const cssValue = (value) =>
@@ -248,10 +257,11 @@ const setStyleProperties = (style, decls) => {
     }
 };
 
-// Replace "&" wildcard in pattern with `context`
+// Replace "&" wildcard in selector with `context` (which matches the
+// current element/class).  A null selector => match this element/class.
 //
-const expandSelector = (pattern, context) =>
-      pattern ? pattern.replace(/\&/g, context) : context;
+const expandSelector = (selector, context) =>
+      selector ? selector.replace(/\&/g, context) : context;
 
 // Create and add a stylesheet rule for each member of rules[].
 //
@@ -267,63 +277,58 @@ let defineRules = (rules, context) => {
 };
 
 //------------------------------------------------------------------------
-// DOM Node manipulation & ElemFactory
+// DOM Node manipulation
 //------------------------------------------------------------------------
 
-let setListener = (elem, name, fn) => {
-    elem.addEventListener(name, fn);
-};
-
-let setListeners = (e, o) => {
-    for (let name in o) {
-        setListener(e, name, o[name]);
-    }
+// rootEPA defines defaults for ElemProp attributes. These happen to be
+// pseudo-attributes.  Each element factory accumulates these *and* actual
+// attributes into derived "EPA" objects.
+//
+// `selector` includes class names of each parent ElemFactory in order to
+// increase the specificity of the resulting rule.
+//
+let rootEPA = {
+    selector: "",
+    $tagName: "div",
+    $namespaceURI: null,
+    $class: "E0",  // default class name
 };
 
 // Set attribute `name` to `value`.  Do not assume values have not already
-// been set on the element; this can be re-evaluted in an activated cell.
+// been set on the element; this can be re-evaluated in an activated cell.
+//
+// SVG attributes are case-sensitive, so we cannot convert camelCase to
+// dashed-words.  Ironically, SVG also uses dash-delimited attribute names,
+// so it is the main reason we would have liked to support camelCase.
 //
 let setAttr = (e, name, value) => {
     if (isThunk(value)) {
         use(cell(_ => setAttr(e, name, use(value))));
+    } else if (name[0] == 'o' && name[1] == 'n') {
+        e.addEventListener(name.slice(2), value);
     } else if (typeof value == "function") {
         throw Error("bad attribute");
+    } else if (value === false || value == null) {
+        e.removeAttribute(name);
     } else {
-        // HTML attributes are case-insensitive, but SVG is case-sensitive,
-        // so we cannot convert camelCase to dashed-words.  Ironically, SVG
-        // also uses dash-delimited attribute names, and is the main case in
-        // which we would have liked to use camelCase as shorthand.
         e.setAttribute(name, String(value));
     }
 };
 
-let setAttrs = (e, attrs, autoClass) => {
-    for (let key in attrs) {
-        if (key == "class") {
+let setEPA = (e, eprops, autoClass) => {
+    for (let key in eprops) {
+        if (key == "$classList") {
             let a = autoClass;
             let prefix = b => a + " " + (b || "");
-            autoClass = lazyApply(prefix, attrs[key]);
-        } else {
-            setAttr(e, key, attrs[key]);
+            autoClass = lazyApply(prefix, eprops[key]);
+        } else if (!(key in rootEPA)) {
+            setAttr(e, key.slice(1), eprops[key]);
         }
     }
     if (autoClass) {
         setAttr(e, "class", autoClass);
     }
 };
-
-let badNodes = [];
-
-let badNodeText = (value) => {
-    // window.BADNODES = badNodes;   // expose for debugging
-    badNodes.push(value);
-    return D.createTextNode("<BADNODE[" + (badNodes.length - 1) + "]>");
-};
-
-let prepareNode = (node) =>
-    (node instanceof Node
-     ? node
-     : D.createTextNode(typeof node == "string" ? node : badNodeText(node)));
 
 // Replace content of element `e` with `content` (a string, DOM element, or
 // array of strings/elements).
@@ -335,14 +340,15 @@ let setContent = (e, content) => {
     }
 
     let appendContent = child => {
-        // Allow "holes" in the content array
         child = use(child);
-        if (child instanceof Array) {
+        if (Array.isArray(child)) {
             for (const item of child) {
                 appendContent(item);
             }
         } else if (child != null && child !== "") {
-            e.appendChild(prepareNode(child));
+            e.appendChild((child instanceof Node
+                           ? child
+                           : D.createTextNode(String(child))));
         }
     };
 
@@ -350,25 +356,24 @@ let setContent = (e, content) => {
 };
 
 // Assign element
-let setElem = (e, rules, selector, attrs, events) => {
+let setElem = (e, epa, rules) => {
     if (rules[0]) {
         // Depth-first traversal of subrules => they appear first
         if (rules[0].selector) {
             // Selector patterns require a stylesheet rule.  When present we
             // entirely avoid `e.style` so that sub-rules override other
             // properties.  E.g. {color:X} vs. {"&:hover":{color:Y}}
-            if (!attrs.id) {
-                attrs = {...attrs, id: getUniqueName("I0")};
+            if (!epa.$id) {
+                epa = {...epa, $id: getUniqueName("I0")};
             }
-            defineRules(rules, "#" + attrs.id);
+            defineRules(rules, "#" + epa.$id);
         } else {
             test && test.assert(rules.length == 1);
             // In the simple case we do not need a stylesheet rule.
             setStyleProperties(e.style, rules[0].decls);
         }
     }
-    setAttrs(e, attrs, selector.replace(/\./g, " ").substr(1));
-    setListeners(e, events || []);
+    setEPA(e, epa, epa.selector.replace(/\./g, " ").substr(1));
     return e;
 };
 
@@ -376,46 +381,25 @@ let setElem = (e, rules, selector, attrs, events) => {
 // E: Element Factory
 //----------------------------------------------------------------
 
-// FactoryState objects are internal values that store information needed by
-// an Element Factory.
+// splitProps: (epaIn, props) -> [epaOut, rules]
 //
-//   tag      = DOM element tag name
-//   ns       = null, or XML namespace
-//   events   = object: event name -> function
-//   name     = base for class name generation
-//   attrs    = object: attributeName -> string
-//   selector = a selector used to identify elements created from the EF
-//              instance, such as ".C0.C1".  The selector includes class
-//              names of each parent EF in order to increase the specificity
-//              of the resulting rule.
-//
-
-let rootFactoryState = {
-    tag: "div",
-    ns: null,
-    attrs: {},
-    selector: "",
-    name: "E0",
-};
-
 // Separate an EProps into its non-CSS and CSS parts.
-// (esIn, props) -> [esOut, rules]
 //
-//   esIn: FactoryState
-//   props: EProps
-//   esOut: an FactoryState to which the non-CSS properties have been applied
+//   epaIn: inherited factory EPA (non-CSS EProps)
+//   props: user-provided EProps
+//   epaOut: resulting EPA
 //   rules: CSS rules that apply CSS properties from `props`
 //          Note: CSS rule = selector + declaration block (object, here)
 //
-let splitProps = (esIn, propsIn) => {
+let splitProps = (epaIn, propsIn) => {
     if (propsIn == null) {
-        return [esIn, []];
+        return [epaIn, []];
     }
     if (typeof propsIn != "object") {
         throw new Error("Bad `props` value");
     }
 
-    let es = {...esIn};
+    let epa = {...epaIn};
     let rules = [];
 
     let split = (props, selector) => {
@@ -424,24 +408,10 @@ let splitProps = (esIn, propsIn) => {
         for (let key in props) {
             let value = props[key];
             if (key[0] == "$") {
-                // non-CSS property
+                epa[key] = value;
                 if (selector) {
                     throw new Error("Non-CSS option inside pattern rule: "
                                     + selector + " {" + key + ": ...}")
-                } else if (key == "$tag") {
-                    es.tag = value;
-                } else if (key == "$ns") {
-                    es.ns = value;
-                } else if (key == "$element") {
-                    // ignore
-                } else if (key == "$events") {
-                    es.events = {...es.events, ...value};
-                } else if (key == "$name") {
-                    es.name = value;
-                } else if (key == "$attrs") {
-                    es.attrs = {...es.attrs, ...value};
-                } else {
-                    throw new Error("Bad prop: " + key);
                 }
             } else if (/\?/.test(key)) {
                 throw new Error("Bad prop: " + key);
@@ -459,49 +429,51 @@ let splitProps = (esIn, propsIn) => {
     };
     split(propsIn, null);
 
-    return [es, rules];
+    return [epa, rules];
 };
 
-if (test) {
-    let [es, rules] = splitProps(rootFactoryState, {x: 1, "&.c":{y:2}});
-    test.eq(rules.length, 2);
-    test.eq(rules[0].selector, "&.c");
-    test.eq(rules[1].selector, null);
-}
-
-// Create a DOM element
+// Create/initialize a DOM element
 //
-let createElem = (fstIn, props, content) => {
-    let [fst, rules] = splitProps(fstIn, props);
-    let e = (props && props.$element) || newElement(fst.tag, fst.ns);
-    setElem(e, rules, fst.selector, fst.attrs, fst.events);
-    if (content[0]) {
+let createElem = (elem, epaBase, eprops, contentArgs) => {
+    let [epa, rules] = splitProps(epaBase, eprops);
+    elem = elem || newElement(epa.$tagName, epa.$namespaceURI);
+    setElem(elem, epa, rules);
+    if (contentArgs[0]) {
         // TBO: don't create cell when values are already computed
-        // TBO: don't reparent all children on update
-        use(cell(function setContentX() { return setContent(e, content);}));
+        // TBO: don't re-parent all children on update
+        use(cell(function setContentX() {
+            return setContent(elem, contentArgs);
+        }));
     }
-    return e;
+    return elem;
 };
 
 // Create a derived FactoryState
 //
-let newFactoryState = (fstIn, props) => {
-    let [fst, rules] = splitProps(fstIn, props);
+let newFactoryState = (epaBase, props) => {
+    let [epa, rules] = splitProps(epaBase, props);
     if (rules.length > 0) {
-        fst.selector = fst.selector + "." + getUniqueName(fst.name);
-        defineRules(rules, fst.selector);
+        epa.selector = epa.selector + "." + getUniqueName(epa.$class);
+        defineRules(rules, epa.selector);
     }
-    return fst;
+    return epa;
 };
 
 // Construct a new factory function/object.
 //
-let newFactory = (fst) => {
-    let E = (props, ...content) => createElem(fst, props, content);
-    E.newClass = (props) => newFactory(newFactoryState(fst, props));
+let newFactory = (epa) => {
+    let E = (eprops, ...content) => createElem(null, epa, eprops, content);
+    E.newClass = (eprops) => newFactory(newFactoryState(epa, eprops));
     return E;
 };
 
-let E = newFactory(rootFactoryState);
+let Div = newFactory(rootEPA);
 
-export default E;
+let assign = (elem, eprops, ...content) =>
+    createElem(elem, rootEPA, eprops, content);
+
+export {
+    Div as default,
+    Div,
+    assign,
+};

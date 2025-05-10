@@ -3,7 +3,7 @@
 import "./mockdom.js";
 import test from "./test.js";
 import {use, lazy, state, cell} from  "./i.js";
-import E from "./e.js";
+import { default as Edefault, Div, assign } from "./e.js";
 
 const {eq, assert} = test;
 
@@ -12,6 +12,10 @@ const {eq, assert} = test;
 const sheet = document.styleSheets[0];
 assert(sheet);
 
+// ASSERT: correct default
+
+assert(Edefault === Div);
+const E = Div;
 
 // E.newClass : derive new E
 
@@ -20,23 +24,23 @@ const testSet = cell(() => {
 
     let e = E();
     eq(e.tagName, "div");
-    eq(e.className, "");
+    eq(e.className, null);
     eq(0, e.childNodes.length);
 
-    e = E({$tag: "i"});
+    e = E({$tagName: "i"});
     eq(e.tagName, "i");
-    eq(e.className, "");
+    eq(e.className, null);
     eq(0, e.childNodes.length);
 
     e = E({}, "x");
     eq(e.tagName, "div");
-    eq(e.className, "");
+    eq(e.className, null);
     eq(1, e.childNodes.length);
 
     // Derive factory
 
     const Foo = E.newClass({
-        $name: "foo",
+        $class: "foo",
         color: "black",
         transform: "#{transform} #{color}",
 
@@ -68,20 +72,18 @@ const testSet = cell(() => {
     // Instantiate derived factory
 
     e = Foo({
-        $tag: "span",
+        $tagName: "span",
     }, "abc", null, "def");
     eq(e.tagName, "span");
     eq(e.className, "foo");
     eq(2, e.childNodes.length);
 
-    // Instantiate with $tag, $attrs, properties, and content
+    // Instantiate with $tagName, $ATTR, properties, and content
 
     e = Foo({
-        $tag: "span",
+        $tagName: "span",
+        $id: "x",
         width: 2,
-        $attrs: {
-            id: "x",
-        },
         color: "black",
     }, "abc", "def");
     eq(e.tagName, "span");
@@ -108,26 +110,24 @@ eq(sheet.cssRules.length, 0);
 // persists.  A state variable read by the root cell itself will cause the
 // element to be destroyed and re-created.
 
-let icontent = state(["V"]);
-let icolor = state("black");
-let ifont = state("sans-serif");
-let ialt = state("ALT1");
-let iclass = state("up");
-let ix = state(0);
+let icontent = state(["V"]);      // content
+let icolor = state("black");      // CSS property
+let ifont = state("sans-serif");  // CSS property
+let ialt = state("ALT1");         // attribute
+let iclass = state("up");         // special attribute
+let ix = state(0);                // invalidates constructing cell
 let baseFn = _ => {
     // Create a new factory and instantiate it
     const CT = E.newClass({
-        $name: "CT",
+        $class: "CT",
         color: icolor,
     });
 
     use(ix);
     return CT({
+        $classList: iclass,
+        $alt: ialt,
         font: ifont,
-        $attrs: {
-            alt: ialt,
-            class: iclass,
-        },
     }, ["a", icontent, "b"]);
 };
 let base = cell(baseFn);
@@ -149,7 +149,7 @@ eq(sheet.cssRules[0].style.color, "black");
 icontent.set(["<", ">"]);
 icolor.set("red");
 ifont.set("mono");
-ialt.set("ALT2");
+ialt.set(false);
 iclass.set(null);
 let e2 = use(base);
 // Assert: element persists, but content & property have changed
@@ -157,7 +157,8 @@ assert(e1 === e2);
 eq(e2.textContent, "a<>b");
 eq(e2.style.font, "mono");
 eq(e1.getAttribute("class"), "CT ");
-eq(e1.getAttribute("alt"), "ALT2");
+// Assert: Attribute removed when value == false
+eq(e1.getAttribute("alt"), null);
 // Assert: factory class persists, but property has been updated
 eq(sheet.cssRules[0].selectorText, ".CT");
 eq(sheet.cssRules[0].style.color, "red");
@@ -170,6 +171,28 @@ assert(e3 !== e2);
 eq(e3.textContent, "a<>b");
 // Assert: invalidated base's resources were dropped
 eq(sheet.cssRules[0].selectorText, ".CT");
+
+// assign
+
+let tc = cell(_ => {
+    let elem = document.createElement("div");
+    elem.appendChild(document.createElement("i"));
+    eq(1, elem.childNodes.length);
+
+    // ASSERT: attributes are applied
+    // ASSERT: content is replaced
+    assign(elem, {$value: "V"}, "Hi");
+    eq("V", elem.getAttribute("value"));
+    eq("Hi", elem.firstChild.textContent);
+    eq(1, elem.childNodes.length);
+
+    // ASSERT: when no content arguments are provided, content is left unchanged
+    assign(elem, {$value: "X"});
+    eq("X", elem.getAttribute("value"));
+    eq("Hi", elem.firstChild.textContent);
+});
+use(tc);
+tc.deactivate();
 
 // Drop base
 

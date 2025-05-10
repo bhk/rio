@@ -44,7 +44,7 @@ const GridBase = E.newClass({
 });
 
 const DataGrid = GridBase.newClass({
-    $name: "DataGrid",
+    $class: "DataGrid",
     overflow: "scroll",         // scroll up/down (just data cells, not headers)
     position: "absolute",
     top: rowHeight + 2,
@@ -59,7 +59,7 @@ const DataGrid = GridBase.newClass({
 });
 
 const DataCell = E.newClass({
-    $name: "DataCell",
+    $class: "DataCell",
     padding: "3px 5px",
     overflow: "hidden",
     whiteSpace: "nowrap",
@@ -82,7 +82,7 @@ const DataCell = E.newClass({
 //
 
 const HdrGrid = GridBase.newClass({
-    $name: "HdrGrid",
+    $class: "HdrGrid",
     position: "absolute",
     top: 0,
     left: 0,
@@ -93,7 +93,7 @@ const HdrGrid = GridBase.newClass({
 });
 
 const HdrCell = E.newClass({
-    $name: "HdrCell",
+    $class: "HdrCell",
     position: "relative",
     overflow: "hidden",
 });
@@ -102,7 +102,7 @@ const HdrCell = E.newClass({
 // "up" class => sort direction is ascending
 //
 const HdrLabel = E.newClass({
-    $name: "HdrLabel",
+    $class: "HdrLabel",
     padding: "4px 5px 2px 4px",
     whiteSpace: "nowrap",
     textOverflow: "none",
@@ -135,7 +135,7 @@ const HdrLabel = E.newClass({
 });
 
 const Divider = E.newClass({
-    $name: "Divider",
+    $class: "Divider",
     position: "absolute",
 
     // The content area of this element is a thin vertical bar.
@@ -154,7 +154,7 @@ const Divider = E.newClass({
 });
 
 const DragDivider = Divider.newClass({
-    $name: "DragDivider",
+    $class: "DragDivider",
     cursor: "col-resize",
 });
 
@@ -163,7 +163,7 @@ const DragDivider = Divider.newClass({
 //--------------------------------------------------------------
 
 const GridTop = E.newClass({
-    $name: "GridTop",
+    $class: "GridTop",
     overflow: "hidden",
     background: "white",
     // fill parent
@@ -226,9 +226,7 @@ const newColHeader = (fields, colInfo, colIndex) => {
           HdrLabel({
               textAlign: (align ? align : ""),
               fontWeight: (sort ? "600" : ""),
-              $attrs: {
-                  class: sort ? "sort " + sort : "",
-              },
+              $classList: sort ? "sort " + sort : "",
           }, label);
 
     const hdrCell = HdrCell({gridArea: "1 / " + (colIndex+1)},
@@ -274,19 +272,17 @@ const newGrid = (columns, fields, db, fnRowClicked, eprops) => {
 
     const dataGrid = DataGrid({
         gridTemplateColumns: gtc,
-        $events: {
-            scroll: () => {
-                hdrGrid.style.left = -dataGrid.scrollLeft + "px";
-            },
-            mousedown: (evt) => {
-                let rowLine = Math.floor((evt.offsetY + evt.target.scrollTop)
-                                         / rowHeight);
-                if (rowLine >= 0) {
-                    if (fnRowClicked) {
-                        fnRowClicked(rowLine, db);
-                    }
+        $onscroll: () => {
+            hdrGrid.style.left = -dataGrid.scrollLeft + "px";
+        },
+        $onmousedown: (evt) => {
+            let rowLine = Math.floor((evt.offsetY + evt.target.scrollTop)
+                                     / rowHeight);
+            if (rowLine >= 0) {
+                if (fnRowClicked) {
+                    fnRowClicked(rowLine, db);
                 }
-            },
+            }
         },
     }, lazy(_ => createGridCells(use(db), columns, fields)));
 

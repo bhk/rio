@@ -171,7 +171,7 @@ class Element extends Node {
         super();
         tagName = tagName.toLowerCase();
         this.tagName = tagName;
-        this._ns = ns;
+        this.namespaceURI = ns;
         this._attrs = new Map();
         this._style = new CSSStyleDeclaration();
     }
@@ -182,9 +182,16 @@ class Element extends Node {
         this._attrs.set(key, value);
     }
 
+    removeAttribute(key) {
+        assert(typeof key == "string");
+        this._attrs.delete(key);
+    }
+
     getAttribute(key) {
         assert(typeof key == "string");
-        return this._attrs.get(key) || "";
+        return (this._attrs.get(key)
+                ? this._attrs.get(key)
+                : null);
     }
 
     set className(value) {

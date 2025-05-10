@@ -1,7 +1,10 @@
 TODO
 
+ - I: perform()
+ - E: event handlers -> perform(fn())
  - rop: place updaters as inputs to "GW" cell, not root
  - rop: gracefully handle client disconnect
+ - rop: nothing to do on AckResult?
  - server: use button in browser(s) to increment a counter
  - grid: repeating background?
  - grid: demo vertical & horizontal scrolling
@@ -9,4 +12,4 @@ TODO
  - demo: provide buttons for un-render / re-render
  - E: element constructors are not memoizable (cannot appear twice in DOM tree)
  - I: drop cell when there are no creators (vs. no users)
- - Revisit comments with TBO (To-Be-Optimized)
+ - TBO: Revisit comments with TBO (To-Be-Optimized)

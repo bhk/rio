@@ -1,8 +1,6 @@
-import {
-    lazy, use, cell, onDrop, stream
-} from "./i.js";
-import E from "./e.js";
-import {run, log} from "./demo.js";
+import { lazy, use, cell, onDrop, stream } from "./i.js";
+import { Div, assign } from "./e.js";
+import { run, log } from "./demo.js";
 
 const {newStream, fold} = stream;
 const mostRecent = fold((r,e) => e);
@@ -15,11 +13,11 @@ const mostRecent = fold((r,e) => e);
 //
 const eventStream = function (e, eventNames) {
     const stream = newStream();
-    const events = {};
+    const props = {};
     for (const name of eventNames) {
-        events[name] = stream.emit;
+        props["$on" + name] = stream.emit;
     }
-    E({$element: e, $events: events});
+    assign(e, props);
     return stream;
 };
 
@@ -57,13 +55,10 @@ const dragStreamFactory = cell(() => {
         }
     };
 
-    E({
-        $element: document,
-        $events: {
-            mousedown: docListener,
-            mouseup: docListener,
-            mousemove: docListener,
-        }
+    assign(document, {
+        $onmousedown: docListener,
+        $onmouseup: docListener,
+        $onmousemove: docListener,
     });
 
     const factory = (elem) => {
@@ -128,8 +123,8 @@ const serializeEvent = (event) => {
     return serialize(event);
 };
 
-const Box = E.newClass({
-    $tag: "span",
+const Box = Div.newClass({
+    $tagName: "span",
     border: "10px solid gray",
     borderRadius: 4,
     background: "white",
@@ -138,7 +133,7 @@ const Box = E.newClass({
     userSelect: "none",
 });
 
-const Status = E.newClass({
+const Status = Div.newClass({
     font: "12px Arial",
     border: "1px solid gray",
     borderRadius: 1,
@@ -173,11 +168,11 @@ run(_ => {
     const bEvent = mostRecent(eventStream(b, ["mousemove"]));
     const bStatus = Status(null, lazy(_ => serializeEvent(use(bEvent))));
 
-    const subject = E(null, "- ", a, E({$tag: "br"}), b);
+    const subject = Div(null, "- ", a, Div({$tagName: "br"}), b);
 
     const controls = [
-        E(null, ["most recent dragStream(A): ", aStatus]),
-        E(null, ["most recent eventStream(B, ['mousemove']): ", bStatus]),
+        Div(null, ["most recent dragStream(A): ", aStatus]),
+        Div(null, ["most recent eventStream(B, ['mousemove']): ", bStatus]),
 
         "B is relatively-positioned 10px to the left of its 'static' " +
             "position.  In Chrome & Safari, events that fall inside A and " +

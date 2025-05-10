@@ -3,48 +3,46 @@
 //
 
 import E from "./e.js";
-import {ESvgIcon, newPath, newIcon} from "./svg.js";
+import { ESvg, newPaths } from "./svg.js";
 
-let mapRange = (start, limit) => (fn) => {
-    let a = [];
-    for (let ii = start; ii < limit; ++ii) {
-        a.push(fn(ii));
-    }
-    return a;
-};
+// Construct an <svg> element with an idiosyncratic set of defaults
+//
+let Icon = ESvg.newClass({
+    $viewBox: "0 0 100 100",
+    strokeWidth: 3,
+    strokeLinejoin: "round",
+    strokeLinecap: "round",
+    fill: "currentColor",
+    stroke: "currentColor",
+});
+
+let newIcon = (props, ...paths) =>
+    Icon(props, newPaths(...paths));
 
 let demos = {};
-
-let showPath = (name, path) => {
-    if (globalThis?.process?.env?.SHOWPATHS) {
-        console.log(name + ": " + path);
-    }
-}
 
 //----------------------------------------------------------------
 // Shuffle
 //----------------------------------------------------------------
 
-demos.Shuffle = ESvgIcon(null, [
-    //      newPath({d: "M65,45 l22,15 l-22,15 z"}),
-    //      newPath({d: "M75,60 h-40 a15,15 0 0,1 0,-30 h10",
-    //               "stroke-width": "9",
-    //               fill: "none"}),
-    newPath({d: "M65,48 l22,15 l-22,15 z"}),
-    newPath({d: "M75,63 h-40 a15,15 0 0,1 0,-30 h10",
-             "stroke-width": "9",
-             fill: "none"}),
-]);
+demos.Shuffle = newIcon(null,
+    "M65,48 l22,15 l-22,15 z",
+    { $d: "M75,63 h-40 a15,15 0 0,1 0,-30 h10",
+      "$stroke-width": "9",
+      $fill: "none" });
 
 //----------------------------------------------------------------
 // Play
 //----------------------------------------------------------------
 
-demos.Play = ESvgIcon(null, [newPath({d: "M80,50 L30,80 L30,20 Z"})]);
+demos.Play = newIcon(null, "M80,50 L30,80 L30,20 Z");
 
 //----------------------------------------------------------------
 // Star
 //----------------------------------------------------------------
+
+// "canned" star path
+demos.Star = newIcon(null, "M50,18L71,81L17,42L83,42L29,81Z");
 
 if (true) {
     // generate 5-point star path
@@ -52,10 +50,9 @@ if (true) {
     let getXY = (angle, r) =>
         Math.round(50 + r*Math.sin(angle)) + ","
         + Math.round(50 + scale*4.5 - r*Math.cos(angle));
-    let a = mapRange(0,5)(n => getXY(Math.PI/1.25 * n, scale*50));
+    let a = [...Array(6).keys()].map(n => getXY(Math.PI/1.25 * n, scale*50));
     let starPath = "M" + a.join("L") + "Z";
-    showPath("star5", starPath);
-    demos.algoStar5 = ESvgIcon(null, [newPath({d: starPath})]);
+    demos.algoStar5 = newIcon(null, starPath);
 }
 
 if (true) {
@@ -64,16 +61,11 @@ if (true) {
     let getXY = (angle, r) =>
         Math.round(50 + r*Math.sin(angle)) + ","
         + Math.round(50 + scale*4.5 - r*Math.cos(angle));
-    let a = mapRange(0,10)(n => getXY(Math.PI/5 * n,
-                                      scale*(50 - 30.9*(n&1))));
+    let a = [...Array(11).keys()].map(n =>
+        getXY(Math.PI/5 * n, scale*(50 - 30.9*(n&1))));
     let starPath = "M" + a.join("L") + "Z";
-    showPath("start10", starPath);
-    demos.algoStar10 = ESvgIcon({fill: "#888"},
-                                newPath({d: starPath}));
+    demos.algoStar10 = newIcon({ fill: "#888" }, starPath);
 }
-
-// "canned" star path
-demos.Star = newIcon({}, "M50,18L71,81L17,42L83,42L29,81Z");
 
 //----------------------------------------------------------------
 // Chat Icon
@@ -82,8 +74,8 @@ demos.Star = newIcon({}, "M50,18L71,81L17,42L83,42L29,81Z");
 // Return [x,y] which is `r` units from [x0,y0] in the direction of [x1,y1]
 let toward = ([x0, y0], [x1, y1], r) => {
     let [dx, dy] = [x1-x0, y1-y0];
-    let d = (dx**2 + dy**2)**0.5;
-    return [x0 + r*dx/d, y0 + r*dy/d].map(Math.round);
+    let p = r/(dx**2 + dy**2)**0.5;
+    return [x0 + p*dx, y0 + p*dy].map(Math.round);
 };
 
 let roundedPath = (radius, pathOpen) => {
@@ -121,27 +113,19 @@ let d = roundedPath(8, [
 ].map(xlat));
 
 d = d.replace(/ *([A-Za-z]) */g, "$1");
-showPath("bubble", d);
 
-demos.Chat = newIcon({fill: "none", strokeWidth: 8}, d);
+demos.Chat = newIcon({ fill: "none", strokeWidth: 8 }, d);
 
 //----------------------------------------------------------------
 
-let makeRow = (name, elem) =>
-    E({$tag: "tr"}, [
-        E({
-            $tag: "th",
-            padding: "0 2em",
-        }, name),
-        E({
-            $tag: "td",
-            width: 120,
-            height: 120,
-            border: "3px solid #ccc",
-        }, elem),
-    ]);
+let TH = E.newClass({ $tagName: "th", padding: "0 2em" });
+let TD = E.newClass({ $tagName: "td", width: 120, height: 120,
+                      border: "3px solid #ccc" });
 
-let tbl = E({$tag: "table"},
-            Object.keys(demos).map(k => makeRow(k, demos[k])));
+let tbl = E({ $tagName: "table" },
+            Object.entries(demos).map( ([name, elem]) =>
+                E({ $tagName: "tr" },
+                  TH(null, name),
+                  TD(null, elem))));
 
 document.body.appendChild(tbl);

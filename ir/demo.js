@@ -1,23 +1,23 @@
 // demo: Display a web page for demonstrating a JS module.
 
 import {use, cell, lazy, state} from "./i.js";
-import E from "./e.js";
+import * as E from "./e.js";
 
 // Export for debugging
 window.E = E;
 
 // This element contains the element[s] under test.
 //
-const Frame = E.newClass({
-    $name: "Frame",
+const Frame = E.Div.newClass({
+    $class: "Frame",
     border: "2px solid #888",
     background: "#f0ede8",
     position: "relative",
     height: 350,
 });
 
-const Log = E.newClass({
-    $name: "Log",
+const Log = E.Div.newClass({
+    $class: "Log",
     margin: 8,
     paddingTop: 8,
     font: "14px Avenir, Arial, Helvetica",
@@ -25,8 +25,8 @@ const Log = E.newClass({
     borderTopWidth: 1,
 });
 
-const Demo = E.newClass({
-    $name: "Demo",
+const Demo = E.Div.newClass({
+    $class: "Demo",
     position: "absolute",
     right: 0,
     left: 0,
@@ -42,7 +42,7 @@ const Demo = E.newClass({
 //
 let logState = state([]);
 let log = (str) => logState.set([...use(logState), str]);
-let LogLine = E.newClass({$tag: "p"});
+let LogLine = E.Div.newClass({$tagName: "p"});
 
 // `style` applies to the frame containing the element under test.
 // For example, size, background, and position (static or relative).
@@ -53,11 +53,11 @@ const demoView = ({subject, controls, frameStyle}) => {
         Frame(frameStyle, subject),
 
         // controls
-        E({
-            $tag: "ul",
+        E.Div({
+            $tagName: "ul",
             font: "16px Avenir, Arial, Helvetica",
             margin: 6,
-        }, (controls || []).map(c => E({$tag: "li"}, c))),
+        }, (controls || []).map(c => E.Div({$tagName: "li"}, c))),
 
         // log
         Log(null, lazy(_ => {
@@ -73,7 +73,7 @@ const run = (main) => {
     use(cell(_ => {
         const opts = main();
         const top = demoView(opts);
-        E({$element: document.body}, top);
+        E.assign(document.body, null, top);
     }));
 };
 

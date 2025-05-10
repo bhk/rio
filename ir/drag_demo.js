@@ -31,11 +31,9 @@ log("Note: Yellow background => being dragged; red => error");
 let newBox = (left) => {
     let iclass = state(null);
     let e = Box({
+        $classList: iclass,
         left: left,
         top: 150,
-        $attrs: {
-            class: iclass,
-        },
     }, "Drag me");
     let style = e.style;
 

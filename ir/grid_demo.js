@@ -9,14 +9,10 @@ const newInput = (style, text) => {
     const ivalue = state("");
     const e = E({
         ...style,
-        $tag: "input",
-        $attrs: {
-            type: "text",
-            placeholder: text,
-        },
-        $events: {
-            input: (evt) => (ivalue.set(e.value), true),
-        }
+        $tagName: "input",
+        $type: "text",
+        $placeholder: text,
+        $oninput: (evt) => (ivalue.set(e.value), true),
     });
     return {e, value: () => use(ivalue)};
 };

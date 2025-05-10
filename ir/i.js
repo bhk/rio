@@ -81,10 +81,12 @@ const lazyRoot = new Map();
 
 // Create a lazy expression thunk
 //
-const lazy = f =>
-      f.isDurable
-      ? cache(lazyRoot, f, _ => new LazyThunk(f))
-      : new LazyThunk(f);
+const lazy = f => {
+    assert(typeof f == "function");
+    return f.isDurable
+        ? cache(lazyRoot, f, _ => new LazyThunk(f))
+        : new LazyThunk(f);
+};
 
 const defer = fx =>
       (...caps) => lazy(ebake(fx, ...caps));
