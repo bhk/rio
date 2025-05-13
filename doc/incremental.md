@@ -219,31 +219,131 @@ TBD
 
 ### Reactive I/O
 
-Incremental Reactive Evaluation provides a solution for I/O that suits a
-pure functional language and deals with I/O delays without the need for
-callbacks or "monadic" constructs.
+Incremental Reactive Evaluation enables an elegant way to support some I/O
+operations in a function language without side effects without blocking the
+thread of execution, and without the need for callbacks or "monadic"
+constructs.
 
-Inputs can be represented as the results of functions, like:
+We start with I in I/O.  A data retrieval can be represented as a function.
+It might involve "under the hood" mutable operations, but the behavior
+visible to the program can be defined in a pure functional way, respecting
+referential transparency.  For example:
 
-    t = IO.getURL("http://example.com/test.txt")
+    data = IO.load("http://example.com/data.txt")
 
-This will initially take on a value that indicates the pending status of the
-request, and over time will change to reflect partial results, and finally
-transition to a completed (or error) state.  Expressions that depend on this
-result will be re-evaluated as necessary.  Note how this behavior would
-make it easy to properly reflect status in a user interface.
+The result reflects the result of the retrieval.  As with IRE semantics in
+general, of course, this includes the possiblity that the result might
+change over time.
 
-Outputs can be achieved by constructing an action object (cf. monadic I/O)
-around a function that returns a time-changing value that eventually
-transitions to a completion state.  Such action objects can be returned from
-a `main` function, or from event handlers.
 
-Reactive I/O operations can be ephemeral, needing to restart after
-temporarily being excluded from the live set.  The programmer will have to
-decide what behavior is desired, and perhaps be more explicit about
-persistence.  [This could involve placing the operation in a state object
-that is passed into the using cell, or perhaps using contexts that group
-cell lifetimes. TBD]
+#### Reactive Waiting
+
+A big complication with IO operations is that they can take indeterminate
+amounts of time, and we don't want this to *block* evaluation of our
+program.
+
+In a reactive system, we can sidestep this problem by allowing the operation
+to return a variant result -- `Pending | Ready(value)` -- either the
+operation outcome (be it success or failure), or a special value that means
+the outcome is not yet known.
+
+Initially, the operation will evaluate to Pending, and the caller can take
+appropriate action and then the rest of the program can continue to be
+evaluated.  When the retrieval is complete, the operation's result
+changes to `Ready(value)`, and the caller is recalculated.
+
+
+#### Pending as an Exception
+
+Often, a calling function will not have anything meaningful to do with a
+Pending result, and being unable to complete its own task, it will also
+return a Pending result to its caller.  This can repeat again, up the call
+chain.  Ultimately, somewhere downstream will be the appropriate place to
+handle the pending nature of the computation, perhaps in the UI where the
+incomplete nature of the operation can be visually indicated, but sadly all
+of the code in between incurs the additional complexity of dealing with
+variant results without being able to provide additional value.  This
+requirement is contagious, and could permeate the code base.
+
+For this reason, instead of using variant results, we generally communicate
+pending conditions with an exception.  An operation "throws" a Pending
+exception when its completion awaits IO operations, and whomever is
+interested in handling that condition can catch the exception.  All of the
+intervening code can be oblivious to pending operations, just like code
+written assuming blocking semantics.  When a retrieval operation completes,
+the oblivious code will be recalculated, and then run to completion instead
+of being interrupted by an exception.
+
+
+#### Cell Splitting
+
+As discussed above, when one or more of a cells inputs change, the cell will
+be recalculated.  You might observe that this update will involve some
+computation that will *not* change: namely, every step of computation that
+happens *before* it consumes the first changed value will be -- *must* be --
+exactly the same as on the previous update.  You might also note that a
+language implementation tailored to IRE *could* make note of the internal
+state of the cell when it uses another cell -- call them "continuation
+points" -- so that subsequent recalculations can begin from precisely the
+point where the first changed result was observed.
+
+If we were to represent this in the dependency graph, each cell would appear
+as a sequence of one or more nodes: an initial node, which operates only on
+the cell's creation parameters, and then one node for each of its inputs.
+The first node has no inputs, and subsequent nodes have exactly two input:
+one is the prior node, and the other is the cell being used.  The final node
+in the sequence produces the cell's output.
+
+
+#### Blocking Threads
+
+Now consider what happens when the cell uses another cell that is in an
+exception state, such as Pending.  As discussed above, this is equivalent to
+throwing an exception within the cell.  In particular, consider the case
+where the exception is not caught within the cell.  This cuts short the
+execution of the cell at the point where the exception is thrown, which is
+also a point where an input was accessed.  In order for a language
+implementation to keep track of this continuation point, all it has to do is
+leave the stack in its final state (assuming we assign the cell its own
+stack).
+
+Now, if that pending operation transitions to a ready state, this
+cell-splitting-optimized recalculation of the cell would simply resume
+execution of the cell at the point where it was cut short by the Pending
+exception.  In this case, "recalculate downstream nodes" is the same as
+"resume the thread from where it was blocked".  In this regime of operation,
+where cell state transitions are from Pending to Ready, this IRE model
+converges with a traditional blocking multi-threaded execution model.
+
+But the difference is: here, we can essentially "catch" the "thread
+suspension", just like any other exception.  And catching that condition
+does not prevent the "thread" from being resumed.
+
+
+#### The O in Reactive I/O
+
+Being a functional approach, IRE conveys outputs with computed values, not
+side effects.  What exactly this looks like depends upon the context.
+
+In the browser, for example, a program generates a description of what
+should be displayed to the user, and returns this value to the system, which
+proceeds to "make it so".  This will involve many mutations of the DOM tree.
+As inputs change over time, and the program's computed description changes,
+this causes the system to apply further changes as necessary to have the DOM
+tree reflect the new results.
+
+In a command-line program, a program will generate an action object.  This
+is an object, like a promise in JavaScript or the IO Monad in Haskell, that
+describes an action to be performed by the system, and a subsequent function
+to be called to obtain the next action object.
+
+An event handler in the browser exemplifies both input and output.  It
+translates a user event into an action object.  The action object it
+generates could describe changes to state cells that will trigger
+recalculations, or changes to the outside world.
+
+[TBD: Maybe instead of action objects, a stream of events is a better
+match.]
 
 
 ## Implementation Notes
