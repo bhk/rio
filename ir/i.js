@@ -130,21 +130,27 @@ const rootCause = (e) => {
 // cells" have inputs and outputs.  "State cells" have only outputs.
 // "Root cells" have only inputs.
 //
-// All cells implement implement the "used cell" interface:
-//    update()
+// All cells implement the following:
 //    use()
 //    unuse()
+//    update()
+//    isConstant()
 //
 // Cells that depend on other cells implement the "using cell" interface:
-//    setDirty()
+//    dirty()
 //    addUsed(cell, result)
 //
 // Dependencies are added by: this.use() -> currentCell.addUsed()
 //
 // Dependencies are removed by: this.update() -> input.unuse()
 //
-// isDirty => result may have changed; outputs have been notified
-// !isDirty => result is valid; any change should notify outputs
+// Members;
+//
+//   isDirty => result may have changed & outputs have been notified;
+//       (false => result is valid & any change should notify outputs.)
+//   result = [succ, value] : succ==false => error was caught (value);
+//            `null` when yet to be initialized/computed
+//   outputs: cells that use this cell
 //
 // TBO: Cells marked as "eager" skip dirtying their outputs and instead add
 //    themselves to a root.dirtyEagers list, which are updated without
@@ -161,29 +167,15 @@ class Cell extends Thunk {
         this.outputs = new Set();
     }
 
-    setDirty() {
-        if (!this.isDirty) {
-            this.isDirty = true;
-            for (const p of this.outputs) {
-                p.setDirty();
-            }
-        }
-    }
-
-    // Called by a using cell no longer using this
-    unuse(o) {
-        this.outputs.delete(o);
-        if (this.outputs.size == 0) {
-            this.drop();
-        }
-    }
-
-    drop() {}
-
+    // Update and return current value, throwing if in error state, and make
+    // this cell a dependency of the current cell.
+    //
     use() {
         const result = this.update();
-        this.outputs.add(currentCell);
-        currentCell.addUsed(this, result);
+        if (!this.isConstant()) {
+            this.outputs.add(currentCell);
+            currentCell.addUsed(this, result);
+        }
         const [succ, value] = result;
         if (succ) {
             return value;
@@ -193,6 +185,46 @@ class Cell extends Thunk {
         throw value instanceof Pending && currentCell != globalRootCell
             ? value
             : new Error("used error", {cause: value});
+    }
+
+    // Remove output.  (Called by the output that no longer uses this.)
+    //
+    unuse(o) {
+        this.outputs.delete(o);
+        if (this.outputs.size == 0) {
+            this.drop();
+        }
+    }
+
+    // Return cell's (caught) result without making this a dependency.
+    //
+    update() {
+        this.isDirty = false;
+        return this.result;
+    }
+
+    // Discard result, call onDrop handlers, detach from inputs.
+    // Called when this is no longer "live".
+    //
+    drop() {}
+
+    // If a cell does not need to be tracked as a dependency, is is
+    // considered a "constant" cell.  This will be the case for function
+    // cells when they observe no other cells and register no cleanups.
+    //
+    isConstant() {
+        return false;
+    }
+
+    // If this cell isn't dirty, mark it dirty and dirty its outputs.
+    //
+    dirty() {
+        if (!this.isDirty) {
+            this.isDirty = true;
+            for (const p of this.outputs) {
+                p.dirty();
+            }
+        }
     }
 }
 
@@ -206,32 +238,35 @@ class StateCell extends Cell {
         this.setResult(initialResult);
     }
 
+    // Set the result.  If changed, mark dirty.
+    //
     setResult(result) {
         result = intern(result);
         if (result !== this.result) {
             this.result = result;
-            this.setDirty();
+            this.dirty();
         }
     }
 
+    // Set the result to a non-error value.
+    //
     set(value) {
         this.setResult([true, value]);
     }
 
+    // Set the result to an error state.
+    //
     setError(error) {
         this.setResult([false, error]);
     }
 
-    // called by imperative code; does not track dependency
+    // Return current value, as with use, but without tracking dependency.
+    // (Called by imperative code.)
+    //
     peek() {
         const [succ, value] = this.result;
         assert(succ);
         return value;
-    }
-
-    update() {
-        this.isDirty = false;
-        return this.result;
     }
 }
 
@@ -297,9 +332,7 @@ class FunCell extends Cell {
         this.cleanups.push(cbk);
     }
 
-    // Discard result, call onDrop handlers, detach from inputs.
-    // Called when this is no longer "live".
-    //
+    // See Cell.drop().
     drop() {
         this.cleanup();
 
@@ -342,7 +375,7 @@ class FunCell extends Cell {
         return true;
     }
 
-    // Recalculate if necessary.
+    // Return result, recalculating if necessary.
     //
     update() {
         if (this.validate()) {
@@ -367,10 +400,9 @@ class FunCell extends Cell {
         this.result = intern(result);
 
         if (oldInputs != null) {
-            // Sanity check: no transition from some inputs to *none*
-            assert(this.inputs);
+            const newInputs = this.inputs || new Map();
             for (const [input, value] of oldInputs) {
-                if (!this.inputs.has(input)) {
+                if (!newInputs.has(input)) {
                     input.unuse(this);
                 }
             }
@@ -389,6 +421,11 @@ class FunCell extends Cell {
             this.unuse(o);
         }
     }
+
+    // true => no need to record this cell as a dependency
+    isConstant() {
+        return this.inputs == null && this.cleanups == null;
+    }
 }
 
 //----------------------------------------------------------------
@@ -400,22 +437,28 @@ class FunCell extends Cell {
 
 class RootCell extends FunCell {
     constructor() {
-        super();
+        super(null);
+        this.f = this.recalc.bind(this);
     }
 
-    setDirty() {
+    dirty() {
         if (!this.isDirty) {
             this.isDirty = true;
-            setTimeout(_ => this.update());
+            setTimeout(this.onUpdate.bind(this));
         }
     }
 
-    // preserve inputs and update them; don't call onDrops
-    update() {
-        this.isDirty = false;
-        if (this.inputs) {
-            for (const [input, _] of this.inputs) {
-                ifPending(input, _ => null);
+    onUpdate() {
+        this.oldInputs = this.inputs;
+        this.update();
+    }
+
+    recalc() {
+        for (const [input, _] of this.oldInputs) {
+            try {
+                use(input);
+            } catch (e) {
+                // do nothing for now
             }
         }
     }
@@ -427,10 +470,10 @@ class RootCell extends FunCell {
 
 const cellRoot = new Map();
 
-const cell = (f) =>
-      (f.isDurable
-       ? cache(cellRoot, f, _ => new FunCell(f))
-       : new FunCell(f));
+const cell = (efn) =>
+      (efn.isDurable
+       ? cache(cellRoot, efn, _ => new FunCell(efn))
+       : new FunCell(efn));
 
 const wrap = (efnx) => (...caps) => cell(ebake(efnx, ...caps));
 
@@ -592,7 +635,7 @@ const checkPending = error => {
 };
 
 // Return `value` if it does not throw an error, or then(p) if it threw a
-// pending result.
+// pending result.  If `then` is not provided, silently ignore Pending.
 //
 const ifPending = (value, then) => {
     try {
@@ -600,9 +643,54 @@ const ifPending = (value, then) => {
     } catch (error) {
         const cause = rootCause(error);
         if (cause instanceof Pending) {
-            return then(cause.value);
+            return then ? then(cause.value) : undefined;
         }
         throw error;
+    }
+};
+
+// Create cell that becomes "constant" when `thunk` is not Pending.
+// Initially, it may throw Pending errors.  Eventually, it will throw a
+// non-Pending error or return a result, and then become "constant", which
+// will remove it from the dependency graph.
+//
+const onceCell = efn => cell(_ => {
+    let succ, value;
+    try {
+        [succ, value] = [true, use(efn())];
+    } catch (e) {
+        [succ, value] = [false, e];
+    }
+    if (succ || !checkPending(value)) {
+        // stop updating
+        currentCell.drop();
+    }
+    if (!succ) {
+        throw value;
+    }
+    return value;
+});
+
+class Action {
+    constructor (f) { this.f = f; }
+};
+
+// This should be called outside of the context of a cell update, because it
+// will perform actions that may invalidate cells. (See ./i.md for more.)
+//
+const perform = (action) => {
+    if (isThunk(action)) {
+        // use() puts the onceCell in the root set, and it will remain there
+        // until it completes.  setTimeout() gets back out of update
+        // context.  Any non-Pending error causes action to be dropped.
+        use(onceCell(_ => {
+            const value = use(action);
+            setTimeout(_ => perform(value));
+        }));
+    } else if (action instanceof Action) {
+        action.f();  // IMPERATIVE
+    } else if (action) {
+        console.log("perform: unrecognized action", action);
     }
 };
 
@@ -716,6 +804,9 @@ export {
     Pending,
     checkPending,
     ifPending,
+    onceCell,
+    Action,
+    perform,
 
     // debugging, testing
     logCell,

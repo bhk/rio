@@ -122,7 +122,8 @@ Code constructed with `i.js` will execute in one of two domains:
 and is an analog of how Rio code would execute.  It should remain *pure*,
 avoiding side effects and internal state.  It should not communicate with
 other cells, or cause invalidations of other cells, except via `use`,
-`cell`, and `wrap`.
+`cell`, and `wrap`.  Otherwise, it might interfere with the proper
+functioning of the update algorithm.
 
 **Imperative Domain**: This refers to execution outside of the context of a
 cell update.  Code in this domain plays a part in connecting the reactive

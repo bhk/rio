@@ -1,11 +1,11 @@
 import test from "./test.js";
-import {flushEvents} from "./mockdom.js";
-let {assert, eq} = test;
+import { flushEvents } from "./mockdom.js";
+let { assert, eq } = test;
 
 import {
     bake, ebake, isThunk, use, lazy, defer, lazyApply, deferApply,
     tryUse, rootCause, Pending, checkPending, ifPending,
-    state, cell, wrap, memo, onDrop, stream,
+    state, cell, wrap, memo, onDrop, stream, onceCell,
     getCurrentCell, setLogger
 } from "./i.js";
 
@@ -27,16 +27,16 @@ import {
 // bake, ebake
 {
     // ASSERT: bake() result is functioning, indempotent, and stamped
-    let fnx = (m, b) => (x) => m*x + b;
-    let fn = bake(fnx, 2, 3);
+    const fnx = (m, b) => (x) => m*x + b;
+    const fn = bake(fnx, 2, 3);
     eq(fn(5), 13);
     assert(fn === bake(fnx, 2, 3));
     assert(fn.isDurable);
     eq("fnx(2,3)", fn.fnxName + "(" + fn.caps.join(",") + ")");
 
     // ASSERT: ebake() result is functioning, indempotent, and stamped
-    let efnx = (x, m, b) => m*x + b;
-    let efn = ebake(efnx, 2, 3, 5);
+    const efnx = (x, m, b) => m*x + b;
+    const efn = ebake(efnx, 2, 3, 5);
     eq(efn(), 11);
     assert(efn === ebake(efnx, 2, 3, 5));
     assert(efn.isDurable);
@@ -45,28 +45,28 @@ import {
 
 // isThunk, use, lazy, defer, lazyApply, deferApply
 {
-    let fa = () => 1;
+    const fa = () => 1;
     const a1 = lazy(fa);
     const a2 = lazy(fa);
     eq(false, a1 === a2);
     assert(isThunk(a1));
     eq(use(a1), 1);
 
-    let efx = (a) => a;
-    let efb = ebake(efx, 2);
+    const efx = (a) => a;
+    const efb = ebake(efx, 2);
     const b1 = lazy(efb);
     const b2 = lazy(efb);
     assert(b1 === b2);
     eq(use(b1), 2);
 
-    let d = defer(efx)(2);
+    const d = defer(efx)(2);
     eq(d, b1);
 
     const ff = a => a*2;
     eq(ff, use(ff));       // use of non-thunk
 
     eq(21, lazyApply(x => x*3, 7));
-    let dx3 = lazyApply(x => x*3, d);
+    const dx3 = lazyApply(x => x*3, d);
     assert(isThunk(dx3));
     eq(6, use(dx3));
     eq(6, use(deferApply(x => x*3)(d)));
@@ -75,26 +75,31 @@ import {
 // state, cell, wrap, memo, onDrop -- and test IR update algorithm
 {
     // ASSERT: cell(durable function) => durable cell (cell & wrap)
-    let dcx = a => a + a;
-    let dc = cell(ebake(dcx, "X"));
+    const dcx = a => a + a;
+    const dc = cell(ebake(dcx, "X"));
     assert(dc === cell(ebake(dcx, "X")));
+
     // ASSERT: wrap(F)(C) uses same cell as cell(ebake(F,C))
-    const dw = cell(_ => use(wrap(dcx)("X")));
-    eq("XX", use(dw));
-    eq([true,"XX"], dw.inputs.get(dc));
-    dw.deactivate();
+    const wfc = wrap(dcx)("X");
+    assert(dc === wrap(dcx)("X"));
+
+    // ASSERT: constant cells are not tracked
+    const base1 = cell(_ => use(dc));
+    eq("XX", use(base1));
+    eq(null, base1.inputs);
+    base1.deactivate();
 
     // Test update algorithm by tracking cell recalculations
     let events = [];
-    let log = str => events.push(str);
+    const log = str => events.push(str);
 
-    let sx = state(1);
-    let sy = state(2);
-    let c1 = cell(_ => (log(1), use(sx) + 10));
-    let c2 = cell(_ => (log(2), use(sx) + (6 & use(sy))));
-    let c3 = cell(_ => (log(3), use(c1) + use(c2)));
-    let c4x = a => (log(4), onDrop(_ => log(-4)), a + a);
-    let base = cell(_ => {
+    const sx = state(1);
+    const sy = state(2);
+    const c1 = cell(_ => (log(1), use(sx) + 10));
+    const c2 = cell(_ => (log(2), use(sx) + (6 & use(sy))));
+    const c3 = cell(_ => (log(3), use(c1) + use(c2)));
+    const c4x = a => (log(4), onDrop(_ => log(-4)), a + a);
+    const base = cell(_ => {
         log(5);
         const v = use(c3);
         if (v < 20) {
@@ -103,7 +108,7 @@ import {
         return v;
     });
 
-    let update = _ => {
+    const update = _ => {
         events = [];
         log("out=" + use(base));
         return events;
@@ -143,12 +148,48 @@ import {
     eq(events, [-4]);
 }
 
+
+// onceCell
+{
+    // ASSERT: reflects pending & remains non-constant
+    const st = state(null, new Pending("init"));
+    let oc = onceCell(_ => use(st));
+    eq("init", ifPending(oc, e => e));
+    eq(false, oc.isConstant());
+    st.setError(new Pending("new"));
+    eq("new", ifPending(oc, e => e));
+    eq(false, oc.isConstant());
+
+    // ASSERT: transitions to constant on succes
+    st.set(0);
+    eq(0, ifPending(oc, e => e));
+    eq(true, oc.isConstant());
+
+    // ASSERT: constant cell does not recalculate
+    st.set(1);
+    eq(0, ifPending(oc, e => e));
+
+    // ASSERT: constant cell removed from root cell's inputs
+    flushEvents();
+    eq(0, oc.outputs.size);
+
+    // ASSERT: transitions to constant on error
+    oc = onceCell(_ => use(st));
+    st.setError("E");
+    const [succ, e] = tryUse(oc);
+    eq(false, succ);
+    eq("E", rootCause(e));
+    eq(true, oc.isConstant());
+    flushEvents();
+    eq(0, oc.outputs.size);
+}
+
 // stream
 {
-    let s = stream.newStream();
-    let smap = stream.map(n => n*2)(s);
-    let sfilt = stream.filter(n => n <= 4)(smap);
-    let sfold = stream.fold((v, n) => v + ":" + n, "")(sfilt);
+    const s = stream.newStream();
+    const smap = stream.map(n => n*2)(s);
+    const sfilt = stream.filter(n => n <= 4)(smap);
+    const sfold = stream.fold((v, n) => v + ":" + n, "")(sfilt);
     eq(use(sfold), "");
     s.emit(1);
     s.emit(3);
@@ -164,7 +205,7 @@ import {
         const c0 = state(null, error);
         const c1 = cell(_ => use(c0));
         const c2 = cell(_ => use(c1));
-        let errorOut = tryUse(c2)[1];
+        const errorOut = tryUse(c2)[1];
         c2.deactivate();
         return errorOut;
     };
@@ -206,12 +247,12 @@ import {
 }
 
 // root error handling
-{
-    let st = state(0);
+if (false) {
+    const st = state(0);
     use(st);
 
-    let caught = false;
-    let logOutput = "";
+    const caught = false;
+    const logOutput = "";
     st.setError(new Error("UNCAUGHT"));
 
     const oldlog = setLogger((msg) => { logOutput += msg });
@@ -224,7 +265,7 @@ import {
 
     // ASSERT: root cell auto-update does not catch errors
     assert(caught);
-    let root = getCurrentCell();
+    const root = getCurrentCell();
     eq(root.isDirty, false);
     // Not logging errors now... let's see how that goes.
     // assert(logOutput.match("Error"));

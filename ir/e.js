@@ -85,7 +85,8 @@
 //
 //      `$on...`: Keys named `$on<EVENT>` define event handlers that will be
 //         installed using setListener(), not setAttribute().  The
-//         corresponding value must be a function.
+//         corresponding value must be a function that accepts a JavaScript
+//         Event object and returns nothing, or an Action object.
 //
 // Reactivity
 //
@@ -106,7 +107,9 @@
 //    are applied to the element directly via its style object.
 //
 
-import { use, cell, isThunk, onDrop, lazyApply } from "./i.js";
+import {
+    use, cell, isThunk, onDrop, lazyApply, ifPending, lazy, perform
+} from "./i.js";
 import test from "./test.js";
 
 const D = document;
@@ -294,6 +297,11 @@ let rootEPA = {
     $class: "E0",  // default class name
 };
 
+// Wrap side-effect functions in a cell that it will keep efn() updated,
+// ignoring pending results.  The cell always returns void, so it will not
+// invalidate the caller unless a non-Pending exeption is thrown.
+const activate = (efn) => use(cell(_ => {ifPending(lazy(efn));}));
+
 // Set attribute `name` to `value`.  Do not assume values have not already
 // been set on the element; this can be re-evaluated in an activated cell.
 //
@@ -303,9 +311,9 @@ let rootEPA = {
 //
 let setAttr = (e, name, value) => {
     if (isThunk(value)) {
-        use(cell(_ => setAttr(e, name, use(value))));
+        activate(_ => setAttr(e, name, use(value)));
     } else if (name[0] == 'o' && name[1] == 'n') {
-        e.addEventListener(name.slice(2), value);
+        e.addEventListener(name.slice(2), (evt) => perform(value(evt)));
     } else if (typeof value == "function") {
         throw Error("bad attribute");
     } else if (value === false || value == null) {
@@ -441,9 +449,7 @@ let createElem = (elem, epaBase, eprops, contentArgs) => {
     if (contentArgs[0]) {
         // TBO: don't create cell when values are already computed
         // TBO: don't re-parent all children on update
-        use(cell(function setContentX() {
-            return setContent(elem, contentArgs);
-        }));
+        activate(function setContentX() { setContent(elem, contentArgs); });
     }
     return elem;
 };

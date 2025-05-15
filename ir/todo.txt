@@ -1,7 +1,5 @@
 TODO
 
- - I: perform()
- - E: event handlers -> perform(fn())
  - rop: place updaters as inputs to "GW" cell, not root
  - rop: gracefully handle client disconnect
  - rop: nothing to do on AckResult?
