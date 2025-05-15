@@ -93,13 +93,19 @@ _Bundle.inherit = Builder
 # If {min} is non-empty, minify while bundling.
 _Bundle.min = $(call _namedArgs,min)
 
+# JavaScript expression to generate a GCC-style `-M -MP` dependency file from an ESBuild metafile
+jsonToMMP = Object.entries(require("$1").outputs).map(([k,v])=>Object.keys(v.inputs).map(i=>k+": "+i+"\n"+i+":").join("\n"))[0]
+# ... alternate
+jsonToMMPx = Object.entries(require("$1").outputs).map(([k,v])=>((i=>[...i,k].join(":\n")+": "+i.join(" ")+"\n")(Object.keys(v.inputs))))[0]
+# ... without -MP
+jsonToM = (([k,v])=>k+": "+Object.keys(v.inputs).join(" "))(Object.entries(require("$1").outputs)[0])
 
 # ESBuild(...) : See _Bundle
 #
 ESBuild.inherit = _Bundle
 ESBuild.command = {bundleCmd}$(\n)@{depsCmd}
 ESBuild.bundleCmd = $(QUIET){exe} --outfile={@} {<} --bundle $(if {min},--minify) --metafile={@}.json --color=false --log-level=warning --loader:.wasm=binary
-ESBuild.depsCmd = $(node) -p '(([k,v])=>k+": "+Object.keys(v.inputs).join(" "))(Object.entries(require("./{@}.json").outputs)[0])' > {depsFile}
+ESBuild.depsCmd = $(node) -p '$(call jsonToMMP,./{@}.json)' > {depsFile}
 ESBuild.rule = -include {depsFile}$(\n){inherit}
 ESBuild.exe = $(esbuild)
 ESBuild.depsFile = {@}.d
