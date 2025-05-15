@@ -366,6 +366,8 @@ class FunCell extends Cell {
             for (const [cell, oldResult] of this.inputs) {
                 const currentResult = cell.update();
                 if (oldResult != currentResult) {
+                    // At this point, our current result is invalid, and
+                    // may contain dangling remote object references.
                     return false;
                 }
             }
@@ -449,6 +451,7 @@ class RootCell extends FunCell {
     }
 
     onUpdate() {
+        this.cleanups = null;   // we cannot recalc, so don't clean up
         this.oldInputs = this.inputs;
         this.update();
     }
@@ -671,6 +674,7 @@ const onceCell = efn => cell(_ => {
     return value;
 });
 
+
 class Action {
     constructor (f) { this.f = f; }
 };
@@ -679,19 +683,25 @@ class Action {
 // will perform actions that may invalidate cells. (See ./i.md for more.)
 //
 const perform = (action) => {
-    if (isThunk(action)) {
-        // use() puts the onceCell in the root set, and it will remain there
-        // until it completes.  setTimeout() gets back out of update
-        // context.  Any non-Pending error causes action to be dropped.
-        use(onceCell(_ => {
-            const value = use(action);
-            setTimeout(_ => perform(value));
-        }));
-    } else if (action instanceof Action) {
+    if (action instanceof Action) {
         action.f();  // IMPERATIVE
     } else if (action) {
         console.log("perform: unrecognized action", action);
     }
+};
+
+// Call fn(...args) -- reactive code that returns (optionally) an Action
+//
+const runHandler = (fn, ...args) => {
+    // use() puts the onceCell in the root set, and it will remain there
+    // until it completes.
+    ifPending(onceCell(_ => {
+        console.log("runHandler", ...args);
+        const action = use(fn(...args));
+        // Use setTimeout to get us out of the update context.
+        // TBO: handle queue of actions in root dispatch?
+        setTimeout(_ => perform(action));
+    }));
 };
 
 //------------------------------------------------------------------------
@@ -730,7 +740,11 @@ const valueTextAt = (depth, v, r) =>
       typeof v == "string" ? '"' + v.replace(/\n/g, "\\n") + '"' :
       String(v);
 
-const resultText = ([succ, v]) => {
+const resultText = result => {
+    if (result == null) {
+        return "--no value--";
+    }
+    let [succ, v] = result;
     const rr = depth => v => valueTextAt(depth, v, rr(depth+1));
     const text = rr(0)(v);
     return succ ? text : `<Caught ${text}>`;
@@ -757,17 +771,18 @@ const logCell = (root, options) => {
 
     const getCellText = (cell) => {
         const name = cellName(cell);
-        const value = resultText(cell.result);
-        const dirty = cell.isDirty ? "! " : "";
-        const out = [`${name}: ${dirty}${value}`];
+        const current = (cell === currentCell ? "(CURRENT) " : "");
+        const rtext = resultText(cell.result);
+        const value = (cell.isDirty ? `dirty:${rtext}` : rtext);
+        const out = [`${name}: ${current}${value}`];
         const f = cell.f;
-        if (!options.brief && (f.fnxName || f.name)) {
+        if (!options.brief && f && (f.fnxName || f.name)) {
             const fname = f.fnxName || f.name;
             const fargs = f.caps ? f.caps.map(valueText).join(",") : "()";
-            out.push(`  = ${fname}(${fargs})`);
+            out.push(` = ${fname}(${fargs})`);
         }
         if (cell.cleanups) {
-            out.push(`  cleanups: ${cell.cleanups.length}`);
+            out.push(` cleanups: ${cell.cleanups.length}`);
         }
         return out;
     };
@@ -807,6 +822,7 @@ export {
     onceCell,
     Action,
     perform,
+    runHandler,
 
     // debugging, testing
     logCell,

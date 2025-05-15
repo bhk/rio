@@ -108,7 +108,8 @@
 //
 
 import {
-    use, cell, isThunk, onDrop, lazyApply, ifPending, lazy, perform
+    use, cell, isThunk, onDrop, lazyApply, ifPending, lazy, runHandler,
+    logCell,
 } from "./i.js";
 import test from "./test.js";
 
@@ -313,7 +314,14 @@ let setAttr = (e, name, value) => {
     if (isThunk(value)) {
         activate(_ => setAttr(e, name, use(value)));
     } else if (name[0] == 'o' && name[1] == 'n') {
-        e.addEventListener(name.slice(2), (evt) => perform(value(evt)));
+        if (typeof value == "function") {
+            let type = name.slice(2);
+            let listener = evt => runHandler(value, evt);
+            e.addEventListener(type, listener);
+            onDrop(_ => {
+                e.removeEventListener(type, listener);
+            });
+        }
     } else if (typeof value == "function") {
         throw Error("bad attribute");
     } else if (value === false || value == null) {

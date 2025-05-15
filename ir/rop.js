@@ -37,6 +37,7 @@
 import {
     use, cell, lazy, wrap, memo, onDrop, isThunk,
     Pending, rootCause, state, resultText,
+    Action, perform,
 } from "./i.js";
 
 // Avoid the browser-only WebSocket global.  This module should work in Node
@@ -166,6 +167,7 @@ const makeSerialize = toSOID => {
           typeof v == "function" ? P + "F" + toSOID(v) :
           isThunk(v)             ? P + "T" + toSOID(v) :
           v instanceof Error     ? P + "E" + encode(packError(v)) :
+          v instanceof Action    ? P + "A" + toSOID(v) :
           v instanceof UnValue   ? P + v.string[1] + "@" + v.string.slice(2) :
           P + "O" + toSOID(v);
 
@@ -177,7 +179,7 @@ const makeSerialize = toSOID => {
 //
 const makeDeserialize = fromSOID => {
     const isRef = ch =>
-          ch == "T" || ch == "F" || ch == "O";
+          ch == "T" || ch == "F" || ch == "O" || ch == "A";
 
     const restorer = (k, v) =>
           ( !(typeof v == "string" && v[0] == P) ? v :
@@ -218,6 +220,7 @@ const msgRESULT = "Result";         // slot value     [response]
 const msgEND = "End";               // slot
 const msgACKEND = "AckEnd";         // slot           [response]
 const msgACKRESULT = "AckResult";   // slot
+const msgPERFORM = "Perform";       // oid
 const msgERROR = "Error";           // name
 
 const condSUCCESS = 0;
@@ -287,6 +290,7 @@ class Agent {
              type == msgACKRESULT ? this.onAckResult(slot) :
              type == msgEND       ? this.onEnd(slot) :
              type == msgACKEND    ? this.onAckEnd(slot) :
+             type == msgPERFORM   ? this.onPerform(slot) :
              type == msgERROR     ? this.shutdown("received Error") :
              assert(false, `Unknown message type ${type}`));
         };
@@ -351,6 +355,13 @@ class Agent {
         this.observers.free(slot);
     }
 
+    onPerform(oid) {
+        console.log("onPerform:", oid, this.objects.oid);
+        const action = this.objects[oid];
+        assert(action instanceof Action);
+        perform(action);
+    }
+
     send(type, slot, ...args) {
         const msg = this.serialize([type, slot, ...args]);
         if (this.ws.readyState == wsOPEN) {
@@ -377,13 +388,13 @@ class Agent {
     }
 
     // Used for received messages, so sender (negative) => remote.
-    fromSOID(type, ref) {
-        return ref >= 0
-            ? assert(this.objects[ref])
-            : this.getProxy(-1 - ref, type);
+    fromSOID(type, soid) {
+        return soid >= 0
+            ? assert(this.objects[soid])
+            : this.getProxy(-1 - soid, type);
     }
 
-    // Get/retrieve a down proxy for remote function named by OID
+    // Get/retrieve a down proxy for the remote function named by OID.
     // "W" => wrap result in an array so thunks pass through `use`
     getProxyW_(oid, type) {
         const get = (...args) => {
@@ -395,7 +406,12 @@ class Agent {
                 cond != condERROR ? new Error("ROP: bad cond") :
                 new Error("ROP: remote error", {cause: value});
         };
-        const fwdr = (type == "F" ? get : lazy(get));
+        const actf = () => {
+            this.send(msgPERFORM, oid);
+        };
+        const fwdr = (type == "F" ? get :
+                      type == "A" ? new Action(actf) :
+                      lazy(get));
         this.proxyOIDs.set(fwdr, oid);
         return [fwdr];
     }

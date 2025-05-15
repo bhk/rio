@@ -1,5 +1,6 @@
 TODO
 
+ - I: onceCell is broken; dangling OIDs (see below)
  - rop: place updaters as inputs to "GW" cell, not root
  - rop: gracefully handle client disconnect
  - rop: nothing to do on AckResult?
@@ -11,3 +12,20 @@ TODO
  - E: element constructors are not memoizable (cannot appear twice in DOM tree)
  - I: drop cell when there are no creators (vs. no users)
  - TBO: Revisit comments with TBO (To-Be-Optimized)
+
+Liveness and lifetime:
+
+ * Dropping a cell: 1) stops notification,  2) cleans up cell & inputs.
+ * cell.drop() resets cell.result.  Holding on to a stale copy of result
+   leaves not just stale data, but maybe dangling OIDs.  (Simiarly, with
+   cellular memory GC, would be dangling pointers)
+ * DUP'ing values could work for foreign objects, as copying does for memory
+     => Dup remote ref: create new slot
+     => Dup listener stream: addref to prevent elem.removeListener()
+ * State cells cannot hold remote objects, directly or indirectly.
+   (Because they have no cleanups, no inputs with cleanups, ...)
+     => FunCell with "constant" f() ?
+ * Goal of dup is a snapshot.  A copied remote ref will also be live, but
+   not in the same way.  The new observation slot is targeted to a specific
+   value, which should not change over time, but could be a thunk whose
+   use'd value changes over time.
