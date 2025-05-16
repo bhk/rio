@@ -11,7 +11,7 @@ let template = [
     "    <meta name=viewport content='width=786'>",
     "    <title>TITLE</title>",
     "    <style>",
-    "      body { margin: 0; font: 16px Arial, Helvetica; }",
+    "      body { margin: 12px; font: 16px Arial, Helvetica; }",
     "    </style>",
     "  </head>",
     "  <body>",

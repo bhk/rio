@@ -1,4 +1,7 @@
-// Node web server that serves files and WebSockets
+// Node web server that serves files and ROP-over-WebSockets,
+// launches rop_demo, and will also serve other JS modules.
+//
+// Usage:  node server.js [PATH] [PORT]
 
 import url from "url";
 import fs from "fs";
@@ -9,6 +12,8 @@ import { exec } from 'child_process';
 import { Agent } from "./rop.js";
 import { use, cell, wrap, state, onDrop } from "./i.js";
 
+// For rop_demo.js
+//
 const recentKeys = wrap(_ => {
     const duration = 5000;
 
@@ -44,15 +49,18 @@ const recentKeys = wrap(_ => {
     });
 });
 
-
 //----------------------------------------------------------------
 // HTTP & WebSocket Server
 //----------------------------------------------------------------
 
-const initialFuncs = [
-    recentKeys,
-    () => "Hello, world!",
-];
+const servePath = process.argv[2];
+const servePort = process.argv[3] || "8002";
+const serveHost = '127.0.0.1';
+const serveURL = `http://${serveHost}:${servePort}/`;
+
+const initialFuncs = {
+    recentKeys: recentKeys,
+};
 
 const wss = new WebSocketServer({noServer: true});
 // The connection event is sent when WSS is standalone; we emit it ourselves
@@ -67,7 +75,7 @@ const template = [
     "    <meta name=viewport content='width=786'>",
     "    <title>TITLE</title>",
     "    <style>",
-    "      body { margin: 0; font: 16px Arial, Helvetica; }",
+    "      body { margin: 12px; font: 16px Arial, Helvetica; }",
     "    </style>",
     "  </head>",
     "  <body>",
@@ -78,10 +86,8 @@ const template = [
     ""
 ].join("\n");
 
-const homeContent = template.replace(/SRC|TITLE/g,
-                                   match => (match == "TITLE"
-                                             ? "ROP Demo"
-                                             : "./client.js"));
+const wrapScript = (title, path) =>
+      template.replace(/SRC|TITLE/g, m => m == "TITLE" ? title : path);
 
 const extTypes = {
     ".js": "text/javascript",
@@ -108,27 +114,31 @@ const serveFile = (filePath, resp) => {
 };
 
 const server = http.createServer( (request, resp) => {
-    const u = url.parse(request.url);
+    const path = request.url;
 
-    if (request.method === 'GET' && u.pathname === '/') {
-        return respondHtml(resp, 200, homeContent);
+    if (path.match(/\.\./)) {
+        return respondHtml(resp, 500, "Traversal path");
+    } else if (request.method != "GET") {
+        return respondHtml(resp, 405, "Method not allowed");
     }
 
-    if (request.method == "GET") {
-        let filePath = "." + request.url;
-        // remap as per package.json "browser" section
-        if (filePath == "./test.js") {
-            filePath = "./no-test.js";
-        }
-        if (filePath.match(/\.\./)) {
-            return respondHtml(resp, 500, "Traversal path");
-        }
-        console.log(`File: ${filePath}`);
-        serveFile(filePath, resp);
-        return;
+    if (path.match(/^\/[^/.?]*$/)) {
+        // No extension => wrap javascript module in HTML
+        const js = path == "/" ? "./rop_demo.js" : `.${path}.js`;
+        const title = js.match(/\.\/(.*)\.js/)[1];
+        return respondHtml(resp, 200, wrapScript(title, js));
     }
 
-    return respondHtml(resp, 404, "Not found");
+    // serve file
+
+    let filePath = "." + path;
+    // remap as per package.json "browser" section
+    if (filePath == "./test.js") {
+        filePath = "./no-test.js";
+    }
+    console.log(`File: ${filePath}`);
+    serveFile(filePath, resp);
+    return;
 });
 
 server.on('upgrade', (request, socket, head) => {
@@ -142,16 +152,14 @@ server.on('upgrade', (request, socket, head) => {
     }
 });
 
-const addr = process.argv[2] || '127.0.0.1:8002';
-const hostPort = addr.match(/^([^:]*):?(.*)/);
-server.listen(hostPort[2], hostPort[1] || '127.0.0.1');
+server.listen(servePort, serveHost);
+console.log(`Listening on ${serveURL} ...`);
 
-const serverURL = `http://${addr}/`;
-
-console.log(`Listening on ${serverURL} ...`);
-
-// Launch browser...
-exec(`open '${serverURL}'`, (error, stdout, stderr) => {
-    if (error) console.error(`error: ${error.message}`);
-    if (stderr) console.error(`stderr: ${stderr}`);
-});
+if (servePath) {
+    // Launch browser...
+    const openURL = serveURL + servePath.replace(/^\//,"");
+    exec(`open '${openURL}'`, (error, stdout, stderr) => {
+        if (error) console.error(`error: ${error.message}`);
+        if (stderr) console.error(`stderr: ${stderr}`);
+    });
+}
