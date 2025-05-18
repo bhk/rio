@@ -475,3 +475,7 @@ if (test) {
     flushEvents();
     eq(out2, ["hi"]);
 }
+
+// Load target module if given (for off-target tests of browser code).
+const m = window?.process?.env?.DOMIMPORT;
+m && import(m);

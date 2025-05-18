@@ -65,10 +65,11 @@ TestJS.scriptArgs = {<}
 
 
 # TestJSB(TEST) : Execute JavaScript that assumes the browser environment.
-#     This loads mockdom.js before the test file.
+#     This loads mockdom.js, which imports the test file.
 #
 TestJSB.inherit = TestJS
-TestJSB.scriptArgs = -e 'process.argv.slice(1).forEach(m=>import(m))' {mockdom} ./{<}
+TestJSB.env = {inherit} DOMIMPORT=./{<}
+TestJSB.scriptArgs = {mockdom}
 TestJSB.mockdom := $(call peelDir,./$(_classes.mk_dir))mockdom.js
 
 
