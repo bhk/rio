@@ -487,6 +487,17 @@ const onDrop = (f) => {
     currentCell.onDrop(f);
 };
 
+// Return a function that will invalidate the now-current cell (not the
+// current cell at the time of invalidation, but at the time this function
+// is called.)  Also, mark the current cell as non-constant, so
+// recalculation will occur
+//
+const getInvalidateCB = _ => {
+    const c = currentCell;
+    c.cleanups ??= [];  // foils isConstant() test
+    return _ => {c.result = null; c.dirty();};
+};
+
 // globalRootCell acts as output for cells evaluated outside of an udpate.
 globalRootCell = new RootCell();
 currentCell = globalRootCell;
@@ -769,6 +780,8 @@ const logCell = (root, options) => {
     root ??= (root === null ? globalRootCell : currentCell);
     options ??= {};
 
+    const valueText = (v) => valueTextAt(1, v, x => String(x));
+
     const getCellText = (cell) => {
         const name = cellName(cell);
         const current = (cell === currentCell ? "(CURRENT) " : "");
@@ -830,4 +843,6 @@ export {
     setLogger,
     logError,
     getCurrentCell,
+    getInvalidateCB,
+    Cell,
 };

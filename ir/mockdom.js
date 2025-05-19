@@ -91,14 +91,71 @@ class CSSStyleSheet extends StyleSheet {
 }
 
 //--------------------------------
+// EventTarget
+//--------------------------------
+
+class EventTarget {
+
+    constructor() {
+        this._listeners = [];
+    }
+
+    addEventListener(name, fn, options) {
+        options ??= {};
+        if (typeof options == "boolean") {
+            options = { capture: options };
+        }
+        assert(options instanceof Object);
+        this._listeners.push([name, fn, options]);
+    }
+
+    removeEventListener(name, fn, options) {
+        for (const index in this._listeners) {
+            const el = this._listeners[index];
+            if (el[0] === name && el[1] === fn && el[2] === options) {
+                this._listeners.splice(index, 1);
+                return;
+            }
+        }
+    }
+
+    dispatchEvent(evt) {
+        evt.target = this;
+        evt.currentTarget = this;
+
+        let dispatched = false;
+        const dispatch = (fn, options) => {
+            dispatched = true;
+            if (fn) {
+                fn(evt);
+            }
+        };
+
+        dispatch(this["on" + evt.type], {});
+
+        for (const [name, fn, options] of this._listeners) {
+            if (name == evt.type) {
+                dispatch(fn, options);
+            }
+        }
+
+        if (!dispatched) {
+            (this._dropped || (this._dropped = [])).push(evt);
+            //console.log(`EventTarget: drop ${name} ${evt.data || ""}`);
+            return;
+        }
+    }
+}
+
+//--------------------------------
 // Node
 //--------------------------------
 
-class Node {
+class Node extends EventTarget {
 
     constructor() {
+        super();
         this._childNodes = [];
-        this._listeners = [];
         this._text = "";
     }
 
@@ -130,20 +187,6 @@ class Node {
         this._childNodes.push(child);
 
         return child;
-    }
-
-    addEventListener(name, fn, capture) {
-        this._listeners.push([name, fn, capture]);
-    }
-
-    removeEventListener(name, fn, capture) {
-        for (const index in this._listeners) {
-            const el = this._listeners[index];
-            if (el[0] === name && el[1] === fn && el[2] === capture) {
-                this._listeners.splice(index, 1);
-                return;
-            }
-        }
     }
 
     get textContent() {
@@ -355,23 +398,6 @@ class MessageEvent extends Event {
     }
 }
 
-class EventTarget {
-    dispatchEvent(evt) {
-        let name = evt.type;
-        let handler = this["on" + name];
-        if (handler) {
-            evt.target = this;
-            evt.currentTarget = this;
-            //console.log(`EventTarget: dispatch ${name} ${evt.data || ""}`);
-            handler(evt);
-            //console.log(`EventTarget: done`);
-        } else {
-            (this._dropped || (this._dropped = [])).push(evt);
-            //console.log(`EventTarget: drop ${name} ${evt.data || ""}`);
-        }
-    }
-}
-
 //--------------------------------
 // WebSocket
 //--------------------------------
@@ -424,7 +450,7 @@ let connect = (ws1, ws2) => {
 
 let G = global;
 
-G.window = global;
+G.window = new EventTarget();
 G.document = new Document();
 G.Node = Node;
 G.Element = Element;
