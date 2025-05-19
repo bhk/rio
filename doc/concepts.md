@@ -1720,11 +1720,8 @@ Downsides of this choice include:
  * `Inf` and `-Inf`
 
 The problem with decimal fractions is insidious.  Numbers immediately take
-on a value that is not equal to what was written.  This data type is not
-well suited to dealing with numbers produced by humans.  The language could
-detect literals that cannot be represented exactly (e.g. too large, too
-precise, etc.) and treat them as errors, but that would absolutely forbid
-literals like `0.1`.
+on a value that is not the same as what was written.  For example, `0.1`
+cannot be represented in binary floating point.
 
 The inability to represent all 64-bit integer values appears to be a problem
 that presents itself primarily when interacting with C or other low-level
@@ -1733,14 +1730,7 @@ integer types.  Otherwise, it would be quite rare to encounter situations in
 which one needs a value to hold integers bigger than 2^53 but not bigger
 than 2^64.
 
-Perhaps ideally, we could have arbitrary-precision decimal numbers, with all
-operations preserving precision, except for division, which would return
-floating point.  Abstract interpretation could (hopefully) tell the compiler
-when integers could be used to represent the values, such as in a loop
-counter.  Of course, some `Float64` type would still have to be available in
-the language for type structures and vectors.
-
-However, floating point is overwhelmingly the practical choice.
+Floating point is overwhelmingly the practical choice.
 
  * Modern hardware supports it well, so we get good performance right out of
    the gate without exotic optimizations.
@@ -1753,9 +1743,9 @@ However, floating point is overwhelmingly the practical choice.
  * Having a single built-in numeric type keeps the language definition
    simple.
 
-One alternative that would be clearly *better* is Douglas Crockford's
-[`DEC64`](https://www.crockford.com/dec64.html) proposal.  Something to
-keep in mind.
+One alternative that would be clearly *better*, as in more user-friendly, is
+Douglas Crockford's [`DEC64`](https://www.crockford.com/dec64.html)
+proposal.
 
 Some other options under consideration:
 
@@ -1763,9 +1753,14 @@ Some other options under consideration:
    contain A-F when followed by the suffix `_16` (visually rendered as a
    trailing "16" subscript).
 
- * Precise literals, converted to `Float64` when used.  This will allow
-   high-precision number types to leverage [early evaluation of
-   constructors](#early-evaluation-of-constructors).
+ * We could treat all numeric literals as decimal numbers, and automatically
+   convert them to Float64 when used in arithmetic expressions with each
+   other or with existing Float64 values.  The upside is that this would
+   allow the literals to be used to accurately [initialize user-defined
+   numeric types](#early-evaluation-of-constructors).  Also, perhaps, it
+   could warn or error when non-representable values like `0.1` are
+   implicitly converted to Float64, and instead require an explicit
+   conversion.
 
 
 ### Strings
