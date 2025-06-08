@@ -2,6 +2,12 @@
 
 import * as test from "./test.js";
 
+const assert = (cond) => {
+    if (!cond) {
+        throw new Error("Assertion failed");
+    }
+};
+
 // MODIFIES `a`
 //
 function override(a, b, ...others) {
@@ -48,7 +54,7 @@ function map(obj, fn) {
 let L = (ary) => (ary instanceof Array ? [...ary, ''].join('\n') : ary);
 
 
-export {override, clone, set, append, map, L};
+export { assert, override, clone, set, append, map, L };
 
 let o = {a: 1};
 test.eq(set(o, "a", 2), {a: 2});

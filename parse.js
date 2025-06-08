@@ -1,45 +1,50 @@
 // parse: parse Rio source code
 
-import {append, set} from "./misc.js";
-import {P, S, NS, R, V, and, or, CC, cpos, fail, NoCaptures} from "./peg.js";
-import {AST, astFmt, astFmtV} from "./ast.js";
+import { assert, set } from "./misc.js";
+import { P, R, L } from "./ir/peg.js";
+import { AST, astFmt, astFmtV } from "./ast.js";
 
-// returns: match 0 or 1 occurrence of `p`
-function opt(p) {
-    return or(p, 0);
-}
+const or = (...a) => P(a);
+const S = (str) => P(str.split(""));
 
 //==============================================================
-// 2D Syntax
+// P2D: Parse 2D Syntax
 //==============================================================
 //
-// The 2D grammar has dependencies on "inline" syntax patterns:
+// P2D exports the following:
 //
-//    AtBlock: Succeeds when at a line (post-indent) that should be treated
-//       as the beginning of a block.
+//   module: the top-level pattern, matches an entire Rio module.
+//   atEOL: matches end of a logical line (doesn't consume).
+//   white: consumes LF and next line's indentation if it is
+//          a continuation line.
+//   block: consumes LF and a subsequent block if it is nested
+//          more deeply than the current line.
 //
-//    Comment: Matches a comment, consuming characters to the terminating NL.
+// It has dependencies on these "inline" syntax patterns:
 //
-//    LogLine: Consumes a logical line, beginning at its first non-SPACE
-//       character. LogLine must not read beyond LF characters except via
-//       the 2D `nlBlock` and `nlWhite` patterns.  Also, it must consume all
-//       everything up to `nlEOL`: every non-NL character, `nlWhite`, and
-//       `nlBlock`.
+//   atBlock: Succeeds at start of a line (post-indent) that should be
+//            treated as the beginning of a block (versus continuation).
+//   comment: Matches a comment, consuming characters to the terminating LF.
+//   logLine: Consumes a logical line, beginning after indentation. It must
+//            not read beyond LF characters except via the 2D `block` and
+//            `white` patterns.  Also, it must consume everything up to
+//            `atEOL`: every non-LF character, `white`, and `block`.
 //
-// 2D patterns only recognize two ASCII characters: LF and SPACE.  All other
+// 2D patterns only recognize two ASCII characters: LF and SP.  All other
 // characters are left to be handled by inline syntax patterns.
 //
-// Empty lines (entirely whitespace or comments) are consumed by `nlWhite`,
+// Empty lines (entirely whitespace or comments) are consumed by `white`,
 // so they are "seen" by LogLine as whitespace.
 //
+// P2D uses PEG state, tracking indentation with `state.blockIndent`.
 
-let NL = P("\n");
-let SPACE = P(" ");
-let EOF = P(1).not;
+const LF = P("\n");
+const SP = P(" ");
+const EOF = P(1).not;
 
 // Create a pattern that matches spaces *if* `cmp(indent, state.n)` is true.
 //
-function matchIndent(cmp) {
+const matchIndent = cmp => {
     return P((subj, pos, state, g) => {
         let indent = 0;
         while (subj[pos+indent] === ' ') {
@@ -47,290 +52,259 @@ function matchIndent(cmp) {
         }
         if (cmp(indent, state.blockIndent)) {
             state = set(state, "lineIndent", indent)
-            return [pos + indent, state, NoCaptures];
+            return [pos + indent, [], state];
         }
     });
 }
 
-let indentGT = matchIndent( (x, y) => x > y );
-let indentEQ = matchIndent( (x, y) => x === y );
+const indentGT = matchIndent( (x, y) => x > y );
+const indentEQ = matchIndent( (x, y) => x === y );
 
 // Create a pattern that matches `pat` with `state.blockIndent` set to
 // `state.lineIndent`.
 //
-function inBlock(pat) {
-    return P((subj, pos, state, g) => {
-        let prevN = state.blockIndent;
-        state = set(state, "blockIndent", state.lineIndent);
-        let result = pat.match(subj, pos, state, g);
-        if (!result) {
-            return false;
-        }
-        let [posOut, stateOut, caps] = result;
-        return [posOut, set(stateOut, "blockIndent", prevN), caps];
-    });
-}
+const inBlock = pat =>
+      P((subj, pos, state) => {
+          let prevN = state.blockIndent;
+          state = set(state, "blockIndent", state.lineIndent);
+          let result = pat.match(subj, pos, state);
+          if (!result) {
+              return false;
+          }
+          let [posOut, caps, stateOut] = result;
+          return [posOut, caps, set(stateOut, "blockIndent", prevN)];
+      });
 
-// Match from start of a LogLine to NL at end of last LogLine
-let blockBody = and(V("LogLine"), and(NL, indentEQ, V("LogLine")).X0);
-let nlBlank = and(NL, or(SPACE.X1, V("Comment")).X0, or(NL, EOF).at);
+const newP2D = ({comment, atBlock, logLine}) => {
+    // Match from start of a logical line to LF at end of last logical line
+    const blockBody = P(logLine, P(LF, indentEQ, logLine).x0);
+    const nlBlank = P(LF, or(SP.x1, comment).x0, or(LF, EOF).at);
 
-// Skip whitespace before content of first line
-let p2dModule = and(or(SPACE.X1, NL, V("Comment")).X0, blockBody)
+    const module = P(or(SP.x1, LF, comment).x0, blockBody)
+    const white = or(nlBlank, P(LF, indentGT, inBlock(atBlock.not))).x1
+    const block = P(LF, indentGT, inBlock(P(atBlock.at, blockBody)))
+    const atEOL = or(P(LF, indentGT.not), EOF).at
 
-// These patterns are provided for use by `LogLine`:
-//
-//   nlEOL: detects end of current logical line (doesn't consume)
-//   nlWhite: consumes blank and all-comment lines to closing NL,
-//      or consumes NL and indent before a continuation line.
-//   nlBlock: consumes NL and a subsequent nested block.
-
-let nlWhite = or(nlBlank, and(NL, indentGT, inBlock(V("AtBlock").not))).X1
-let nlBlock = and(NL, indentGT, inBlock(and(V("AtBlock").at, blockBody)))
-let nlEOL = or(and(NL, indentGT.not), EOF).at
-
-// Initial parser state assumed by 2D parsing expressions
-//
-let p2dInitialState = {
-    blockIndent: 0,
-    oob: [],
-}
+    return { module, white, block, atEOL };
+};
 
 //==============================
 // Inline Syntax
 //==============================
 
-let NonNL = NS("\n");
-
-function Node(typ, pos, end, ...args) {
-    if (!AST[typ]) {
-        fail("no AST[%q]!\n", typ);
-    }
-    let node = AST[typ](...args);
-    node.pos = pos;
-    node.end = end;
-    return node;
-}
-
-// returns: match `patterns` and construct a Node from its captures
+// Return a pattern that matches `patterns`, constructs an AST Node of type
+// `typ` from their captures, and "emits" it (puts it in captures or
+// state.oob, depending on the type of node).
 //
-let M = (typ, ...patterns) =>
-    and(cpos, and(...patterns).A, cpos).F(
-        ([pos, a, end]) => [ Node(typ, pos, end, ...a) ]);
-
-// returns: match pat and append its captures to state.oob
-function Coob(pat) {
+const CN = (typ, ...patterns) => {
+    const p = P(...patterns);
     return P( (subj, pos, state) => {
-        let result = pat.match(subj, pos, state);
+        let result = p.match(subj, pos, state);
         if (!result) {
-            return false;
+            return result;
         }
-        let [posOut, stateOut, caps] = result;
-        return [posOut,
-                set(stateOut, "oob", append(stateOut.oob, caps)),
-                NoCaptures];
+        let [posOut, caps, stateOut] = result;
+        let node = AST[typ](...caps).setPos(pos, posOut);
+        return AST.isOOB[typ]
+            ? [posOut, [], set(stateOut, "oob", [...stateOut.oob, node])]
+            : [posOut, [node], stateOut];
     });
-}
+};
 
-// returns: log an out-of-band error
-function E(desc) {
-    return Coob(M("Error", CC(desc)));
-}
+// Return a pattern that emits an Error node (into state.oob)
+const E = (desc, ...patterns) =>
+      CN("Error", P().cc(desc), ...patterns);
 
-let nameInitial = R("az", "AZ", "__");
-let nameChar = R("az", "AZ", "__", "09");
-let opChar = S("!#$%&'*+-./<=>?\\^`|~");
-// Remaining ASCII printables:  @{}():;,"
+const comment = P(P("#").at, CN("Comment", LF.non.x0.c));
 
-let comment = and(P("#").at, Coob(M("Comment", NonNL.X0.C)));
+const p2d = newP2D({
+    comment,
+    atBlock: L(_ => atBlock),
+    logLine: L(_ => logLine)
+});
 
-// skip whitespace
-let controlChar = and(R("\x00\x09", "\x0b\x1f").at, E("BadChar"), 1);
-let ss = or(S(" ").X1, nlWhite, comment, controlChar).X0;
+//----------------------------------------------------------------
 
-let name = and(and(nameInitial, nameChar.X0).C, ss);
+const nameInitial = R("az", "AZ", "__");
+const nameChar = R("az", "AZ", "__", "09");
+const opChar = S("!#$%&'*+-./<=>?\\^`|~");
 
-// returns: match and optionally capture any of a set of tokens
-function matchTokens(tokens, isCapture) {
-    let tokenPats = tokens.map( (str, index) => {
-        // see what kind of token this is
-        let after = (nameChar.match(str, 0) ? nameChar.not :
-                     opChar.match(str, 0) ? opChar.not :
-                     0); // P(0) always succeeds
-        return and(str, after, (isCapture ? CC(str) : 0), ss);
-    });
-    return or(...tokenPats);
-}
+// Skip whitespace
+const controlChar = P(R("\x00\x09", "\x0b\x1f").at, E("BadChar", 1));
+const ss = or(SP.x1, p2d.white, comment, controlChar).x0;
 
-// returns: match a token
-function T(...tokenStrings) {
-    return matchTokens([...tokenStrings], false);
-}
+const name = P(P(nameInitial, nameChar.x0).c, ss);
 
-// returns: match and capture a token (used for Operators)
-function O(...tokenStrings) {
-    return matchTokens([...tokenStrings], true);
-}
+// Return a pattern that matches any of a set of tokens, skips following
+//   whitespace, and optionally captures the string.  Tokens are denoted by
+//   strings, and to match must be terminated properly: name tokens must be
+//   followed by non-name characters, operators by non-operator characters.
+//   (Delimiters -- []{}():;,"@ -- can be followed by any character.)
+//
+const matchTokens = (tokens, isCapture) =>
+      P(tokens.map( (str, index) =>
+          P( (isCapture ? P(str).c : str),
+             (nameChar.match(str, 0) ? nameChar.not :
+              opChar.match(str, 0) ? opChar.not :
+              0))),
+          ss);
+
+// Return a pattern that matches a token.
+const T = (...tokenStrings) =>
+      matchTokens([...tokenStrings], false);
+
+// Return a pattern that matches and capture a token (used for Operators)
+const O = (...tokenStrings) =>
+      matchTokens([...tokenStrings], true);
 
 // Numeric literals
 
-let digits = R("09").X1;
-let numberExp = and(S("eE"), opt(S("+-")), or(digits, E("NumDigitExp")));
+const digits = R("09").x1;
+const numberExp = P(S("eE"), S("+-").orNot, or(digits, E("NumDigitExp")));
 // digits [`.` digits]
-let numberA = and(digits, opt(and(".", or(digits, E("NumDigitAfter")))));
+const numberA = P(digits, P(".", or(digits, E("NumDigitAfter"))).orNot);
 // `.` digits    (accept, but flag as error)
-let numberB = and(P(".").at, E("NumDigitBefore"), ".", digits);
+const numberB = P(".", digits, E("NumDigitBefore"));
 
-let number = and(
-    and(or(numberA, numberB), opt(numberExp)).C,
+const number = P(
+    P(or(numberA, numberB), numberExp.orNot).c,
     or(or(nameChar, ".").not, E("NumEnd")),
     ss);
 
 // String literals
 
-let qchar = or(
-    NS("\"\\\n").X1.C,
-    and("\\\\", CC("\\")),
-    and("\\\\", CC("\\")),
-    and("\\\"", CC("\"")),
-    and("\\r", CC("\r")),
-    and("\\n", CC("\n")),
-    and("\\t", CC("\t")),
-    and("\\", E("StringBS"), CC("\\")));
+const qchars = or(
+    S("\"\\\n").non.x1.c,
+    P("\\\\").cc("\\"),
+    P("\\\"").cc("\""),
+    P("\\r").cc("\r"),
+    P("\\n").cc("\n"),
+    P("\\t").cc("\t"),
+    P("\\", E("StringBS")).cc("\\") ).x0.cf(caps => [caps.join("")]);
 
-function concat(captures) {
-    return [captures.join('')];
-}
+const qstring = P('"', qchars, or('"', E("StringEnd")), ss);
 
-let qstring = and('"', qchar.X0.F(concat), or('"', E("StringEnd")), ss);
+// Keywords are not to be confused with variable names
+const stmtKeywords = T("if", "loop", "while", "for", "assert");
+const keywords = or(T("and", "or", "not", "match"), stmtKeywords);
 
-// match words not to be confused with variable names
-let stmtKeywords = T("if", "loop", "while", "for", "assert");
-let keywords = or(T("and", "or", "not", "match"), stmtKeywords);
+// Match comma-delimited sequence of zero-or-more `p`
+const cseq = p =>
+      P(p, P(T(","), p).x0, T(",").orNot).orNot.ca();
 
-// returns: match comma-delimited sequence of zero-or-more `p`
-function cseq(p) {
-    return or(and(p, and(T(","), p).X0, opt(T(","))), 0).A;
-}
+const nameNode = CN("Name", name);
 
-let nameNode = M("Name", name);
+const variable = P(keywords.not, nameNode);
 
-let variable = and(keywords.not, nameNode);
+const expr = L(_ => _expr);
+const needExpr = or(expr, CN("Missing"));
 
-let expr = V("Expr");
-let needExpr = or(expr, M("Missing"));
+const vector = P(T("["), cseq(expr), or(T("]"), E("CloseSquare")));
 
-let vector = and(T("["), cseq(expr), or(T("]"), E("CloseSquare")));
+const mapNV = P(nameNode, T(":"), needExpr);
+const map = P(T("{"), cseq(mapNV), or(T("}"), E("CloseCurly")));
 
-let mapNV = and(nameNode, T(":"), needExpr);
-let map = and(T("{"), cseq(mapNV), or(T("}"), E("CloseCurly")));
+const grouping = P(T("("), needExpr, or(T(")"), E("CloseParen")));
 
-let grouping = and(T("("), needExpr, or(T(")"), E("CloseParen")));
+const needBlock = or(p2d.block.ca(), CN("MissingBlock"));
 
-let needBlock = or( and(nlBlock.A, ss), M("MissingBlock"));
-
-let atom = or(
-    M("Number", number),
-    M("String", qstring),
+const atom = or(
+    CN("Number", number),
+    CN("String", qstring),
     variable,
-    M("Vector", vector),
-    M("Map", map),
+    CN("Vector", vector),
+    CN("Map", map),
     grouping,
-    M("Block", nlBlock.A, ss),
-    M("Match", T("match"), needExpr, T(":"), needBlock));
+    CN("Block", p2d.block.ca()),
+    CN("Match", T("match"), needExpr, T(":"), needBlock));
 
-let binop = (op, a, b) => Node("Binop", a.pos, b.end, op, a, b);
+//----------------------------------------------------------------
+// Parse operator expressions (binary, unary, and ternary)
+//----------------------------------------------------------------
 
-let binopMerge = (a, op, b) => binop(op, a, b);
+const binop = (op, a, b) => AST.Binop(op, a, b).setPos(a.pos, b.end);
 
-let sufMerge = (a, typ, b, end) => Node(typ, a.pos, end, a, b);
+const binopMerge = (a, op, b) => binop(op, a, b);
+
+const sufMerge = (a, typ, b, end) => AST[typ](a, b).setPos(a.pos, end);
 
 // left-associative operators
-let joinLTR = mergeOp => captures => {
+const joinLTR = mergeOp => captures => {
     let [e, ...others] = captures;
-    for (let other of others) {
+    for (const other of others) {
         e = mergeOp(e, ...other);
     }
     return [e];
-}
+};
 
-let matchLTR = (e, pat) => and(e, and(pat, e).A.X0).F(joinLTR(binopMerge));
+const matchLTR = (e, pat) =>
+      P(e, P(pat, e).ca().x0).cf(joinLTR(binopMerge));
 
-let matchSuf = (e, pat) => and(e, and(pat, cpos).A.X0).F(joinLTR(sufMerge));
+const matchSuf = (e, pat) =>
+      P(e, P(pat, P().cpos).ca().x0).cf(joinLTR(sufMerge));
 
 // right-associative binary operators
-function joinRTL(captures) {
-    let [a, pos, op, ...others] = captures;
+const joinRTL = captures => {
+    const [a, pos, op, ...others] = captures;
     if (op) {
         return [binop(op, a, ...joinRTL(others))];
     }
     return [a];
-}
+};
 
-function matchRTL(e, pat) {
-    return and(e, and(cpos, pat, e).X0).F(joinRTL);
-}
+const matchRTL = (e, pat) =>
+      P(e, P(pat, e).cpos.x0).cf(joinRTL);
 
 // unary prefix operators
-function joinPre(captures) {
-    let [pos, op, ...others] = captures;
+const joinPre = captures => {
+    const [pos, op, ...others] = captures;
     if (op) {
-        let expr = joinPre(others);
-        return Node("Unop", pos, expr.end, op, expr);
+        const expr = joinPre(others);
+        return AST.Unop(op, expr).setPos(pos, expr.end);
     }
     // final capture is the expression
     return pos;
-}
+};
 
-function matchPre(e, pat) {
-    return and(and(cpos, pat).X0, e).F(caps => [joinPre(caps)]);
-}
+const matchPre = (e, pat) =>
+      P(pat.cpos.x0, e).cf(caps => [joinPre(caps)]);
 
-function joinRel(captures) {
-    let [e1, pos, op, e2, pos2, ...others] = captures;
+const joinRel = captures => {
+    const [e1, pos, op, e2, pos2, ...others] = captures;
     if (pos == undefined) {
         return [e1];
     }
-    let rel = binop(op, e1, e2);
+    const rel = binop(op, e1, e2);
     if (pos2 == undefined) {
         return [rel];
     }
     return [binop("and", rel, ...joinRel([e2, pos2, ...others]))];
-}
+};
 
-function matchRel(e, pat) {
-    return and(e, and(cpos, pat, e).X0).F(joinRel);
-}
+const matchRel = (e, pat) =>
+      P(e, P(pat, e).cpos.x0).cf(joinRel);
 
-function joinIIf(captures) {
-    let [e1, pos, e2, e3, ...others] = captures;
+const joinIIf = captures => {
+    const [e1, pos, e2, e3, ...others] = captures;
     if (pos == undefined) {
         return e1;
     }
-    let k = joinIIf([e3, ...others]);
-    return Node("IIf", pos, k.end, e1, e2, k);
-}
-
-function joinFn(captures) {
-    let [pos, params, ...others] = captures;
-    if (params == undefined) {
-        return pos;
-    }
-    let body = joinFn(others);
-    return Node("Fn", pos, body.end, params, body);
-}
+    const k = joinIIf([e3, ...others]);
+    return AST.IIf(e1, e2, k).setPos(pos, k.end);
+};
 
 // Each suffix captures two values: nodeType & expr/arglist
-let callSuffix =
-    and(T("("), CC("Call"), cseq(expr), or(T(")"), E("CloseParen")));
-let memberSuffix =
-    and(T("["), CC("Index"), needExpr, or(T("]"), E("CloseSquare")));
-let dotSuffix =
-    and(T("."), CC("Dot"), or(nameNode, and(M("Missing"), E("DotName"))));
+const callSuffix =
+    P(T("(").cc("Call"), cseq(expr), or(T(")"), E("CloseParen")));
+const memberSuffix =
+    P(T("[").cc("Index"), needExpr, or(T("]"), E("CloseSquare")));
+const dotSuffix =
+    P(T(".").cc("Dot"), or(nameNode, P(CN("Missing"), E("DotName"))));
 
-let params = or(and(T("("), cseq(variable), T(")")), variable.A);
+const params = or(P(T("("), cseq(variable), T(")")), variable.ca());
 
-function addOperations(e) {
+const combineOps = () => {
+    let e = atom;
     e = matchSuf(e, or(dotSuffix, callSuffix, memberSuffix));
     e = matchRTL(e, O("^"));
     e = matchPre(e, O("not", "-"));
@@ -339,66 +313,61 @@ function addOperations(e) {
     e = matchRel(e, O("==", "!=", "<=", "<", ">=", ">"));
     e = matchLTR(e, O("and"));
     e = matchLTR(e, O("or"));
-    e = and(e, and(cpos, T("?"), needExpr, or(T(":"), E("CloseIIf")), e).X0)
-        .F(caps => [joinIIf(caps)]);
+    e = P(e, P(T("?"), needExpr, or(T(":"), E("CloseIIf")), e).cpos.x0)
+        .cf(caps => [joinIIf(caps)]);
     e = matchRTL(e, O("$"));
-    e = and(and(cpos, params, T("->")).X0, e).F(caps => [joinFn(caps)]);
+    e = or([ CN("Fn", params, T("->"), needExpr), e ]);
     return e;
-}
+};
 
-let ile = addOperations(atom);
+const _expr = combineOps();
 
 //==============================
 // Statements
 //==============================
 
-let letOp = O("=", ":=", "+=", "++=", "*=");
+const letOp = O("=", ":=", "+=", "++=", "*=");
 
-let letTarget = matchSuf(variable, or(dotSuffix, memberSuffix))
+const letTarget = matchSuf(variable, or(dotSuffix, memberSuffix))
 
-let pattern = or(
+const pattern = or(
     variable,
-    M("Number", number),
-    M("String", qstring),
-    M("VecPattern", T("["), cseq(V("Pattern")), T("]")));
+    CN("Number", number),
+    CN("String", qstring),
+    CN("VecPattern", T("["), cseq(L(_ => pattern)), T("]")));
 
-let statement = or(
-    M("SLet", letTarget, letOp, needExpr),
-    M("SAct", params, T("<-"), needExpr),
-    M("SCase", pattern, T("=>"), needExpr),
-    M("SIf", T("if"), expr, T(":"), expr),
-    M("SLoop", T("loop"), T(":"), needBlock),
-    M("SLoopWhile", T("loop"), T("while"), expr, T(":"), needBlock),
-    M("SWhile", T("while"), needExpr),
-    M("SFor", T("for"), variable, T("in"), expr, T(":"), expr),
-    M("SAssert", T("assert"), needExpr));
+const statement = or(
+    CN("SLet", letTarget, letOp, needExpr),
+    CN("SAct", params, T("<-"), needExpr),
+    CN("SCase", pattern, T("=>"), needExpr),
+    CN("SIf", T("if"), _expr, T(":"), _expr),
+    CN("SLoop", T("loop"), T(":"), needBlock),
+    CN("SLoopWhile", T("loop"), T("while"), _expr, T(":"), needBlock),
+    CN("SWhile", T("while"), needExpr),
+    CN("SFor", T("for"), variable, T("in"), _expr, T(":"), _expr),
+    CN("SAssert", T("assert"), needExpr));
 
-let atBlock = or(
+const atBlock = or(
     stmtKeywords,
-    and(letTarget, letOp),
-    and(params, T("<-")),
-    and(pattern, T("=>")));
+    P(letTarget, letOp),
+    P(params, T("<-")),
+    P(pattern, T("=>")));
 
 // consume everything to the end of the line
-let discardEOL = and(E("Garbage"), or(NonNL.X1, nlWhite, nlBlock).X0)
+const discardEOL = E("Garbage", or(LF.non.x1, p2d.white, p2d.block).x1);
 
-let logLine = and(
-    or( and(atBlock.at, or(statement, M("BadStmt"))),
-        and(ss, ile),
-        M("BadILE")),
-    or(nlEOL.at, discardEOL));
+const logLine = P(
+    or( P(atBlock.at, or(statement, CN("BadStmt"))),
+        P(ss, _expr),
+        CN("BadILE")),
+    or(p2d.atEOL.at, discardEOL));
 
-let rioModule = M("Block", p2dModule.A);
+const rioModule = CN("Block", p2d.module.ca());
 
-let rioG = {
-    Module: rioModule,
-    Comment: comment,
-    AtBlock: atBlock,
-    LogLine: logLine,
-    Expr: ile,
-    Statement: statement,
-    Pattern: pattern,
-}
+const initialState = {
+    blockIndent: 0,   // use by P2D
+    oob: [],          // used by cOOB for "out of band" captures
+};
 
 // Parse a module's source code (given in `subj`).  Returns [`node`, `oob`].
 //   node = an AST node describing an expression
@@ -407,307 +376,283 @@ let rioG = {
 // The result of parsing a module is a Block, which is an array of logical
 // lines, each of which is an expression or a statement.
 //
-function parseModule(subj) {
-    let [_, state, captures] = rioModule.match(subj, 0, p2dInitialState, rioG);
+const parseModule = subj => {
+    const [_, captures, state] = rioModule.match(subj, 0, initialState);
     return [captures[0], state.oob];
-}
+};
 
-export {parseModule};
+export { parseModule };
 
 //==============================================================
 // Tests
 //==============================================================
 
-import {eq, eqAt} from "./test.js";
+import { eq, eqAt } from "./test.js";
+
+const fail = P([]);
+
+// Match `subj` using `pattern`.
+//   ecaptures = false => expect failure
+//               array => expected captures
+//               string => serialization
+//
+const pt = (pattern, subj, ecaptures, eoob, epos, level) => {
+    level = (level || 1) + 1;
+    const results = pattern.match(subj, 0, initialState);
+    if (ecaptures === false) {
+        eqAt(level, false, results);
+        return;
+    }
+    const [pos, captures, state] = results;
+    eqAt(level, ecaptures, (Array.isArray(ecaptures) ? captures :
+                            astFmtV(captures)));
+    eqAt(level, eoob || "", astFmtV(state.oob));
+    if (epos !== undefined) {
+        eqAt(level, epos, pos);
+    }
+};
 
 //==============================
 // 2D Parsing Tests
 //==============================
 
-let group = name => captures =>
-    [ [name, ...captures] ];
-
-let text = NonNL.X1.C;
-
-// This minimal grammar for 2D parsing begins blocks only at "if ..." or
-// "NAME = ...", and allows logical lines to contain any sequence of
-// arbitrary text and/or nested blocks.   Blocks and lines are captured
-// as ["B", ...] and ["L", ...].
+// Instantiate P2D with a minimal set of inline patterns:
+//   - begin blocks only at "if ..." or "NAME = ..."
+//   - logical lines contain arbitrary text and/or nested blocks
+//   - use S-expr captures:  ["B", ...] for blocks, ["L", ...] for lines.
 //
-let testGrammar = {
-    AtBlock: or(T("if"), and(name, ss, T("="))),
-    Comment: and("#", NonNL.X0),
-    LogLine: and(text, or(nlWhite, text, nlBlock.F(group("B"))).X0)
-        .F(group("L")),
-};
+const t2d = newP2D({
+    atBlock: L(_ => t2d_atBlock),
+    comment: L(_ => t2d_comment),
+    logLine: L(_ => t2d_logLine)
+});
 
-// Match `subj` using `pattern` with a minimal grammar.
-//
-function testG(subj, pattern, ecaptures, eoob, epos) {
-    let results = pattern.match(subj, 0, p2dInitialState, testGrammar);
-    if (ecaptures == null) {
-        eqAt(2, false, results);
-        return;
-    }
-    let [pos, state, captures] = results;
-    eqAt(2, ecaptures, captures);
-    if (eoob != undefined) {
-        eqAt(2, eoob, state ? astFmtV(state.oob) : "");
-    }
-    if (epos !== undefined) {
-        eqAt(2, epos, pos);
-    }
-}
+const t2d_atBlock = or(T("if"), P(name, ss, T("=")));
+const t2d_comment = P("#", LF.non.x0);
+const t2d_logLine = P(LF.non.x1.c, or(t2d.white, LF.non.x1.c,
+                                      t2d.block.ca("B")).x0).ca("L");
 
-testG("if a", testGrammar.AtBlock, [], null, 3);
-testG("\n  x = 1\n", nlWhite, null);
-testG("\n  x = 1\n", nlBlock, [["L", "x = 1"]], null, 9);
-testG("ile\n  x = 1\n", testGrammar.LogLine,
-      [["L", "ile", ["B", ["L", "x = 1"]]]]);
-testG("abc\n  def\n", testGrammar.LogLine,
-      [["L", "abc", "def"]])
+pt(t2d.white, "\n  x = 1\n", false);
+pt(t2d.block, "\n  x = 1\n", [["L", "x = 1"]], null, 9);
+pt(t2d_atBlock, "if a", [], null, 3);
+pt(t2d_logLine, "ile\n  x = 1\n",
+   [["L", "ile", ["B", ["L", "x = 1"]]]]);
+pt(t2d_logLine, "abc\n  def\n",
+   [["L", "abc", "def"]])
 
-let txt =
-    'if A:\n' +
-    '    # c1\n' +
-    '  # c2\n' +
-    '# c3\n' +
-    '  cont\n' +
-    'if B:\n' +
-    '\n' +
-    '  x = 1\n' +
-    '  x\n' +
-    'ile\n';
-
-testG(txt, blockBody,
-      [ ["L", "if A:", "cont"],
-        ["L", "if B:",
-         ["B",
-          ["L", "x = 1"],
-          ["L", "x"]]],
-        ["L", "ile"]]);
+pt(t2d.module,
+   [
+       'if A:',
+       '    # c1',
+       '  # c2',
+       '# c3',
+       '  cont',
+       'if B:',
+       '',
+       '  x = 1',
+       '  x',
+       'ile',
+       ''
+   ].join("\n"),
+   [ ["L", "if A:", "cont"],
+     ["L", "if B:",
+      ["B",
+       ["L", "x = 1"],
+       ["L", "x"]]],
+     ["L", "ile"]]);
 
 //==============================
 // Inline Parsing Tests
 //==============================
 
-eq(astFmt(Node("Name", 5, 6, "x")), 'x');
-eq(astFmt(Node("Number", 5, 6, "9")), '9');
+eq(astFmt(AST.Name("x")), 'x');
+eq(astFmt(AST.Number("9")), '9');
 
-{
-    eq(M("Name", P("b").C).match("abc", 1, {}, {}),
-       [2, {}, [Node("Name", 1, 2, "b")]]);
-}
+eq(CN("Name", P("b").c).match("abc", 1, {}, {}),
+   [2, [AST.Name("b").setPos(1, 2)], {}]);
 
-eq([1, p2dInitialState, []],
-   ss.match(" \nx", 0, p2dInitialState, {Comment: fail}));
+eq([1, [], initialState],
+   ss.match(" \nx", 0, initialState, {Comment: fail}));
 
-testG(" \nNext", ss, [], null, 1);
-testG(" # c\n  x\n", ss, [], '(Comment "# c")', 7);
-testG("\t x", ss, [], '(Error "BadChar")', 2);
+pt(ss, " \nNext", [], null, 1);
+pt(ss, " # c\n  x\n", [], '(Comment "# c")', 7);
+pt(ss, "\t x", [], '(Error "BadChar")', 2);
 
-testG("abc  ", O("abc"), ["abc"], null, 5);
-testG("abc+ ", O("abc"), ["abc"], null, 3);
-testG("abcd ", O("abc"), null);
+pt(O("abc"), "abc  ", ["abc"], null, 5);
+pt(O("abc"), "abc+ ", ["abc"], null, 3);
+pt(O("abc"), "abcd ", false);
 
-testG("+    ", O("+"), ["+"], null, 5);
-testG("+a   ", O("+"), ["+"], null, 1);
-testG("+()  ", O("+"), ["+"], null, 1);
-testG("+=   ", O("+"), null);
+pt(O("+"), "+    ", ["+"], null, 5);
+pt(O("+"), "+a   ", ["+"], null, 1);
+pt(O("+"), "+()  ", ["+"], null, 1);
+pt(O("+"), "+=   ", false);
 
-testG("()", number, null);
-testG(".", number, null);
-testG("7 ", number, ["7"], null, 2);
-testG("7.5 ", number, ["7.5"]);
-testG("7.0e0 ", number, ["7.0e0"]);
-testG("7e+0 ", number, ["7e+0"]);
-testG("7.e+1 ", number, ["7.e+1"], '(Error "NumDigitAfter")');
-testG("7a ", number, ["7"], '(Error "NumEnd")');
-testG("1.23.", number, ["1.23"], '(Error "NumEnd")');
-testG(".5", number, [".5"], '(Error "NumDigitBefore")');
+pt(number, "()", false);
+pt(number, ".", false);
+pt(number, "7 ", ["7"], null, 2);
+pt(number, "7.5 ", ["7.5"]);
+pt(number, "7.0e0 ", ["7.0e0"]);
+pt(number, "7e+0 ", ["7e+0"]);
+pt(number, "7.e+1 ", ["7.e+1"], '(Error "NumDigitAfter")');
+pt(number, "7a ", ["7"], '(Error "NumEnd")');
+pt(number, "1.23.", ["1.23"], '(Error "NumEnd")');
+pt(number, ".5", [".5"], '(Error "NumDigitBefore")');
 
-testG('"a\\\\\\t\\nb"   ', qstring, ["a\\\t\nb"], null, 13);
-testG('"\\a"', qstring, ["\\a"], '(Error "StringBS")');
-testG('"abc', qstring, ["abc"], '(Error "StringEnd")');
+pt(qstring, '"a\\\\\\t\\nb"   ', ["a\\\t\nb"], null, 13);
+pt(qstring, '"\\a"', ["\\a"], '(Error "StringBS")');
+pt(qstring, '"abc', ["abc"], '(Error "StringEnd")');
 
-// Test a pattern.  eser = expected serialization
-//
-function testPat(pattern, subj, eser, eoob, level) {
-    level = (level || 1) + 1;
-    let r = pattern.match(subj, 0, p2dInitialState, rioG);
-    let [pos, state, captures] = r ?? [-1, {}, "--failed--"];
-    eqAt(level, eser, astFmtV(captures));
-    eqAt(level, eoob || '', astFmtV(state.oob));
-}
+// CN()
 
-// Match `subj` using `atom`; avoid dependencies on syntax defined after
-// atom.
-//
-function testAtom(subj, eser, eoob) {
-    let g = {
-        Expr: atom,
-        Comment: fail,
-        AtBlock: fail,
-    };
-    testPat(atom.G(g), subj, eser, eoob, 2);
-}
-
-// Match `subj` using LogLine.
-//
-function testL(subj, eser, eoob) {
-    testPat(logLine, subj, eser, eoob, 2);
-}
-
-// Match `subj` using Module.
-//
-function testM(subj, eser, eoob) {
-    let [node, oob] = parseModule(subj);
-    eqAt(2, eser, astFmt(node));
-    if (eoob) {
-        eqAt(2, eoob, astFmtV(oob));
-    }
-}
-
-// M()
-
-testPat(M("Number", number), "7.5 ", '7.5');
+pt(CN("Number", number), "7.5 ", '7.5');
 
 // cseq()
 
-testPat(atom.X0, "1 2 3", '1 2 3');
-testPat(cseq(atom), "1, 2, 3", '[1 2 3]');
+pt(atom.x0, "1 2 3", '1 2 3');
+pt(cseq(atom), "1, 2, 3", '[1 2 3]');
 
 // single-token atoms
 
-testAtom("1.23", "1.23");
-testAtom('"a\tb"', '(String "a\\tb")');
-testAtom("ab_1", "ab_1");
+pt(atom, "1.23", "1.23");
+pt(atom, '"a\tb"', '(String "a\\tb")');
+pt(atom, "ab_1", "ab_1");
 
 // vector
 
-testAtom("[]", '(Vector [])');
-testAtom("[a]", '(Vector [a])');
-testAtom("[a, b, c]", '(Vector [a b c])');
-testAtom("[a ", '(Vector [a])', '(Error "CloseSquare")');
-testAtom("[a,", '(Vector [a])', '(Error "CloseSquare")');
+pt(atom, "[]", '(Vector [])');
+pt(atom, "[a]", '(Vector [a])');
+pt(atom, "[a, b, c]", '(Vector [a b c])');
+pt(atom, "[a ", '(Vector [a])', '(Error "CloseSquare")');
+pt(atom, "[a,", '(Vector [a])', '(Error "CloseSquare")');
 
 // map
 
-testAtom("{}", '(Map [])');
-testAtom("{a: A, b: B}", '(Map [a A b B])');
-testAtom("{a: A,  ", '(Map [a A])', '(Error "CloseCurly")');
-testAtom("{a:,}", '(Map [a (Missing)])');
+pt(atom, "{}", '(Map [])');
+pt(atom, "{a: A, b: B}", '(Map [a A b B])');
+pt(atom, "{a: A,  ", '(Map [a A])', '(Error "CloseCurly")');
+pt(atom, "{a:,}", '(Map [a (Missing)])');
 
 // grouping
 
-testAtom("(a)", "a");
-testAtom("(a", "a", '(Error "CloseParen")');
-testAtom("((a)) ", "a");
+pt(atom, "(a)", "a");
+pt(atom, "(a", "a", '(Error "CloseParen")');
+pt(atom, "((a)) ", "a");
 
 // Operator handling
 let e = matchSuf(atom, or(dotSuffix, callSuffix, memberSuffix));
-testPat(e, "a", "a");
-testPat(e, "a.b", "(Dot a b)");
+pt(e, "a", "a");
+pt(e, "a.b", "(Dot a b)");
 
 e = matchPre(atom, O("not"));
-testPat(e, "not a", '(Unop "not" a)');
+pt(e, "not a", '(Unop "not" a)');
 
 e = matchRTL(atom, O("^"));
-testPat(e, "a ^ b ^ c", '(Binop "^" a (Binop "^" b c))');
+pt(e, "a ^ b ^ c", '(Binop "^" a (Binop "^" b c))');
 
 e = matchLTR(atom, O("+"));
-testPat(e, "a + b + c", '(Binop "+" (Binop "+" a b) c)');
+pt(e, "a + b + c", '(Binop "+" (Binop "+" a b) c)');
 
 e = matchRel(atom, O("<"));
-testPat(e, "a", 'a', null);
-testPat(e, "a < b", '(Binop "<" a b)');
-testPat(e, "a < b < c", '(Binop "and" (Binop "<" a b) (Binop "<" b c))');
+pt(e, "a", 'a', null);
+pt(e, "a < b", '(Binop "<" a b)');
+pt(e, "a < b < c", '(Binop "and" (Binop "<" a b) (Binop "<" b c))');
 
 // ?:
-testPat(ile, "a ? b : c", '(IIf a b c)');
-testPat(ile, "a ? b : c ? d : e", '(IIf a b (IIf c d e))');
+pt(expr, "a ? b : c", '(IIf a b c)');
+pt(expr, "a ? b : c ? d : e", '(IIf a b (IIf c d e))');
 
 // ->
-testPat(ile, "a -> (b, c) -> d", '(Fn [a] (Fn [b c] d))');
+pt(expr, "a -> (b, c) -> d", '(Fn [a] (Fn [b c] d))');
 
 //================================
 // LogLine
 //================================
 
+const ptLL = (subj, eser, eoob, epos) =>
+    pt(logLine, subj, eser, eoob, epos, 2);
+
 // atoms
 
-testL("1.23", "1.23");
-testL("(12)", "12");
-testL("match X:\n  x => e\n", '(Match X [(S-Case x e)])');
+ptLL("1.23", "1.23");
+ptLL("(12)", "12");
+ptLL("match X:\n  x => e\n", '(Match X [(S-Case x e)])');
 
 // suffix operators
 
-testL("a.b", '(Dot a b)');
-testL("a.", '(Dot a (Missing))', '(Error "DotName")');
-testL("a[1]", '(Index a 1)');
-testL("a(1,x)", '(Call a [1 x])');
-testL("a . b [ 1 ] ( 2 ) ",  '(Call (Index (Dot a b) 1) [2])');
+ptLL("a.b", '(Dot a b)');
+ptLL("a.", '(Dot a (Missing))', '(Error "DotName")');
+ptLL("a[1]", '(Index a 1)');
+ptLL("a(1,x)", '(Call a [1 x])');
+ptLL("a . b [ 1 ] ( 2 ) ",  '(Call (Index (Dot a b) 1) [2])');
 
 // prefix
 
-testL("-a", '(Unop "-" a)');
+ptLL("-a", '(Unop "-" a)');
 
 // LTR operators
 
-testL("a+b-c", '(Binop "-" (Binop "+" a b) c)');
+ptLL("a+b-c", '(Binop "-" (Binop "+" a b) c)');
 
 // precedence
 
-testL("-3^b+c*d", '(Binop "+" (Unop "-" (Binop "^" 3 b)) (Binop "*" c d))');
+ptLL("-3^b+c*d", '(Binop "+" (Unop "-" (Binop "^" 3 b)) (Binop "*" c d))');
 
 // relational
 
-testL("a==b", '(Binop "==" a b)');
-testL("a<b<c", '(Binop "and" (Binop "<" a b) (Binop "<" b c))');
+ptLL("a==b", '(Binop "==" a b)');
+ptLL("a<b<c", '(Binop "and" (Binop "<" a b) (Binop "<" b c))');
 
 // ?:, $
 
-testL("a or b ? f : g $ x", '(Binop "$" (IIf (Binop "or" a b) f g) x)');
-testL("a ? x : b ? y : z",
+ptLL("a or b ? f : g $ x", '(Binop "$" (IIf (Binop "or" a b) f g) x)');
+ptLL("a ? x : b ? y : z",
       '(IIf a x (IIf b y z))');
 
 // params -> expr
 
-testL("()    -> 1", '(Fn [] 1)');
-testL("(a)   -> 1", '(Fn [a] 1)');
-testL("(a,b) -> 1", '(Fn [a b] 1)');
-testL("a     -> 1", '(Fn [a] 1)');
+ptLL("()    -> 1", '(Fn [] 1)');
+ptLL("(a)   -> 1", '(Fn [a] 1)');
+ptLL("(a,b) -> 1", '(Fn [a b] 1)');
+ptLL("a     -> 1", '(Fn [a] 1)');
 
 //
 // statements
 //
 
-testL("x = 1", '(S-Let x "=" 1)');
-testL("x[1] := 1", '(S-Let (Index x 1) ":=" 1)');
-testL("x.a := 1", '(S-Let (Dot x a) ":=" 1)');
-testL("x := 1", '(S-Let x ":=" 1)');
-testL("x <- a", '(S-Act [x] a)');
-testL("x => e", '(S-Case x e)');
-testL("if a: x", '(S-If a x)');
-testL("loop:", '(S-Loop (MissingBlock))');
-testL("loop:\n  if a: x\n  b\n", '(S-Loop [(S-If a x) b])');
-testL("while c", '(S-While c)');
-testL("loop while C:\n  x := 1\n", '(S-LoopWhile C [(S-Let x ":=" 1)])');
-testL("for x in E: B", '(S-For x E B)');
-testL("assert C", '(S-Assert C)');
+ptLL("x = 1", '(S-Let x "=" 1)');
+ptLL("x[1] := 1", '(S-Let (Index x 1) ":=" 1)');
+ptLL("x.a := 1", '(S-Let (Dot x a) ":=" 1)');
+ptLL("x := 1", '(S-Let x ":=" 1)');
+ptLL("x <- a", '(S-Act [x] a)');
+ptLL("x => e", '(S-Case x e)');
+ptLL("if a: x", '(S-If a x)');
+ptLL("loop:", '(S-Loop (MissingBlock))');
+ptLL("loop:\n  if a: x\n  b\n", '(S-Loop [(S-If a x) b])');
+ptLL("while c", '(S-While c)');
+ptLL("loop while C:\n  x := 1\n", '(S-LoopWhile C [(S-Let x ":=" 1)])');
+ptLL("for x in E: B", '(S-For x E B)');
+ptLL("assert C", '(S-Assert C)');
 
 // extraneous characters
 
-testL("a b c", "a", '(Error "Garbage")');
+ptLL("a b c", "a", '(Error "Garbage")');
 
 // block body
 
-testL("a + \n  x=1\n  x\n",
-      '(Binop "+" a (Block [(S-Let x "=" 1) x]))');
+ptLL("a + \n  x=1\n  x\n",
+     '(Binop "+" a (Block [(S-Let x "=" 1) x]))');
 
-// test `Module`
+// test `parseModule`
 
-let t1 =
+const ptM = (subj, eser, eoob) => {
+    const [node, oob] = parseModule(subj);
+    eqAt(2, eser, astFmt(node));
+    if (eoob) {
+        eqAt(2, eoob, astFmtV(oob));
+    }
+};
+
+const t1 =
     '# C1\n' +
     'f = (x) ->\n' +
     '    if x < 1: 0\n' +
@@ -715,14 +660,13 @@ let t1 =
     '\n' +
     'f(2)\n';
 
-testM(t1,
-      '(Block [(S-Let f "=" ' +
-      '(Fn [x] (Block [(S-If (Binop "<" x 1) 0) (Binop "+" x 1)]))' +
-      ') (Call f [2])])',
-      '(Comment "# C1")');
+ptM(t1,
+    '(Block [(S-Let f "=" ' +
+    '(Fn [x] (Block [(S-If (Binop "<" x 1) 0) (Binop "+" x 1)]))' +
+    ') (Call f [2])])',
+    '(Comment "# C1")');
 
-testM(
-    ( 'loop:\n' +
+ptM(( 'loop:\n' +
       '  x += 1\n' +
       '  repeat\n' +
       'x\n'),
