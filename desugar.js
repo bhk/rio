@@ -1,8 +1,9 @@
 // desugar: Convert AST to IL
 
-import {assert, eq, eqAt, printf} from "./test.js";
 import {L} from "./misc.js";
 import {AST, astFmt, astFmtV} from "./ast.js";
+import test from "./ir/test.js";
+const {assert, eq, eqAt, printf} = test;
 
 //==============================================================
 // Inner Language

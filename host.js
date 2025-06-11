@@ -1,7 +1,8 @@
 // host: host functions and types for evaluation
 
-import {assert, eq, fail, printf} from "./test.js";
 import {set} from "./misc.js";
+import test from "./ir/test.js";
+const { assert, eq, fail, printf } = test;
 
 // TODO: integrate "class" work from interp.js: VObj, VCls, NewClass
 

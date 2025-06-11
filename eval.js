@@ -1,7 +1,8 @@
 // eval: Evaluation of IL expressions
 
-import {assert, eq, fail, printf} from "./test.js";
-import {Op} from "./desugar.js";
+import { Op } from "./desugar.js";
+import test from "./ir/test.js";
+const { assert, eq, fail, printf } = test;
 
 // Pop `count` elements from array and return them.
 let popN = (array, count) => {

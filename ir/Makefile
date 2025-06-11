@@ -52,7 +52,8 @@ include build/classes.mk
 # Ordering of tests (hard-code at least the most important constraints)
 
 TestJS.oo = TestJS(e_q.js)
-TestJS(i_q.js).oo =
 TestJS(e_q.js).oo = TestJS(i_q.js)
+TestJS(i_q.js).oo = TestJS(serialize_q.js)
+TestJS(serialize_q.js).oo = 
 
 include build/minion.mk

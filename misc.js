@@ -1,6 +1,6 @@
 // Misc. utility functions
 
-import * as test from "./test.js";
+import test from "./ir/test.js";
 
 const assert = (cond) => {
     if (!cond) {

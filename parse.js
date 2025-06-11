@@ -387,7 +387,8 @@ export { parseModule };
 // Tests
 //==============================================================
 
-import { eq, eqAt } from "./test.js";
+import test from "./ir/test.js";
+const { eq, eqAt } = test;
 
 const fail = P([]);
 

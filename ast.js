@@ -7,7 +7,8 @@
 //  - `op` & `str` are strings
 //
 
-import { eq, serialize } from "./test.js";
+import { customize } from "./ir/serialize.js";
+import test from "./ir/test.js";
 
 class AST {
     constructor(typ, props) {
@@ -64,29 +65,28 @@ AST.isOOB = {
     Error: true,
 };
 
-const astFmtV = (nodes) => nodes.map(astFmt).join(" ");
-
-const astFmt = (value) => {
+const { serialize: astFmt } = customize( (value, recur) => {
     if (Array.isArray(value)) {
-        return "[" + astFmtV(value) + "]";
-    } else if (typeof value != "object") {
-        return serialize(value);
+        return "[" + value.map(recur).join(" ") + "]";
     } else if (value instanceof AST) {
         if (value.T == "Name" || value.T == "Number") {
-            return value.str;
+            return String(value.str);
         }
         const txt = Object.entries(value)
               .filter( ([k,v]) => k != "pos" && k != "end")
-              .map( ([k,v]) => k == "T" ? v : astFmt(v))
+              .map( ([k,v]) => k == "T" ? v : recur(v))
               .join(" ");
         return "(" + txt + ")";
-    } else {
-        const txt = Object.entries(value)
-              .map( ([k,v]) => k + ": " + astFmt(v) )
-              .join(", ");
-        return "{" + txt + "}";
     }
-};
+});
+
+const astFmtV = (nodes) => nodes.map(astFmt).join(" ");
+
+//--------------------------------
+// Tests
+//--------------------------------
+
+const eq = test.eq;
 
 eq(astFmt({node: AST.Fn([AST.Name("x"), AST.Name("y")],
                         AST.Number(9))}),

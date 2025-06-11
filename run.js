@@ -2,7 +2,8 @@
 
 import {Env as DSEnv, IL} from "./desugar.js";
 import {ilEval, evalEnvBind, evalEnvGet} from "./eval.js";
-import {eq, assert, sprintf, printf} from "./test.js";
+import test from "./ir/test.js";
+const {eq, assert, sprintf, printf} = test;
 
 //================================================================
 // Render IL to terminal
